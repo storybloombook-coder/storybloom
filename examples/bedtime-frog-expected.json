@@ -1,0 +1,211 @@
+{
+  "book": "Pip and Posy: The Bedtime Frog",
+  "note": "Expected prep output per page, used to score real Gemini output during milestone 3. 'required' cues MUST appear; 'optional' cues are nice-to-have and do not fail the test. Matching is fuzzy: see check-prep-output.mjs for how ids/text are compared.",
+  "scoring": {
+    "page_type_must_match": true,
+    "required_keyword_cues_must_appear": true,
+    "required_character_cues_must_appear": true,
+    "dialogue_only_from_quotes": true,
+    "no_incidental_text_in_ocr": ["Hoppy Holidays", "Nosy Crow", "Hoppy"]
+  },
+  "pages": [
+    { "page": 1, "page_type": "cover", "expect_story": false, "required_keyword_cues": [], "required_character_cues": [] },
+    { "page": 2, "page_type": "title", "expect_story": false, "required_keyword_cues": [], "required_character_cues": [] },
+    {
+      "page": 3, "page_type": "story",
+      "ocr_contains": ["stay at Pip's house"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [],
+      "optional_keyword_cues": [],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 4, "page_type": "story",
+      "ocr_contains": ["packed up her suitcase", "forget anything"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [],
+      "optional_keyword_cues": [{ "trigger": "packed", "sound_any": ["fx_zip", "fx_none"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 5, "page_type": "story",
+      "ocr_contains": ["got on the bus", "very excited"],
+      "ocr_must_not_contain": ["Hoppy Holidays"],
+      "ambient_expected_any": ["amb_city"],
+      "required_keyword_cues": [{ "trigger": "bus", "sound_any": ["fx_engine"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 6, "page_type": "illustration_only",
+      "ocr_is_empty": true,
+      "ambient_expected_any": ["amb_city"],
+      "required_keyword_cues": [],
+      "required_character_cues": []
+    },
+    {
+      "page": 7, "page_type": "story",
+      "ocr_contains": ["really happy to see Posy", "Hi, Posy"],
+      "ambient_expected_any": ["amb_city", "amb_meadow"],
+      "required_keyword_cues": [],
+      "required_character_cues": [{ "speaker_any": ["Pip"], "quote_contains": "Hi, Posy", "voice_any": ["voice_child", "voice_pip"] }]
+    },
+    {
+      "page": 8, "page_type": "story",
+      "ocr_contains": ["Hello, Pip", "giggled"],
+      "ambient_expected_any": ["amb_meadow", "amb_forest", "amb_city"],
+      "required_keyword_cues": [{ "trigger": "giggled", "sound_any": ["fx_laugh"] }],
+      "required_character_cues": [{ "speaker_any": ["Posy"], "quote_contains": "Hello, Pip", "voice_any": ["voice_child", "voice_posy"] }]
+    },
+    {
+      "page": 9, "page_type": "story",
+      "ocr_contains": ["lots of fun", "played with Pip's cars", "played with the farm"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [{ "trigger": "cars", "sound_any": ["fx_engine"] }],
+      "optional_keyword_cues": [{ "trigger": "farm", "sound_any": ["fx_farm", "fx_animal_dog", "fx_animal_bird"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 10, "page_type": "story",
+      "ocr_contains": ["pirates in hospital"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 11, "page_type": "story",
+      "ocr_contains": ["ate", "spaghetti", "bubbly bath"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [{ "trigger": "bubbly bath", "sound_any": ["fx_splash", "fx_bubbles", "fx_pop"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 12, "page_type": "story",
+      "ocr_contains": ["brushed their teeth", "funny story", "time for bed"],
+      "ambient_expected_any": ["amb_indoors", "amb_night"],
+      "required_keyword_cues": [],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 13, "page_type": "story",
+      "ocr_contains": ["Night-night, Posy", "cuddled up with his piggy"],
+      "ambient_expected_any": ["amb_night"],
+      "required_keyword_cues": [],
+      "required_character_cues": [{ "speaker_any": ["Pip"], "quote_contains": "Night-night, Posy", "voice_any": ["voice_child", "voice_pip"] }]
+    },
+    {
+      "page": 14, "page_type": "story",
+      "ocr_contains": ["Sweet dreams, Pip", "switched off their lights"],
+      "ambient_expected_any": ["amb_night"],
+      "optional_keyword_cues": [{ "trigger": "switched off their lights", "sound_any": ["fx_switch"] }],
+      "required_character_cues": [{ "speaker_any": ["Posy"], "quote_contains": "Sweet dreams, Pip", "voice_any": ["voice_child", "voice_posy"] }]
+    },
+    {
+      "page": 15, "page_type": "story",
+      "ocr_contains": ["very nearly asleep", "heard a voice", "Froggy"],
+      "ambient_expected_any": ["amb_night"],
+      "required_keyword_cues": [],
+      "required_character_cues": [{ "speaker_any": ["the voice", "Posy", "unknown"], "quote_contains": "Froggy", "voice_any": ["voice_child", "voice_posy"] }]
+    },
+    {
+      "page": 16, "page_type": "story",
+      "ocr_contains": ["It was Posy", "forgotten Froggy", "CAN'T SLEEP WITHOUT MY FROGGY"],
+      "ambient_expected_any": ["amb_night"],
+      "required_character_cues": [
+        { "speaker_any": ["Posy"], "quote_contains": "forgotten Froggy", "voice_any": ["voice_child", "voice_posy"], "intensity_any": ["normal", "loud"] },
+        { "speaker_any": ["Posy"], "quote_contains": "CAN'T SLEEP WITHOUT MY FROGGY", "voice_any": ["voice_child", "voice_posy"], "intensity_any": ["loud"] }
+      ]
+    },
+    {
+      "page": 17, "page_type": "story",
+      "ocr_contains": ["turned his light back on", "Would you like this teddy", "not green", "My frog is green"],
+      "ambient_expected_any": ["amb_night"],
+      "optional_keyword_cues": [{ "trigger": "turned his light back on", "sound_any": ["fx_switch"] }],
+      "required_character_cues": [
+        { "speaker_any": ["Pip"], "quote_contains": "Would you like this teddy", "voice_any": ["voice_child", "voice_pip"] },
+        { "speaker_any": ["Posy"], "quote_contains": "not green", "voice_any": ["voice_child", "voice_posy"] },
+        { "speaker_any": ["Posy"], "quote_contains": "My frog is green", "voice_any": ["voice_child", "voice_posy"] }
+      ],
+      "character_cues_must_be_ordered": true
+    },
+    {
+      "page": 18, "page_type": "story",
+      "ocr_contains": ["Would you like my dinosaur", "He's green", "too big and too scary"],
+      "ambient_expected_any": ["amb_night"],
+      "optional_keyword_cues": [{ "trigger": "dinosaur", "sound_any": ["fx_roar"] }],
+      "required_character_cues": [
+        { "speaker_any": ["Pip"], "quote_contains": "Would you like my dinosaur", "voice_any": ["voice_child", "voice_pip"] },
+        { "speaker_any": ["Posy"], "quote_contains": "too big and too scary", "voice_any": ["voice_child", "voice_posy"], "intensity_any": ["normal", "loud"] }
+      ],
+      "character_cues_must_be_ordered": true
+    },
+    {
+      "page": 19, "page_type": "story",
+      "ocr_contains": ["frog money box", "WRONG FROG"],
+      "ambient_expected_any": ["amb_night"],
+      "required_character_cues": [
+        { "speaker_any": ["Pip"], "quote_contains": "frog money box", "voice_any": ["voice_child", "voice_pip"] },
+        { "speaker_any": ["Posy"], "quote_contains": "WRONG FROG", "voice_any": ["voice_child", "voice_posy"], "intensity_any": ["loud"] }
+      ],
+      "character_cues_must_be_ordered": true
+    },
+    {
+      "page": 20, "page_type": "story",
+      "ocr_contains": ["cried and cried and cried", "Poor Posy"],
+      "ambient_expected_any": ["amb_night"],
+      "required_keyword_cues": [{ "trigger": "cried and cried and cried", "sound_any": ["fx_cry"], "fire_once": true }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 21, "page_type": "story",
+      "ocr_contains": ["thought for a moment", "very difficult thing", "Would you like Piggy"],
+      "ambient_expected_any": ["amb_night"],
+      "required_character_cues": [{ "speaker_any": ["Pip"], "quote_contains": "Would you like Piggy", "voice_any": ["voice_child", "voice_pip"] }]
+    },
+    {
+      "page": 22, "page_type": "story",
+      "ocr_contains": ["stopped crying", "extremely nice pig", "Yes, please, Pip"],
+      "ambient_expected_any": ["amb_night"],
+      "required_character_cues": [{ "speaker_any": ["Posy"], "quote_contains": "Yes, please, Pip", "voice_any": ["voice_child", "voice_posy"], "emotion_hint_any": ["happy", null] }]
+    },
+    {
+      "page": 23, "page_type": "story",
+      "ocr_contains": ["Soon Pip was asleep"],
+      "ambient_expected_any": ["amb_night"],
+      "optional_keyword_cues": [{ "trigger": "asleep", "sound_any": ["fx_snore", "fx_none"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 24, "page_type": "story",
+      "ocr_contains": ["And so was Posy"],
+      "ambient_expected_any": ["amb_night"],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    {
+      "page": 25, "page_type": "story",
+      "ocr_contains": ["next day", "went home to her house", "found her frog"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true,
+      "spans_to_next_page": true
+    },
+    {
+      "page": 26, "page_type": "story",
+      "ocr_contains": ["exactly where she had left him", "Hooray"],
+      "ambient_expected_any": ["amb_indoors"],
+      "required_keyword_cues": [{ "trigger": "Hooray", "sound_any": ["fx_cheer", "fx_laugh"] }],
+      "required_character_cues": [],
+      "must_have_no_character_cues": true
+    },
+    { "page": 27, "page_type": "back_cover", "expect_story": false, "required_keyword_cues": [], "required_character_cues": [] }
+  ]
+}
