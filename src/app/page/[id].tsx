@@ -1,9 +1,11 @@
 import { Image } from 'expo-image';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image as RNImage,
   Modal,
   Pressable,
   ScrollView,
@@ -14,8 +16,9 @@ import {
   useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PhotoEditor from '../../components/PhotoEditor';
 import TactileButton from '../../components/TactileButton';
-import { EFFECT_IDS } from '../../lib/ai/soundLibrary';
+import { EFFECT_IDS, SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
 import {
   createCue,
   getCuesForPage,
@@ -26,6 +29,9 @@ import {
   updatePageOcrText,
 } from '../../lib/db';
 import type { Cue, Page } from '../../lib/types';
+import { createVisionProvider } from '../../lib/vision';
+
+type WorkingImage = { uri: string; width: number; height: number };
 
 /** Case-insensitive first-occurrence range of a trigger in the text. */
 function findRange(text: string, trigger: string): { start: number | null; end: number | null } {
@@ -79,6 +85,10 @@ export default function PageEditorScreen() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [picker, setPicker] = useState<PickerTarget | null>(null);
+  // Region re-scan: reuse PhotoEditor to crop to the text area, then OCR only
+  // that crop (fewer errors, no illustration text). regionSrc opens the editor.
+  const [regionSrc, setRegionSrc] = useState<WorkingImage | null>(null);
+  const [rescanning, setRescanning] = useState(false);
 
   const reload = useCallback(async () => {
     if (!pageId) return;
@@ -106,6 +116,55 @@ export default function PageEditorScreen() {
     }
     setEditing(false);
     await reload();
+  }
+
+  function openRegion() {
+    if (!page) return;
+    RNImage.getSize(
+      page.imagePath,
+      (width, height) => setRegionSrc({ uri: page.imagePath, width, height }),
+      () => Alert.alert('Could not open image', 'The page image could not be measured.')
+    );
+  }
+
+  // PhotoEditor returns the cropped image; OCR just that crop and replace the
+  // page text. Cues are re-located against the new text.
+  async function handleRescan(cropped: WorkingImage) {
+    setRegionSrc(null);
+    if (!page) return;
+    setRescanning(true);
+    try {
+      const out = await manipulateAsync(cropped.uri, [], {
+        base64: true,
+        compress: 0.9,
+        format: SaveFormat.JPEG,
+      });
+      const vision = createVisionProvider();
+      const result = await vision.preparePage({
+        imageBase64: out.base64!,
+        imageMimeType: 'image/jpeg',
+        embeddedText: null,
+        allowlists: SOUND_ALLOWLISTS,
+      });
+      await updatePageOcrText(page.id, result.ocr_text);
+      for (const c of cues) {
+        const r = findRange(result.ocr_text, c.triggerText);
+        if (r.start !== c.charStart || r.end !== c.charEnd) {
+          await updateCueCharRange(c.id, r.start, r.end);
+        }
+      }
+      await reload();
+      Alert.alert(
+        'Re-scanned',
+        result.ocr_text
+          ? 'Updated the page text from the marked area.'
+          : 'No text was found in that area.'
+      );
+    } catch (e: any) {
+      Alert.alert('Re-scan failed', e?.message ?? String(e));
+    } finally {
+      setRescanning(false);
+    }
   }
 
   function onWordPress(token: Token) {
@@ -191,13 +250,18 @@ export default function PageEditorScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Image source={{ uri: page.imagePath }} style={styles.image} contentFit="contain" transition={120} />
 
-        <View style={styles.toolbar}>
-          <Text style={[styles.hint, { color: subColor }]}>
-            {editing ? 'Fix any OCR mistakes, then save.' : `Tap a word to add a sound · ${activeCueCount} cue${activeCueCount === 1 ? '' : 's'}`}
-          </Text>
-          {!editing ? (
+        <Text style={[styles.hint, { color: subColor }]}>
+          {editing
+            ? 'Fix any OCR mistakes, then save.'
+            : `Tap a word to add a sound · ${activeCueCount} cue${activeCueCount === 1 ? '' : 's'}`}
+        </Text>
+        {!editing && (
+          <View style={styles.toolbar}>
+            <TactileButton style={[styles.smallBtn, styles.toolBtn, { backgroundColor: cardBackground }]} onPress={openRegion}>
+              <Text style={[styles.smallBtnLabel, { color: textColor }]}>🔲 Re-scan area</Text>
+            </TactileButton>
             <TactileButton
-              style={[styles.smallBtn, { backgroundColor: cardBackground }]}
+              style={[styles.smallBtn, styles.toolBtn, { backgroundColor: cardBackground }]}
               onPress={() => {
                 setDraft(page.ocrText);
                 setEditing(true);
@@ -205,8 +269,8 @@ export default function PageEditorScreen() {
             >
               <Text style={[styles.smallBtnLabel, { color: textColor }]}>✏️ Correct text</Text>
             </TactileButton>
-          ) : null}
-        </View>
+          </View>
+        )}
 
         {editing ? (
           <View style={styles.editWrap}>
@@ -311,6 +375,23 @@ export default function PageEditorScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Region selector — reuse PhotoEditor to crop to the text area, then re-OCR */}
+      <PhotoEditor
+        visible={regionSrc !== null}
+        source={regionSrc}
+        onCancel={() => setRegionSrc(null)}
+        onDone={handleRescan}
+      />
+
+      <Modal visible={rescanning} transparent animationType="fade">
+        <View style={styles.rescanOverlay}>
+          <View style={[styles.rescanCard, { backgroundColor: cardBackground }]}>
+            <ActivityIndicator size="large" color="#208AEF" />
+            <Text style={{ color: textColor }}>Re-scanning the marked area…</Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -322,8 +403,8 @@ const styles = StyleSheet.create({
 
   image: { width: '100%', height: 220, borderRadius: 12, backgroundColor: 'rgba(127,127,127,0.12)' },
 
-  toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  hint: { flex: 1, fontSize: 13 },
+  toolbar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  hint: { fontSize: 13 },
 
   textCard: { borderRadius: 12, padding: 14 },
   flow: { fontSize: 17, lineHeight: 30 },
@@ -334,7 +415,11 @@ const styles = StyleSheet.create({
   editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
 
   smallBtn: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center' },
+  toolBtn: { flex: 1 },
   smallBtnLabel: { fontSize: 14, fontWeight: '600' },
+
+  rescanOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
+  rescanCard: { borderRadius: 16, padding: 28, alignItems: 'center', gap: 14, minWidth: 240 },
 
   unplaced: { gap: 6 },
   unplacedTitle: { fontSize: 12, fontWeight: '600' },
