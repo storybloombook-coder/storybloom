@@ -1,0 +1,30 @@
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+group = 'expo.modules.tesseractocr'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+useExpoPublishing()
+
+android {
+  namespace "expo.modules.tesseractocr"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Tesseract4Android 4.9.0 (maintained libtesseract binding; minSdk 21).
+  // Standard flavor; swap to ":tesseract4android-openmp:4.9.0" for multi-threaded
+  // (faster, larger). https://github.com/adaptech-cz/Tesseract4Android
+  implementation "cz.adaptech.tesseract4android:tesseract4android:4.9.0"
+}

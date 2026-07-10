@@ -1,0 +1,7 @@
+{
+  "name": "expo-tesseract-ocr",
+  "version": "0.1.0",
+  "description": "On-device Tesseract OCR (Android) as a local Expo module",
+  "main": "index.ts",
+  "private": true
+}

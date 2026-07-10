@@ -92,6 +92,17 @@ Same principle applies to speech: isolate the recognizer behind a
 Vosk as the first implementation, so a heavier engine (e.g. whisper.rn) can
 drop in later without touching UI code.
 
+Same principle applies to VISION (see docs/vision-providers.md — the "Belarus"
+change). The vision pipeline is split into an `OcrProvider` (image->text) and a
+`CueAnalyzer` (text->scene+cues) behind a `VisionProvider` in src/lib/vision/.
+On-device OCR (Tesseract, Cyrillic-capable) is ALWAYS the base where available —
+free, private, and immune to Gemini's region/account limits (Gemini may be
+unavailable in Belarus). A cloud VLM is an OPTIONAL enhancement for richer
+scene/mood, only where reachable. With no cloud at all, a LOCAL trigger-word
+matcher over the OCR text still produces ambient + keyword cues, so the app works
+fully offline. Native Tesseract needs the dev build (milestone 7, like Vosk);
+until then the factory falls back to the Gemini one-shot so Expo Go still works.
+
 ## Data model (target shape)
 - **Book**: id, title, isbn (nullable — capture from back-cover barcode if
   possible; unused in v1 but the future book-matching key), cover_image_path,

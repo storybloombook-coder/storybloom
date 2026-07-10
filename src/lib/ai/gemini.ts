@@ -59,6 +59,9 @@ export interface PreparePageResult {
   keyword_cues: RawKeywordCue[];
   character_cues: RawCharacterCue[];
   low_confidence?: boolean;
+  /** OCR engine mean confidence 0..1 when known (on-device path); undefined for
+   *  the cloud one-shot and for PDF embedded-text pages. Diagnostics only. */
+  ocrConfidence?: number;
 }
 
 // ---- Prompt builder ------------------------------------------------------

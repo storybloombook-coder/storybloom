@@ -7,6 +7,7 @@ import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,9 +21,8 @@ import { useSharedValue } from 'react-native-reanimated';
 import DraggableThumb, { THUMB_SIZE } from '../components/DraggableThumb';
 import PhotoEditor from '../components/PhotoEditor';
 import TactileButton from '../components/TactileButton';
-import { callGemini } from '../lib/ai/geminiClient';
-import { preparePage } from '../lib/ai/gemini';
 import { SOUND_ALLOWLISTS } from '../lib/ai/soundLibrary';
+import { createVisionProvider } from '../lib/vision';
 import { createBook, createCue, createPage, setBookPrepStatus, updatePagePrepResult } from '../lib/db';
 
 const GRID_GAP = 12;
@@ -43,6 +43,18 @@ function findCharRange(ocrText: string, triggerText: string): { start: number | 
   const idx = ocrText.toLowerCase().indexOf(triggerText.toLowerCase());
   if (idx < 0) return { start: null, end: null };
   return { start: idx, end: idx + triggerText.length };
+}
+
+interface DebugPageInfo {
+  page: number;
+  mode: string;
+  ocrId: string;
+  pageType: string;
+  confidence?: number;
+  ocrText: string;
+  ambient: string | null;
+  keywords: string[];
+  charCueCount: number;
 }
 
 export default function AddBookScreen() {
@@ -68,6 +80,14 @@ export default function AddBookScreen() {
   const [titleInput, setTitleInput] = useState('');
   const [processing, setProcessing] = useState(false);
   const [progressText, setProgressText] = useState('');
+  // Dev-only readout of what the vision pipeline produced per page (raw OCR
+  // text, confidence, matched cues) so we can judge on-device OCR quality.
+  const [debugPages, setDebugPages] = useState<DebugPageInfo[]>([]);
+
+  function continueToLibrary() {
+    setDebugPages([]);
+    router.replace('/library');
+  }
 
   function addPages(assets: ImagePicker.ImagePickerAsset[]) {
     setPages((prev) => [
@@ -169,8 +189,15 @@ export default function AddBookScreen() {
     setTitleModalVisible(false);
     setProcessing(true);
     setProgressText('Creating book…');
+    setDebugPages([]);
 
     try {
+      // Build the vision pipeline BEFORE creating the book, so a missing API
+      // key (or no available vision path) fails here without leaving an orphan
+      // book stuck in 'processing'. Swappable: on-device OCR where available
+      // (auto-upgrades once the Tesseract dev build lands), cloud in Expo Go.
+      const vision = createVisionProvider();
+
       const book = await createBook({ title, source: 'photos' });
       const bookDir = new Directory(Paths.document, 'books', book.id);
       bookDir.create({ intermediates: true, idempotent: true });
@@ -193,15 +220,12 @@ export default function AddBookScreen() {
 
         try {
           const base64 = await destFile.base64();
-          const result = await preparePage(
-            {
-              imageBase64: base64,
-              imageMimeType: 'image/jpeg',
-              embeddedText: null,
-              allowlists: SOUND_ALLOWLISTS,
-            },
-            callGemini
-          );
+          const result = await vision.preparePage({
+            imageBase64: base64,
+            imageMimeType: 'image/jpeg',
+            embeddedText: null,
+            allowlists: SOUND_ALLOWLISTS,
+          });
 
           await updatePagePrepResult(pageRow.id, {
             pageType: result.page_type,
@@ -209,6 +233,23 @@ export default function AddBookScreen() {
             backgroundScene: result.background_scene,
             ambientSoundId: result.ambient_sound_id,
           });
+
+          if (__DEV__) {
+            setDebugPages((prev) => [
+              ...prev,
+              {
+                page: i + 1,
+                mode: vision.mode,
+                ocrId: vision.ocrId,
+                pageType: result.page_type,
+                confidence: result.ocrConfidence,
+                ocrText: result.ocr_text,
+                ambient: result.ambient_sound_id,
+                keywords: result.keyword_cues.map((k) => `${k.trigger_text}→${k.sound_id ?? 'none'}`),
+                charCueCount: result.character_cues.length,
+              },
+            ]);
+          }
 
           for (const kw of result.keyword_cues) {
             const range = findCharRange(result.ocr_text, kw.trigger_text);
@@ -252,6 +293,10 @@ export default function AddBookScreen() {
 
       setProcessing(false);
       setPages([]);
+
+      // In dev, hold on the debug readout instead of navigating away so we can
+      // inspect the raw OCR/cues; "Continue to Library" dismisses it.
+      if (__DEV__) return;
 
       if (failureCount > 0) {
         Alert.alert(
@@ -420,13 +465,56 @@ export default function AddBookScreen() {
         </Pressable>
       </Modal>
 
-      <Modal visible={processing} transparent animationType="fade">
+      <Modal
+        visible={processing || (__DEV__ && debugPages.length > 0)}
+        transparent
+        animationType="fade"
+      >
         <View style={styles.processingOverlay}>
           <View style={StyleSheet.flatten([styles.processingCard, { backgroundColor: sheetBackground }])}>
-            <ActivityIndicator size="large" color="#208AEF" />
+            {processing && <ActivityIndicator size="large" color="#208AEF" />}
             <Text style={StyleSheet.flatten([styles.processingText, { color: textColor }])}>
-              {progressText}
+              {processing ? progressText : 'Prep debug — review OCR & cues'}
             </Text>
+
+            {__DEV__ && debugPages.length > 0 && (
+              <ScrollView style={styles.debugScroll}>
+                {debugPages.map((d) => (
+                  <View
+                    key={d.page}
+                    style={StyleSheet.flatten([
+                      styles.debugCard,
+                      { borderColor: isDark ? '#333' : '#e0e0e0' },
+                    ])}
+                  >
+                    <Text style={StyleSheet.flatten([styles.debugTitle, { color: textColor }])}>
+                      p{d.page} · {d.pageType} · {d.mode}/{d.ocrId}
+                      {d.confidence != null ? ` · ${Math.round(d.confidence * 100)}%` : ''}
+                    </Text>
+                    <Text
+                      style={StyleSheet.flatten([styles.debugMono, { color: textColor }])}
+                      numberOfLines={5}
+                    >
+                      {d.ocrText || '(no text recognized)'}
+                    </Text>
+                    <Text style={StyleSheet.flatten([styles.debugMeta, { color: isDark ? '#7fb0d8' : '#3a6ea5' }])}>
+                      amb: {d.ambient ?? '—'} · kw: {d.keywords.join(', ') || '—'} · dlg: {d.charCueCount}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+
+            {!processing && (
+              <TactileButton
+                style={StyleSheet.flatten([styles.button, styles.doneButton])}
+                onPress={continueToLibrary}
+              >
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#fff' }])}>
+                  Continue to Library
+                </Text>
+              </TactileButton>
+            )}
           </View>
         </View>
       </Modal>
@@ -516,9 +604,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 16,
     minWidth: 220,
+    maxWidth: '92%',
   },
   processingText: {
     fontSize: 15,
     textAlign: 'center',
+  },
+  debugScroll: {
+    maxHeight: 360,
+    width: '100%',
+  },
+  debugCard: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+    gap: 4,
+  },
+  debugTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  debugMono: {
+    fontSize: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    lineHeight: 16,
+  },
+  debugMeta: {
+    fontSize: 11,
   },
 });

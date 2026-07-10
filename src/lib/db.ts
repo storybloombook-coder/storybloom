@@ -219,3 +219,184 @@ export async function listBooks(): Promise<Book[]> {
   const rows = await db.getAllAsync<BookRow>('SELECT * FROM books ORDER BY created_at DESC');
   return rows.map(rowToBook);
 }
+
+// ---- Page / Cue row mappers ---------------------------------------------
+
+type PageRow = {
+  id: string;
+  book_id: string;
+  page_number: number;
+  image_path: string;
+  page_type: PageType;
+  embedded_text: string | null;
+  ocr_text: string;
+  background_scene: string | null;
+  ambient_sound_id: string | null;
+  ambient_candidates: string;
+};
+
+function rowToPage(r: PageRow): Page {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    pageNumber: r.page_number,
+    imagePath: r.image_path,
+    pageType: r.page_type,
+    embeddedText: r.embedded_text,
+    ocrText: r.ocr_text,
+    backgroundScene: r.background_scene,
+    ambientSoundId: r.ambient_sound_id,
+    ambientCandidates: parseStringArray(r.ambient_candidates),
+  };
+}
+
+type CueRow = {
+  id: string;
+  page_id: string;
+  type: CueType;
+  trigger_text: string;
+  context_phrase: string | null;
+  char_start: number | null;
+  char_end: number | null;
+  sound_id: string | null;
+  candidate_sound_ids: string;
+  character_name: string | null;
+  intensity: CueIntensity | null;
+  emotion: string | null;
+  review_state: CueReviewState;
+};
+
+function rowToCue(r: CueRow): Cue {
+  return {
+    id: r.id,
+    pageId: r.page_id,
+    type: r.type,
+    triggerText: r.trigger_text,
+    contextPhrase: r.context_phrase,
+    charStart: r.char_start,
+    charEnd: r.char_end,
+    soundId: r.sound_id,
+    candidateSoundIds: parseStringArray(r.candidate_sound_ids),
+    characterName: r.character_name,
+    intensity: r.intensity,
+    emotion: r.emotion,
+    reviewState: r.review_state,
+  };
+}
+
+// ---- Library-facing reads -----------------------------------------------
+
+/** A book plus the aggregate counts + cover the library card shows, computed
+ *  in one query so the list doesn't fan out N queries per book. */
+export interface BookSummary extends Book {
+  pageCount: number;
+  cueCount: number;
+}
+
+export async function listBookSummaries(): Promise<BookSummary[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<
+    BookRow & { page_count: number; cue_count: number; cover_path: string | null }
+  >(
+    `SELECT b.*,
+       (SELECT COUNT(*) FROM pages p WHERE p.book_id = b.id) AS page_count,
+       (SELECT COUNT(*) FROM cues c
+          JOIN pages p2 ON c.page_id = p2.id
+          WHERE p2.book_id = b.id) AS cue_count,
+       (SELECT p3.image_path FROM pages p3
+          WHERE p3.book_id = b.id
+          ORDER BY p3.page_number LIMIT 1) AS cover_path
+     FROM books b
+     ORDER BY b.created_at DESC`
+  );
+  return rows.map((r) => ({
+    ...rowToBook(r),
+    // Fall back to page 1's image when no explicit cover was stored.
+    coverImagePath: r.cover_image_path ?? r.cover_path,
+    pageCount: r.page_count,
+    cueCount: r.cue_count,
+  }));
+}
+
+export async function getBook(id: string): Promise<Book | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<BookRow>('SELECT * FROM books WHERE id = ?', [id]);
+  return row ? rowToBook(row) : null;
+}
+
+export async function getPagesForBook(bookId: string): Promise<Page[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<PageRow>(
+    'SELECT * FROM pages WHERE book_id = ? ORDER BY page_number',
+    [bookId]
+  );
+  return rows.map(rowToPage);
+}
+
+export async function getCuesForBook(bookId: string): Promise<Cue[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<CueRow>(
+    `SELECT c.* FROM cues c
+       JOIN pages p ON c.page_id = p.id
+       WHERE p.book_id = ?
+       ORDER BY p.page_number, c.char_start`,
+    [bookId]
+  );
+  return rows.map(rowToCue);
+}
+
+/** Delete a book and (via ON DELETE CASCADE) its pages + cues. Image files on
+ *  disk are removed by the caller (the data layer stays filesystem-free). */
+export async function deleteBook(id: string): Promise<void> {
+  const db = await getDatabase();
+  // Foreign keys must be ON for the cascade; assert it on this connection.
+  await db.execAsync('PRAGMA foreign_keys = ON;');
+  await db.runAsync('DELETE FROM books WHERE id = ?', [id]);
+}
+
+// ---- Single-page reads + edits (post-OCR text/cue editor) ----------------
+
+export async function getPage(pageId: string): Promise<Page | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<PageRow>('SELECT * FROM pages WHERE id = ?', [pageId]);
+  return row ? rowToPage(row) : null;
+}
+
+export async function getCuesForPage(pageId: string): Promise<Cue[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<CueRow>(
+    'SELECT * FROM cues WHERE page_id = ? ORDER BY char_start IS NULL, char_start',
+    [pageId]
+  );
+  return rows.map(rowToCue);
+}
+
+/** Save a corrected OCR transcript for a page. Cue char positions may now be
+ *  stale — the caller re-locates them (updateCueCharRange) against the new text. */
+export async function updatePageOcrText(pageId: string, ocrText: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE pages SET ocr_text = ? WHERE id = ?', [ocrText, pageId]);
+}
+
+export async function updateCueSoundId(cueId: string, soundId: string | null): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE cues SET sound_id = ? WHERE id = ?', [soundId, cueId]);
+}
+
+export async function setCueReviewState(cueId: string, state: CueReviewState): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE cues SET review_state = ? WHERE id = ?', [state, cueId]);
+}
+
+export async function updateCueCharRange(
+  cueId: string,
+  charStart: number | null,
+  charEnd: number | null
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE cues SET char_start = ?, char_end = ? WHERE id = ?', [
+    charStart,
+    charEnd,
+    cueId,
+  ]);
+}
