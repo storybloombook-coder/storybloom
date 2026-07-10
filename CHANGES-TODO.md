@@ -157,8 +157,10 @@ latency playback, layer ambient bed under one-shot effects). Language-neutral.
 ## Suggested order of work
 1. CHANGE 2 (audio) — mechanical find/replace, fastest, no risk.
 2. CHANGE 3 (vision/Russian vocab) — additive, low risk, unblocks RU effects.
-3. CHANGE 1 (speech) — the real work; build the interface + Vosk impl, test RU
+3. CHANGE 5 (sound sourcing) — additive manifest fields + docs, low risk.
+4. CHANGE 1 (speech) — the real work; build the interface + Vosk impl, test RU
    on a real Android phone via Expo Go before considering Whisper.
+5. CHANGE 4 (publish) — commit, tag, push v0.2.0 once the above are in.
 
 ## Open question to validate during build
 Does Vosk's Russian accuracy clear the bar for keyword alignment on a real
@@ -168,11 +170,48 @@ book, quiet room, parent reading.
 
 ---
 
+## CHANGE 5 — Sound sourcing + manifest licensing fields
+> Full detail lives in **`SOUND-SOURCING.md`** (companion doc). Summary + the
+> concrete edits below. Rationale: VISION.md wants shared/forkable sound builds,
+> so every sound must be safe to REDISTRIBUTE, not just to use. That means CC0
+> stock and/or Apache-2.0-generated audio — NOT Pixabay/Mixkit raw redistribution.
+
+### Key findings
+- **v1 library:** source from **CC0** (Freesound filtered to CC0 + Kenney /
+  OpenGameArt CC0 packs) and/or **AI-generate with Meta AudioGen (Apache-2.0)**.
+  Both are free AND redistribution-safe.
+- **ElevenLabs** is the best AI SFX quality but its FREE tier requires attribution
+  + is personal-use only — not suitable for a free/shareable app. Keep it as the
+  paid upgrade for later (roadmap v3+).
+- **Best move:** pre-generate the bundled library at BUILD TIME from the manifest
+  prompts with AudioGen. Royalty-free, redistributable, style-consistent, and
+  stays inside the "AI matches bundled sounds, doesn't generate at runtime" rule.
+- Bilingual: sound files are language-neutral — SAME clips serve EN + RU. Only
+  the trigger vocabulary needs both languages (that's CHANGE 3). No extra
+  sourcing for Russian.
+
+### What to do (edits to `sound-library-manifest.md`)
+1. Add a **`license`** and **`source_url`** field to EVERY `amb_*` / `fx_*` entry
+   so provenance travels with each build (essential once builds are shared).
+2. Add a short **"Sourcing"** note at the top: library is CC0 stock and/or
+   AudioGen-generated (Apache-2.0); explicitly NOT Pixabay/Mixkit raw-file
+   redistribution.
+3. Add a **"v2 generation options"** section pointing to AudioGen / Stable Audio
+   Open / ElevenLabs(paid) with the licensing notes from SOUND-SOURCING.md.
+
+### Files to edit
+- `sound-library-manifest.md` — the three additions above.
+- (Include `SOUND-SOURCING.md` in the repo + add it to README's "Files in this
+  kit" index.)
+
+---
+
 ## CHANGE 4 — Publish the updated kit as a new version on GitHub
 
 > This session (Claude in VS Code) is connected to the repo
 > `storybloombook-coder/storybloom`, so it can commit, push, and tag directly.
-> Do this LAST, only after Changes 1–3 are made and (ideally) sanity-checked.
+> Do this LAST, only after Changes 1–3 and 5 are made and (ideally)
+> sanity-checked.
 
 ### What "a new version" means here
 This is a docs/kit + foundation-code update (bilingual EN/RU support, corrected
@@ -188,10 +227,10 @@ Use whatever the repo's existing convention is if one already exists — check
    git pull origin main
    git tag            # see if a versioning scheme already exists
    ```
-2. Stage the edited kit files + new speech module + this note:
+2. Stage the edited kit files + new speech module + these notes:
    ```bash
    git add CLAUDE.md SPEC.md README.md gemini-vision-prompt.md \
-           sound-library-manifest.md lib/ CHANGES-TODO.md
+           sound-library-manifest.md lib/ CHANGES-TODO.md SOUND-SOURCING.md
    git status         # review exactly what's staged before committing
    ```
 3. Commit with a clear message:
@@ -202,7 +241,9 @@ Use whatever the repo's existing convention is if one already exists — check
      add swappable SpeechRecognizer interface (lib/speech) for whisper.rn later
    - Audio: replace removed expo-av with expo-audio throughout
    - Vision: preserve Cyrillic in Gemini prompt; add Russian trigger vocab to
-     the sound-library allow-lists (fixes RU keyword effects)"
+     the sound-library allow-lists (fixes RU keyword effects)
+   - Sound: CC0/AudioGen(Apache-2.0) sourcing for redistributable builds;
+     add license + source_url fields to sound manifest (SOUND-SOURCING.md)"
    ```
 4. Push to main:
    ```bash
