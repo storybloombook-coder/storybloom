@@ -11,6 +11,14 @@ For one photo of a children's book page, Gemini must:
 3. Find KEYWORD cues — words/short phrases that should trigger a sound effect.
 4. Attribute CHARACTER lines — dialogue and which character speaks it.
 
+Storybloom supports English AND Russian books. If the page text is in Russian
+(Cyrillic script), preserve it EXACTLY as printed in `ocr_text`, `trigger_text`,
+`context_phrase`, and `line_text` — do NOT transliterate to Latin characters and
+do NOT translate to English. `trigger_text` must still be lowercased (Cyrillic
+lowercasing works the same way as Latin — no special handling needed), and it
+must match the exact Cyrillic substring in `ocr_text` so speech alignment can
+locate it.
+
 All sound choices are MATCHED to a fixed bundled library (see
 sound-library-manifest.md). Gemini picks the best-fitting library id from a
 provided allow-list. It must NOT invent sound names.
@@ -89,6 +97,8 @@ One of: "cover" | "title" | "story" | "illustration_only" | "back_cover".
 - "You are labeling a single children's book page to drive sound effects."
 - "Return ONLY valid JSON matching this schema. No explanations."
 - "Choose sound ids ONLY from these allow-lists: [inject ids]."
+- "If the page text is in Russian, keep ocr_text and all trigger_text/line_text
+  in Cyrillic exactly as printed — never transliterate or translate."
 - SCENE REASONING (for ambient): look at the WHOLE picture as a scene and pick
   the ambient that fits the setting — e.g. a park -> birds; a fountain -> water;
   a road -> passing cars; a bedroom at night -> quiet night. Reason about the

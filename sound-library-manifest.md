@@ -29,20 +29,22 @@ assets/sounds/voices/    -> character voice stings
 | amb_meadow   | field, farm, outdoors  | wind + distant birds     |
 
 ## Keyword effects (trigger word -> sound_id)
-| id             | triggers on words like            |
-|----------------|-----------------------------------|
-| fx_engine      | engine, car, truck, roared, motor |
-| fx_laugh       | laughed, giggled, hooray          |
-| fx_splash      | splash, jumped in, water          |
-| fx_footsteps   | ran, walked, footsteps, stomped   |
-| fx_door        | door, knock, opened, slammed      |
-| fx_bell        | bell, ring, chimed                |
-| fx_thunder     | thunder, boom, crash              |
-| fx_animal_dog  | dog, bark, woof, puppy            |
-| fx_animal_bird | bird, tweet, chirp                |
-| fx_pop         | pop, burst, bubble                |
-| fx_whoosh      | flew, zoomed, whoosh, wind        |
-| fx_magic       | magic, sparkle, poof, wish        |
+Trigger lists are bilingual (EN + RU) — Gemini may match either language, since
+sound files themselves are language-neutral.
+| id             | triggers on words like (EN)       | triggers on words like (RU)         |
+|----------------|------------------------------------|--------------------------------------|
+| fx_engine      | engine, car, truck, roared, motor | мотор, машина, ревел, гудок          |
+| fx_laugh       | laughed, giggled, hooray          | смеялся, хихикал, ура                |
+| fx_splash      | splash, jumped in, water          | плеск, брызги, плюх                  |
+| fx_footsteps   | ran, walked, footsteps, stomped   | бежал, шёл, шаги, топал              |
+| fx_door        | door, knock, opened, slammed      | дверь, стук, открыл, хлопнула        |
+| fx_bell        | bell, ring, chimed                | колокольчик, звонок, звенел          |
+| fx_thunder     | thunder, boom, crash              | гром, бум, грохот                    |
+| fx_animal_dog  | dog, bark, woof, puppy            | собака, лай, гав, щенок              |
+| fx_animal_bird | bird, tweet, chirp                | птица, чирик, щебет                  |
+| fx_pop         | pop, burst, bubble                | лопнул, хлоп, пузырь                 |
+| fx_whoosh      | flew, zoomed, whoosh, wind        | летел, промчался, свист, ветер       |
+| fx_magic       | magic, sparkle, poof, wish        | волшебство, искры, пуф, желание      |
 
 ## Character voice stings (voice_id)
 These are short, non-verbal voice-style stings (not real dialogue), just to give
@@ -59,17 +61,17 @@ each speaker a distinct sonic feel when their line is read.
 ## Additions from the first real book (Bedtime Frog — see examples/)
 These ids are used by the worked example and its test fixture; include them in
 the allow-lists alongside the starter set above.
-| id          | fires on / use                    |
-|-------------|-----------------------------------|
-| fx_switch   | light switch click                |
-| fx_cry      | soft child crying / whimper       |
-| fx_cheer    | kids cheer, "hooray"              |
-| fx_snore    | gentle sleep breathing (optional) |
-| fx_farm     | barnyard / farm animals           |
-| fx_roar     | toy dinosaur roar (optional, fun) |
-| fx_bubbles  | soap bubbles pop (bath scenes)    |
-| voice_pip   | Pip — kind boy-child sting        |
-| voice_posy  | Posy — distinct girl-child sting  |
+| id          | fires on / use (EN)               | fires on / use (RU)                |
+|-------------|------------------------------------|--------------------------------------|
+| fx_switch   | light switch click                | щелчок выключателя                 |
+| fx_cry      | soft child crying / whimper       | плач, хныканье                     |
+| fx_cheer    | kids cheer, "hooray"              | ура, радостные крики                |
+| fx_snore    | gentle sleep breathing (optional) | сопение во сне (optional)          |
+| fx_farm     | barnyard / farm animals           | ферма, домашние животные           |
+| fx_roar     | toy dinosaur roar (optional, fun) | рёв динозавра (optional)            |
+| fx_bubbles  | soap bubbles pop (bath scenes)    | мыльные пузыри                     |
+| voice_pip   | Pip — kind boy-child sting        | Пип — sting for the same character |
+| voice_posy  | Posy — distinct girl-child sting  | Поси — sting for the same character|
 
 Convention: `fx_none` is a sentinel meaning "no sound" (used in review swap
 lists and optional test expectations) — it is not a file, just the null option.

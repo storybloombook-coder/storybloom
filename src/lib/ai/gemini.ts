@@ -96,6 +96,7 @@ Rules:
 - character_cues: ONLY from text inside quotation marks (actual spoken dialogue). Narrator text like 'said Pip' is NOT a cue. Return multiple quotes IN ORDER. Set intensity "loud" for ALL CAPS / shouted lines.
 - sound_id / voice_id MUST be chosen from the allow-lists below, or set null (never invent an id).
 - If nothing fits a category, return an empty array.
+- This page may be in English or Russian. If the text is Russian (Cyrillic), preserve it EXACTLY in ocr_text, trigger_text, context_phrase, and line_text — do NOT transliterate to Latin characters and do NOT translate to English. trigger_text is still lowercased and must match the exact Cyrillic substring in ocr_text.
 ${hint}
 Allowed ambient ids: ${JSON.stringify(allowlists.ambientIds)}
 Allowed effect ids: ${JSON.stringify(allowlists.effectIds)}
@@ -133,6 +134,7 @@ export function normalizeResult(raw: any): PreparePageResult {
     ? raw.keyword_cues
         .filter((c: any) => c && typeof c.trigger_text === "string")
         .map((c: any) => ({
+          // toLowerCase() handles Cyrillic correctly (unlike e.g. Turkish "I"), no locale arg needed.
           trigger_text: String(c.trigger_text).toLowerCase(),
           context_phrase: c.context_phrase ?? null,
           sound_id: c.sound_id ?? null,

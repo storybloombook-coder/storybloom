@@ -9,9 +9,13 @@
 - Planning/reference docs at repo root: SPEC.md, VISION.md, DESIGN-DIRECTION.md,
   gemini-vision-prompt.md, review-flow.md, sound-library-manifest.md, examples/.
 - **Audio:** SDK 57 has NO `expo-av` — use **`expo-audio`**.
-- **Speech recognition** (`expo-speech-recognition`, milestone 7) is a config
-  plugin that requires a **custom dev build** — it does NOT run in Expo Go. Keep
+- **Speech recognition** (`react-native-vosk`, milestone 7) is a native module
+  that requires a **custom dev build** — it does NOT run in Expo Go. Keep
   milestones 1–6 Expo-Go-compatible; introduce the dev build at milestone 7.
+  Storybloom must support English AND Russian; Android's on-device Google
+  recognizer is unreliable per-device and weak in Russian, so Vosk (fully
+  on-device, free, first-class EN+RU) is the primary engine. See src/lib/speech/
+  for the swappable `SpeechRecognizer` interface (whisper.rn is the upgrade path).
 - See AGENTS.md: check the versioned Expo docs (v57) before writing native code.
 
 ## What this project is
@@ -50,7 +54,8 @@ The developer has no paid API access. v1 must run entirely on free tiers:
   small curated set of royalty-free sounds (Freesound / Pixabay / Mixkit) into
   the app. The AI's job is to MATCH a cue to the best-fitting library sound
   (e.g. "forest scene" -> forest_ambient.mp3), not to generate audio.
-- **Speech recognition:** on-device (free, offline), no key.
+- **Speech recognition:** on-device (free, offline), no key. Vosk EN+RU models
+  (~50MB each) are bundled/downloaded at build time — not a paid service.
 So the ONLY credential needed is a free Gemini AI Studio key. No payment anywhere.
 AI-generated sounds are a documented v2 upgrade, not part of v1.
 
@@ -63,10 +68,13 @@ AI-generated sounds are a documented v2 upgrade, not part of v1.
 - **Camera:** expo-camera or expo-image-picker for capturing pages.
 - **AI vision:** Gemini Flash (free tier) — one call per page, returns structured
   JSON (see data model). Free key in env — NEVER committed.
-- **Audio playback:** expo-av (or expo-audio if current). Preload/cache clips.
-- **Speech recognition (listening):** expo-speech-recognition (on-device,
-  Android native recognizer, free). NOTE: this is speech-to-TEXT. Do NOT use
-  expo-speech — that is text-to-speech and is the wrong direction.
+- **Audio playback:** expo-audio (expo-av is removed as of SDK 55 — do not use it). Preload/cache clips.
+- **Speech recognition (listening):** react-native-vosk (on-device, offline,
+  free, first-class EN+RU) is the primary engine — see src/lib/speech/. NOTE:
+  this is speech-to-TEXT. Do NOT use expo-speech — that is text-to-speech and
+  is the wrong direction. expo-speech-recognition (Android's native recognizer)
+  MAY remain as an optional English-only accelerator on devices that already
+  have Google's offline model, but it is not the cross-language foundation.
 
 ## Storage model: LOCAL-ONLY for v1
 No backend, no accounts, no network except the free Gemini calls during Prep.
@@ -78,6 +86,11 @@ Free tiers have rate limits and change without notice. Isolate ALL AI code and
 prompt templates in src/lib/ai/ behind a simple interface so the provider (Gemini
 free tier now; something else later) can be swapped without touching UI code.
 Handle HTTP 429 (rate limit) gracefully with retry/backoff.
+
+Same principle applies to speech: isolate the recognizer behind a
+`SpeechRecognizer` interface in src/lib/speech/ (load/start/stop/unload), with
+Vosk as the first implementation, so a heavier engine (e.g. whisper.rn) can
+drop in later without touching UI code.
 
 ## Data model (target shape)
 - **Book**: id, title, isbn (nullable — capture from back-cover barcode if
@@ -181,7 +194,11 @@ screenshots will be provided for that pass.
    Only play cues whose review_state != 'removed'. Skip non-story pages.
 7. Speech recognition: listen, align spoken words to ocr_text, fire KEYWORD
    effects at the right position. ALSO: recognize the spoken command "next page"
-   to advance hands-free (keep the manual tap too).
+   (English) or "следующая страница" (Russian) to advance hands-free (keep the
+   manual tap too). Uses react-native-vosk via the src/lib/speech/
+   `SpeechRecognizer` interface — keyword alignment is the hard part (matching
+   live speech position to known text); the page-turn phrase is a much easier
+   fixed-phrase match.
 
 >>> END OF CORE v1. A full, satisfying run works here: capture -> prep -> save to
 >>> library -> REVIEW/approve sounds -> read aloud with ambient + keyword effects
@@ -242,6 +259,9 @@ Nothing else from the vision leaks into v1.
 - Do NOT generate audio with AI in v1 (use bundled royalty-free library).
 - Do NOT generate or fetch sounds during the reading loop — Prep only.
 - Do NOT use expo-speech for listening (it's TTS, not recognition).
+- Do NOT rely on Android's native recognizer as the cross-language foundation —
+  it's unreliable per-device and weak in Russian. Vosk is primary; that engine
+  MAY remain as an optional English-only accelerator, nothing more.
 - Do NOT build auto page-turn detection in v1 (manual tap + "next page" voice
   command only; automatic position-based detection is v2).
 - Do NOT commit API keys.

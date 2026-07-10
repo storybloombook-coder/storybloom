@@ -36,10 +36,12 @@ listens (and looks at the real book).
   pages, cues, and sounds. The user can reopen it anytime and get the same flow
   they tried — no re-processing. No login.
 - **Reading view**: page display, manual "Next page," ambient playback.
-- **Listen-and-trigger**: on-device speech recognition aligns the parent's
-  speech to the known page text and fires cached sounds at the right position.
+- **Listen-and-trigger**: on-device speech recognition (Vosk, EN + RU) aligns
+  the parent's speech to the known page text and fires cached sounds at the
+  right position.
 - **Voice "next page"**: the same speech recognition detects the spoken command
-  "next page" to advance hands-free (manual tap still available).
+  "next page" (English) / "следующая страница" (Russian) to advance hands-free
+  (manual tap still available).
 - **Sound layers**: ambient background + keyword effects are the CORE v1
   experience. Character voices are an OPTIONAL feature behind a toggle (off by
   default), offered only when the app detects dialogue in a processed book.
@@ -56,7 +58,7 @@ AI-generated sounds are a v2 upgrade, not part of v1.
 ## Explicit v1 scope decisions
 - **Local-only.** No accounts, no backend, no cloud sync.
 - **Manual + voice page turns.** Tap "Next page" or say "next page."
-- **On-device speech recognition** (Android native), free.
+- **On-device speech recognition** (Vosk, EN + RU), free, offline.
 - **Library sounds, not AI generation.** Matched during prep.
 - **Core v1 = ambient + keyword effects.** Character voices (dialogue) are a
   later, optional toggle, off by default. Prep still extracts dialogue so the
