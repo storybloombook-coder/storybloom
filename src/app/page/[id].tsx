@@ -34,6 +34,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import PhotoEditor from '../../components/PhotoEditor';
 import TactileButton from '../../components/TactileButton';
 import { AMBIENT_IDS, EFFECT_IDS, SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
+import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import {
   createCue,
   getBook,
@@ -343,16 +344,16 @@ export default function PageEditorScreen() {
     try {
       playerRef.current?.remove();
     } catch {}
-    if (!isCustomSound(soundId)) {
+    const source = resolveSoundSource(soundId);
+    if (!source) {
       setInfoModal({
         emoji: '🔈',
-        title: 'No audio bundled yet',
-        message: `"${soundId}" is a library placeholder — no sound file is bundled for it yet. Try recording your own instead!`,
+        title: 'No sound for this',
+        message: `"${soundId}" has no audio yet. Pick another sound, or record your own.`,
       });
       return;
     }
-    const uri = soundId.slice(CUSTOM_PREFIX.length);
-    const player = createAudioPlayer(uri);
+    const player = createAudioPlayer(source);
     playerRef.current = player;
     setWordSoundPlaying(true);
     const onEnd = () => {
@@ -567,18 +568,19 @@ export default function PageEditorScreen() {
     try {
       playerRef.current?.remove();
     } catch {}
-    if (!isCustomSound(page.ambientSoundId)) {
+    const source = resolveSoundSource(page.ambientSoundId);
+    if (!source) {
       setInfoModal({
         emoji: '🔈',
-        title: 'No audio bundled yet',
-        message: `"${page.ambientSoundId}" is a library placeholder — no sound file is bundled for it yet. Try recording your own instead!`,
+        title: 'No sound for this',
+        message: `"${page.ambientSoundId}" has no audio yet. Pick another ambient, or record your own.`,
       });
       return;
     }
-    const uri = page.ambientSoundId.slice(CUSTOM_PREFIX.length);
-    const player = createAudioPlayer(uri);
+    const player = createAudioPlayer(source);
     playerRef.current = player;
     if (page.ambientEndMs != null) {
+      // Custom recording with a trim window — play that range once.
       playRange(player, {
         startSec: (page.ambientStartMs ?? 0) / 1000,
         endSec: page.ambientEndMs / 1000,
@@ -586,6 +588,8 @@ export default function PageEditorScreen() {
         fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000,
       });
     } else {
+      // Ambient beds loop until the page changes / playback is stopped.
+      player.loop = true;
       player.play();
     }
   }
