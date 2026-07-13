@@ -20,7 +20,7 @@ import type {
   RawKeywordCue,
   RawCharacterCue,
   SoundAllowlists,
-} from '../ai/gemini';
+} from './contract';
 import { SCENE_VOCAB, TRIGGER_VOCAB, type TriggerEntry } from '../ai/soundLibrary';
 import type { AnalyzeInput, CueAnalyzer } from './types';
 

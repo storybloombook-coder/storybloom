@@ -19,7 +19,7 @@ import type {
   PreparePageInput,
   PreparePageResult,
   SoundAllowlists,
-} from '../ai/gemini';
+} from './contract';
 import type { PageType } from '../types';
 
 export type VisionLang = 'en' | 'ru';

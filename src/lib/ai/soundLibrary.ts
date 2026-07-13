@@ -1,7 +1,7 @@
 // soundLibrary.ts — allow-list ids injected into the Gemini prompt.
 // Keep in sync with sound-library-manifest.md (see CLAUDE.md).
 
-import type { SoundAllowlists } from './gemini';
+import type { SoundAllowlists } from '../vision/contract';
 
 // Ambient beds (looping background scenes). ~18 so most story settings have a fit.
 export const AMBIENT_IDS = [

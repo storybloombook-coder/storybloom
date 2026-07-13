@@ -331,7 +331,7 @@ export default function AddBookScreen() {
       if (failureCount > 0) {
         setResultModal({
           title: 'Book prepped with some errors',
-          message: `${pages.length - failureCount} of ${pages.length} page(s) processed successfully. Check your Gemini API key and connection for the rest.`,
+          message: `${pages.length - failureCount} of ${pages.length} page(s) processed successfully. The rest couldn't be read — retry, or fix them in the book editor.`,
           success: false,
         });
         // Stays up until the parent taps through — this one's worth reading.
