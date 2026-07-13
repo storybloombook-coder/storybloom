@@ -10,14 +10,19 @@
 // dev build is installed, isAvailable() flips true and the on-device path is
 // used automatically. See docs/tesseract-dev-build.md.
 //
-// Language: we always init the COMBINED "eng+rus" model, so a photo book's
-// language need not be known before OCR — the analyzer picks EN vs RU vocab from
-// the recognized text (see composeOnDevice in index.ts).
+// Language: we load a SINGLE Tesseract model — the caller's `lang` (from the
+// book's language, chosen by the parent at upload time — see add-book.tsx and
+// Book.language in types.ts). A combined "eng+rus" model was tried first, but
+// Cyrillic and Latin share many near-identical glyphs (а/a, е/e, о/o, р/p,
+// с/c, у/y, х/x), so the combined model was introducing extra confusion on
+// top of the stylized/italic fonts already common in children's books.
+// Loading just the one language the book actually is eliminates that source
+// of ambiguity, and only needs to download one ~15MB file instead of two.
 //
 // Traineddata (~5-15 MB per language) is NOT committed (see CHANGES-TODO.md
 // guardrails). It's downloaded once on first use into app storage, then cached
 // offline forever. Override the source with EXPO_PUBLIC_TESSDATA_URL, or
-// side-load the files into <documents>/tesseract/tessdata/ for a fully offline
+// side-load the file into <documents>/tesseract/tessdata/ for a fully offline
 // first run.
 
 import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
@@ -25,26 +30,30 @@ import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import * as Tesseract from '../../../modules/expo-tesseract-ocr';
 import type { OcrProvider, OcrRecognizeInput, OcrResult, VisionLang } from './types';
 
-const TESS_LANGS = 'eng+rus';
-const LANG_FILES = ['eng.traineddata', 'rus.traineddata'];
-const DEFAULT_BASE_URL = 'https://github.com/tesseract-ocr/tessdata_fast/raw/main';
+/** VisionLang -> Tesseract language code -> traineddata filename. */
+const TESS_LANG_CODE: Record<VisionLang, string> = { en: 'eng', ru: 'rus' };
+// _best (not _fast): OCR only runs once per page during prep, never during
+// reading, so the slower/larger/more-accurate LSTM models are worth it —
+// especially for the stylized/italic fonts common in children's books.
+const DEFAULT_BASE_URL = 'https://github.com/tesseract-ocr/tessdata_best/raw/main';
 
 /** Root passed to Tesseract's init() — it must be the PARENT of `tessdata/`. */
 function ocrRoot(): Directory {
   return new Directory(Paths.document, 'tesseract');
 }
 
-/** Ensure `<documents>/tesseract/tessdata/<lang>.traineddata` exist, downloading
- *  any that are missing. Returns the parent dir Tesseract wants. */
-async function ensureTessdata(): Promise<string> {
+/** Ensure `<documents>/tesseract/tessdata/<lang>.traineddata` exists for this
+ *  ONE language, downloading it if missing. Returns the parent dir Tesseract
+ *  wants. */
+async function ensureTessdata(lang: VisionLang): Promise<string> {
   const root = ocrRoot();
   const tessdata = new Directory(root, 'tessdata');
   if (!tessdata.exists) tessdata.create({ intermediates: true, idempotent: true });
 
+  const name = `${TESS_LANG_CODE[lang]}.traineddata`;
   const baseUrl = (process.env.EXPO_PUBLIC_TESSDATA_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
-  for (const name of LANG_FILES) {
-    const dest = new ExpoFile(tessdata, name);
-    if (dest.exists) continue;
+  const dest = new ExpoFile(tessdata, name);
+  if (!dest.exists) {
     try {
       await ExpoFile.downloadFileAsync(`${baseUrl}/${name}`, dest);
     } catch (err: any) {
@@ -66,11 +75,13 @@ export const tesseractOcr: OcrProvider = {
     return Tesseract.isSupported();
   },
 
-  // `lang` is only a hint — we load the combined eng+rus model regardless, so
-  // the caller doesn't need to know the book's language before OCR.
-  async load(_lang: VisionLang): Promise<void> {
-    const parentDir = await ensureTessdata();
-    await Tesseract.init(parentDir, TESS_LANGS);
+  // Loads exactly the ONE requested language. The caller (composeOnDevice)
+  // must know the book's language up front (see Book.language) — we no
+  // longer guess-and-combine, since that traded language ambiguity for
+  // glyph ambiguity.
+  async load(lang: VisionLang): Promise<void> {
+    const parentDir = await ensureTessdata(lang);
+    await Tesseract.init(parentDir, TESS_LANG_CODE[lang]);
   },
 
   async recognize(input: OcrRecognizeInput): Promise<OcrResult> {

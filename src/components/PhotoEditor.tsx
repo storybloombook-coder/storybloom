@@ -26,11 +26,14 @@ const MAX_PREVIEW_HEIGHT = 460;
 export default function PhotoEditor({
   visible,
   source,
+  queueLabel,
   onCancel,
   onDone,
 }: {
   visible: boolean;
   source: WorkingImage | null;
+  /** e.g. "Photo 2 of 5" — shown when editing a batch from a multi-select pick. */
+  queueLabel?: string;
   onCancel: () => void;
   onDone: (result: WorkingImage) => void;
 }) {
@@ -241,6 +244,11 @@ export default function PhotoEditor({
     <Modal visible={visible} animationType="slide" onRequestClose={onCancel}>
       <GestureHandlerRootView style={[styles.root, { backgroundColor }]}>
         <View style={styles.topBar}>
+          {queueLabel && (
+            <Text style={StyleSheet.flatten([styles.queueLabel, { color: textColor }])}>
+              {queueLabel}
+            </Text>
+          )}
           <Text style={StyleSheet.flatten([styles.hint, { color: textColor }])}>
             Drag corners to crop · twist with two fingers to straighten
           </Text>
@@ -313,16 +321,18 @@ export default function PhotoEditor({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   topBar: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 56,
     paddingBottom: 12,
-    gap: 12,
+    gap: 4,
+  },
+  queueLabel: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   hint: {
-    flex: 1,
     fontSize: 11,
     textAlign: 'center',
     opacity: 0.5,

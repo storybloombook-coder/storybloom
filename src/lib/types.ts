@@ -7,6 +7,11 @@
 export type BookSource = "photos" | "pdf";
 export type ReviewStatus = "unreviewed" | "in_progress" | "approved";
 export type PrepStatus = "pending" | "processing" | "ready" | "failed";
+/** Chosen by the parent at upload time. Drives which single-language Tesseract
+ *  model loads for OCR — a combined eng+rus model confuses lookalike Cyrillic/
+ *  Latin glyphs (а/a, е/e, о/o, р/p, с/c, у/y, х/x), so knowing the book's
+ *  language up front avoids that ambiguity entirely. */
+export type BookLanguage = "en" | "ru";
 
 export type PageType =
   | "cover"
@@ -33,6 +38,8 @@ export interface Book {
   reviewStatus: ReviewStatus;
   /** Where the pages came from. */
   source: BookSource;
+  /** Language the parent selected at upload time. */
+  language: BookLanguage;
 }
 
 export interface Page {
@@ -75,6 +82,12 @@ export interface Cue {
   /** Short free-text emotion hint ("sad", "excited"). Nullable. */
   emotion: string | null;
   reviewState: CueReviewState;
+  /** Trim/fade envelope — only meaningful for a "custom:<uri>" recorded
+   *  soundId. Null for library sounds (played in full, no fade). */
+  soundStartMs: number | null;
+  soundEndMs: number | null;
+  fadeInMs: number | null;
+  fadeOutMs: number | null;
 }
 
 /** A fully-loaded book with its pages and their cues — the unit the reader

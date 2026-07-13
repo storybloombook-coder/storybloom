@@ -3,8 +3,8 @@ import { Image } from 'expo-image';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
-  Alert,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -51,6 +51,8 @@ export default function LibraryScreen() {
 
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<BookSummary | null>(null);
+  const sheetBackground = isDark ? '#1c1c1e' : '#fff';
 
   const load = useCallback(() => listBookSummaries().then(setBooks), []);
 
@@ -67,28 +69,22 @@ export default function LibraryScreen() {
   }, [load]);
 
   function confirmDelete(book: BookSummary) {
-    Alert.alert(
-      'Delete book?',
-      `"${book.title}" and its ${book.pageCount} page${book.pageCount === 1 ? '' : 's'} will be permanently removed.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteBook(book.id);
-            // Remove the book's image files too (the DB delete only clears rows).
-            try {
-              const dir = new Directory(Paths.document, 'books', book.id);
-              if (dir.exists) dir.delete();
-            } catch {
-              // Non-fatal: rows are already gone; a stale folder is harmless.
-            }
-            setBooks((prev) => prev.filter((b) => b.id !== book.id));
-          },
-        },
-      ]
-    );
+    setPendingDelete(book);
+  }
+
+  async function performDelete() {
+    const book = pendingDelete;
+    if (!book) return;
+    setPendingDelete(null);
+    await deleteBook(book.id);
+    // Remove the book's image files too (the DB delete only clears rows).
+    try {
+      const dir = new Directory(Paths.document, 'books', book.id);
+      if (dir.exists) dir.delete();
+    } catch {
+      // Non-fatal: rows are already gone; a stale folder is harmless.
+    }
+    setBooks((prev) => prev.filter((b) => b.id !== book.id));
   }
 
   function openBook(book: BookSummary) {
@@ -177,6 +173,36 @@ export default function LibraryScreen() {
           }}
         />
       )}
+
+      <Modal
+        visible={pendingDelete !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPendingDelete(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPendingDelete(null)}>
+          <Pressable style={StyleSheet.flatten([styles.sheet, { backgroundColor: sheetBackground }])}>
+            <Text style={styles.deleteEmoji}>🗑️</Text>
+            <Text style={StyleSheet.flatten([styles.sheetTitle, { color: textColor }])}>
+              Delete "{pendingDelete?.title}"?
+            </Text>
+            <Text style={StyleSheet.flatten([styles.deleteMessage, { color: subColor }])}>
+              This book and its {pendingDelete?.pageCount} page{pendingDelete?.pageCount === 1 ? '' : 's'} will be
+              permanently removed.
+            </Text>
+            <View style={styles.sheetButtonWrap}>
+              <TactileButton style={StyleSheet.flatten([styles.button, styles.deleteButton])} onPress={performDelete}>
+                <Text style={styles.buttonLabel}>Delete</Text>
+              </TactileButton>
+            </View>
+            <View style={styles.sheetButtonWrap}>
+              <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: badgeBackground }])} onPress={() => setPendingDelete(null)}>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>Cancel</Text>
+              </TactileButton>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -207,4 +233,49 @@ const styles = StyleSheet.create({
   badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
   badge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   badgeText: { fontSize: 11, fontWeight: '600' },
+
+  backdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 32,
+    gap: 12,
+    alignItems: 'center',
+  },
+  deleteEmoji: { fontSize: 34 },
+  sheetTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  deleteMessage: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  // TactileButton only styles its own inner view, not the Pressable that
+  // actually sizes itself in the flex layout — so a plain wrapper carries the
+  // real width/flex constraint. Needed here because `sheet` centers its
+  // children (alignItems: 'center'), which otherwise shrinks buttons to text.
+  sheetButtonWrap: { alignSelf: 'stretch' },
+  button: {
+    width: '100%',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  deleteButton: {
+    backgroundColor: '#ff453a',
+  },
+  buttonLabel: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#fff',
+  },
 });

@@ -9,6 +9,7 @@ import type {
   Page,
   Cue,
   BookSource,
+  BookLanguage,
   PrepStatus,
   ReviewStatus,
   PageType,
@@ -33,7 +34,11 @@ export function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function createBook(params: { title: string; source: BookSource }): Promise<Book> {
+export async function createBook(params: {
+  title: string;
+  source: BookSource;
+  language: BookLanguage;
+}): Promise<Book> {
   const db = await getDatabase();
   const book: Book = {
     id: generateId(),
@@ -45,10 +50,11 @@ export async function createBook(params: { title: string; source: BookSource }):
     hasDialogue: false,
     reviewStatus: 'unreviewed',
     source: params.source,
+    language: params.language,
   };
   await db.runAsync(
-    `INSERT INTO books (id, title, isbn, cover_image_path, created_at, prep_status, has_dialogue, review_status, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO books (id, title, isbn, cover_image_path, created_at, prep_status, has_dialogue, review_status, source, language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       book.id,
       book.title,
@@ -59,6 +65,7 @@ export async function createBook(params: { title: string; source: BookSource }):
       book.hasDialogue ? 1 : 0,
       book.reviewStatus,
       book.source,
+      book.language,
     ]
   );
   return book;
@@ -149,6 +156,10 @@ export async function createCue(params: {
   characterName: string | null;
   intensity: CueIntensity | null;
   emotion: string | null;
+  soundStartMs?: number | null;
+  soundEndMs?: number | null;
+  fadeInMs?: number | null;
+  fadeOutMs?: number | null;
 }): Promise<Cue> {
   const db = await getDatabase();
   const cue: Cue = {
@@ -165,10 +176,14 @@ export async function createCue(params: {
     intensity: params.intensity,
     emotion: params.emotion,
     reviewState: 'proposed',
+    soundStartMs: params.soundStartMs ?? null,
+    soundEndMs: params.soundEndMs ?? null,
+    fadeInMs: params.fadeInMs ?? null,
+    fadeOutMs: params.fadeOutMs ?? null,
   };
   await db.runAsync(
-    `INSERT INTO cues (id, page_id, type, trigger_text, context_phrase, char_start, char_end, sound_id, candidate_sound_ids, character_name, intensity, emotion, review_state)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO cues (id, page_id, type, trigger_text, context_phrase, char_start, char_end, sound_id, candidate_sound_ids, character_name, intensity, emotion, review_state, sound_start_ms, sound_end_ms, fade_in_ms, fade_out_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       cue.id,
       cue.pageId,
@@ -183,6 +198,10 @@ export async function createCue(params: {
       cue.intensity,
       cue.emotion,
       cue.reviewState,
+      cue.soundStartMs,
+      cue.soundEndMs,
+      cue.fadeInMs,
+      cue.fadeOutMs,
     ]
   );
   return cue;
@@ -198,6 +217,7 @@ type BookRow = {
   has_dialogue: number;
   review_status: ReviewStatus;
   source: BookSource;
+  language: BookLanguage;
 };
 
 function rowToBook(row: BookRow): Book {
@@ -211,6 +231,7 @@ function rowToBook(row: BookRow): Book {
     hasDialogue: row.has_dialogue === 1,
     reviewStatus: row.review_status,
     source: row.source,
+    language: row.language,
   };
 }
 
@@ -264,6 +285,10 @@ type CueRow = {
   intensity: CueIntensity | null;
   emotion: string | null;
   review_state: CueReviewState;
+  sound_start_ms: number | null;
+  sound_end_ms: number | null;
+  fade_in_ms: number | null;
+  fade_out_ms: number | null;
 };
 
 function rowToCue(r: CueRow): Cue {
@@ -281,6 +306,10 @@ function rowToCue(r: CueRow): Cue {
     intensity: r.intensity,
     emotion: r.emotion,
     reviewState: r.review_state,
+    soundStartMs: r.sound_start_ms,
+    soundEndMs: r.sound_end_ms,
+    fadeInMs: r.fade_in_ms,
+    fadeOutMs: r.fade_out_ms,
   };
 }
 
@@ -381,6 +410,19 @@ export async function updatePageOcrText(pageId: string, ocrText: string): Promis
 export async function updateCueSoundId(cueId: string, soundId: string | null): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE cues SET sound_id = ? WHERE id = ?', [soundId, cueId]);
+}
+
+/** Sets a cue's sound together with its trim/fade envelope — used when saving
+ *  a parent's recording (library sounds just pass null for all four). */
+export async function updateCueSoundTrim(
+  cueId: string,
+  params: { soundId: string; startMs: number; endMs: number; fadeInMs: number; fadeOutMs: number }
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE cues SET sound_id = ?, sound_start_ms = ?, sound_end_ms = ?, fade_in_ms = ?, fade_out_ms = ? WHERE id = ?',
+    [params.soundId, params.startMs, params.endMs, params.fadeInMs, params.fadeOutMs, cueId]
+  );
 }
 
 export async function setCueReviewState(cueId: string, state: CueReviewState): Promise<void> {

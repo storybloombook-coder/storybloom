@@ -53,9 +53,9 @@ function composeOnDevice(
   analyzer: CueAnalyzer,
   retry?: RetryOptions
 ): VisionProvider {
-  // Load the OCR model once, not per page — reloading a 30-50 MB model each
-  // page is wasteful. The engine loads EN+RU together (see tesseractOcr), so a
-  // single load covers both languages for the whole book.
+  // Load the OCR model once, not per page — reloading a 15-45 MB model each
+  // page is wasteful. Every page of a book shares the same language (see
+  // Book.language), so a single load covers the whole book.
   let loaded = false;
 
   return {

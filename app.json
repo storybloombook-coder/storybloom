@@ -42,7 +42,13 @@
         }
       ],
       "expo-sqlite",
-      "expo-audio"
+      "expo-audio",
+      [
+        "react-native-vosk",
+        {
+          "models": ["assets/vosk-model-small-en-us", "assets/vosk-model-small-ru"]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

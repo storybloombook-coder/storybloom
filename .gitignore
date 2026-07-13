@@ -43,3 +43,8 @@ example
 # generated native folders
 /ios
 /android
+
+# Vosk models (~50-90MB each) — downloaded locally for the dev build, not
+# committed. See app.json's react-native-vosk plugin config for the paths.
+/assets/vosk-model-small-en-us
+/assets/vosk-model-small-ru

@@ -1,0 +1,53 @@
+# Mirrors .gitignore for EAS Build uploads, EXCEPT the Vosk model folders
+# below — those are needed by the native build (react-native-vosk plugin
+# copies them into the Android project) but are intentionally not committed
+# to git (large binaries). See CHANGES-TODO.md guardrails.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env
+.env*.local
+!.env.example
+
+# typescript
+*.tsbuildinfo
+
+example
+
+# generated native folders
+/ios
+/android
+
+# Include the Vosk model folders even though .gitignore excludes them —
+# EAS needs these on disk to bundle them via the plugin. Must come last.
+!/assets/vosk-model-small-en-us
+!/assets/vosk-model-small-ru

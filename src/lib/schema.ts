@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS books (
   prep_status    TEXT NOT NULL DEFAULT 'pending',
   has_dialogue   INTEGER NOT NULL DEFAULT 0,
   review_status  TEXT NOT NULL DEFAULT 'unreviewed',
-  source         TEXT NOT NULL DEFAULT 'photos'
+  source         TEXT NOT NULL DEFAULT 'photos',
+  language       TEXT NOT NULL DEFAULT 'en'
 );
 
 CREATE TABLE IF NOT EXISTS pages (
@@ -61,6 +62,12 @@ CREATE TABLE IF NOT EXISTS cues (
   intensity           TEXT,
   emotion             TEXT,
   review_state        TEXT NOT NULL DEFAULT 'proposed',
+  -- Trim/fade envelope, only meaningful for a "custom:<uri>" recorded sound_id.
+  -- Null for library sounds (played in full, no fade).
+  sound_start_ms      INTEGER,
+  sound_end_ms        INTEGER,
+  fade_in_ms          INTEGER,
+  fade_out_ms         INTEGER,
   FOREIGN KEY (page_id) REFERENCES pages (id) ON DELETE CASCADE
 );
 
@@ -80,10 +87,30 @@ CREATE TABLE IF NOT EXISTS meta (
  */
 export async function initDatabase(db: any): Promise<void> {
   await db.execAsync(CREATE_TABLES_SQL);
+  await migrateSchema(db);
   await db.runAsync(
     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
     [String(SCHEMA_VERSION)]
   );
+}
+
+/** `CREATE TABLE IF NOT EXISTS` only helps fresh installs — a table that
+ *  already existed before a column was added needs an explicit ALTER TABLE.
+ *  No formal migration framework yet, so just check PRAGMA table_info and
+ *  patch anything missing. Safe to run on every startup. */
+async function migrateSchema(db: any): Promise<void> {
+  const bookCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(books)');
+  if (!bookCols.some((c) => c.name === 'language')) {
+    await db.execAsync("ALTER TABLE books ADD COLUMN language TEXT NOT NULL DEFAULT 'en'");
+  }
+
+  const cueCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(cues)');
+  const cueColNames = new Set(cueCols.map((c) => c.name));
+  for (const col of ['sound_start_ms', 'sound_end_ms', 'fade_in_ms', 'fade_out_ms']) {
+    if (!cueColNames.has(col)) {
+      await db.execAsync(`ALTER TABLE cues ADD COLUMN ${col} INTEGER`);
+    }
+  }
 }
 
 // Helpers to (de)serialize the JSON-array columns. Use these at the
@@ -105,7 +132,7 @@ export function parseStringArray(raw: string | null | undefined): string[] {
 // Convenience column lists (handy when writing row<->object mappers).
 export const BOOK_COLUMNS = [
   "id", "title", "isbn", "cover_image_path", "created_at",
-  "prep_status", "has_dialogue", "review_status", "source",
+  "prep_status", "has_dialogue", "review_status", "source", "language",
 ] as const;
 
 export const PAGE_COLUMNS = [
@@ -118,4 +145,5 @@ export const CUE_COLUMNS = [
   "id", "page_id", "type", "trigger_text", "context_phrase",
   "char_start", "char_end", "sound_id", "candidate_sound_ids",
   "character_name", "intensity", "emotion", "review_state",
+  "sound_start_ms", "sound_end_ms", "fade_in_ms", "fade_out_ms",
 ] as const;
