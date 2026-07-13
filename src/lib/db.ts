@@ -51,10 +51,11 @@ export async function createBook(params: {
     reviewStatus: 'unreviewed',
     source: params.source,
     language: params.language,
+    isFavorite: false,
   };
   await db.runAsync(
-    `INSERT INTO books (id, title, isbn, cover_image_path, created_at, prep_status, has_dialogue, review_status, source, language)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO books (id, title, isbn, cover_image_path, created_at, prep_status, has_dialogue, review_status, source, language, is_favorite)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       book.id,
       book.title,
@@ -66,9 +67,16 @@ export async function createBook(params: {
       book.reviewStatus,
       book.source,
       book.language,
+      book.isFavorite ? 1 : 0,
     ]
   );
   return book;
+}
+
+/** Star / unstar a book (library Favorites filter). */
+export async function setBookFavorite(bookId: string, isFavorite: boolean): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE books SET is_favorite = ? WHERE id = ?', [isFavorite ? 1 : 0, bookId]);
 }
 
 export async function setBookPrepStatus(
@@ -222,6 +230,7 @@ type BookRow = {
   review_status: ReviewStatus;
   source: BookSource;
   language: BookLanguage;
+  is_favorite: number;
 };
 
 function rowToBook(row: BookRow): Book {
@@ -236,6 +245,7 @@ function rowToBook(row: BookRow): Book {
     reviewStatus: row.review_status,
     source: row.source,
     language: row.language,
+    isFavorite: row.is_favorite === 1,
   };
 }
 

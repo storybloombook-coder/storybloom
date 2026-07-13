@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS books (
   has_dialogue   INTEGER NOT NULL DEFAULT 0,
   review_status  TEXT NOT NULL DEFAULT 'unreviewed',
   source         TEXT NOT NULL DEFAULT 'photos',
-  language       TEXT NOT NULL DEFAULT 'en'
+  language       TEXT NOT NULL DEFAULT 'en',
+  is_favorite    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pages (
@@ -109,6 +110,9 @@ async function migrateSchema(db: any): Promise<void> {
   if (!bookCols.some((c) => c.name === 'language')) {
     await db.execAsync("ALTER TABLE books ADD COLUMN language TEXT NOT NULL DEFAULT 'en'");
   }
+  if (!bookCols.some((c) => c.name === 'is_favorite')) {
+    await db.execAsync('ALTER TABLE books ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0');
+  }
 
   const cueCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(cues)');
   const cueColNames = new Set(cueCols.map((c) => c.name));
@@ -146,7 +150,7 @@ export function parseStringArray(raw: string | null | undefined): string[] {
 // Convenience column lists (handy when writing row<->object mappers).
 export const BOOK_COLUMNS = [
   "id", "title", "isbn", "cover_image_path", "created_at",
-  "prep_status", "has_dialogue", "review_status", "source", "language",
+  "prep_status", "has_dialogue", "review_status", "source", "language", "is_favorite",
 ] as const;
 
 export const PAGE_COLUMNS = [

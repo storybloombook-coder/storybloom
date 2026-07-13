@@ -40,6 +40,8 @@ export interface Book {
   source: BookSource;
   /** Language the parent selected at upload time. */
   language: BookLanguage;
+  /** Parent starred this book — surfaced in the library's Favorites filter. */
+  isFavorite: boolean;
 }
 
 export interface Page {

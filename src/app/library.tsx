@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../components/TactileButton';
-import { deleteBook, listBookSummaries, type BookSummary } from '../lib/db';
+import { deleteBook, listBookSummaries, setBookFavorite, type BookSummary } from '../lib/db';
 import type { Book } from '../lib/types';
 
 const STATUS: Record<Book['prepStatus'], { label: string; color: string }> = {
@@ -52,7 +52,11 @@ export default function LibraryScreen() {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<BookSummary | null>(null);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const sheetBackground = isDark ? '#1c1c1e' : '#fff';
+
+  const favoriteCount = books.filter((b) => b.isFavorite).length;
+  const visibleBooks = favoritesOnly ? books.filter((b) => b.isFavorite) : books;
 
   const load = useCallback(() => listBookSummaries().then(setBooks), []);
 
@@ -91,6 +95,17 @@ export default function LibraryScreen() {
     router.push({ pathname: '/book/[id]', params: { id: book.id } });
   }
 
+  async function toggleFavorite(book: BookSummary) {
+    const next = !book.isFavorite;
+    setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, isFavorite: next } : b)));
+    try {
+      await setBookFavorite(book.id, next);
+    } catch {
+      // Revert the optimistic update if the write fails.
+      setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, isFavorite: !next } : b)));
+    }
+  }
+
   const Badge = ({ label }: { label: string }) => (
     <View style={StyleSheet.flatten([styles.badge, { backgroundColor: badgeBackground }])}>
       <Text style={StyleSheet.flatten([styles.badgeText, { color: subColor }])}>{label}</Text>
@@ -99,7 +114,23 @@ export default function LibraryScreen() {
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
-      <Stack.Screen options={{ headerShown: true, title: 'My Library' }} />
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: favoritesOnly ? 'Favorites' : 'My Library',
+          headerRight: () => (
+            <Pressable
+              onPress={() => setFavoritesOnly((v) => !v)}
+              hitSlop={12}
+              style={{ paddingHorizontal: 6 }}
+            >
+              <Text style={{ fontSize: 22, color: favoritesOnly ? '#f5b301' : subColor }}>
+                {favoritesOnly ? '★' : '☆'}
+              </Text>
+            </Pressable>
+          ),
+        }}
+      />
 
       {books.length === 0 ? (
         <View style={styles.empty}>
@@ -117,9 +148,23 @@ export default function LibraryScreen() {
             <Text style={styles.ctaLabel}>Add your first book</Text>
           </TactileButton>
         </View>
+      ) : favoritesOnly && visibleBooks.length === 0 ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyStar}>☆</Text>
+          <Text style={[styles.emptyTitle, { color: textColor }]}>No favorites yet</Text>
+          <Text style={[styles.emptyText, { color: subColor }]}>
+            Tap the ☆ on any book to add it here.
+          </Text>
+          <TactileButton
+            style={StyleSheet.flatten([styles.cta, { backgroundColor: badgeBackground }])}
+            onPress={() => setFavoritesOnly(false)}
+          >
+            <Text style={[styles.ctaLabel, { color: textColor }]}>Show all books</Text>
+          </TactileButton>
+        </View>
       ) : (
         <FlatList
-          data={books}
+          data={visibleBooks}
           keyExtractor={(b) => b.id}
           contentContainerStyle={styles.list}
           refreshControl={
@@ -127,7 +172,9 @@ export default function LibraryScreen() {
           }
           ListHeaderComponent={
             <Text style={[styles.count, { color: subColor }]}>
-              {books.length} book{books.length === 1 ? '' : 's'}
+              {favoritesOnly
+                ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
+                : `${books.length} book${books.length === 1 ? '' : 's'}${favoriteCount > 0 ? ` · ${favoriteCount} ★` : ''}`}
             </Text>
           }
           renderItem={({ item }) => {
@@ -173,6 +220,16 @@ export default function LibraryScreen() {
                     <Badge label={REVIEW_LABEL[item.reviewStatus]} />
                   </View>
                 </View>
+
+                <Pressable
+                  onPress={() => toggleFavorite(item)}
+                  hitSlop={10}
+                  style={styles.starButton}
+                >
+                  <Text style={[styles.starIcon, { color: item.isFavorite ? '#f5b301' : subColor }]}>
+                    {item.isFavorite ? '★' : '☆'}
+                  </Text>
+                </Pressable>
               </Pressable>
             );
           }}
@@ -227,8 +284,11 @@ const styles = StyleSheet.create({
   card: { flexDirection: 'row', borderRadius: 14, padding: 12, marginBottom: 12, gap: 12 },
   cover: { width: 60, height: 80, borderRadius: 8 },
   coverEmpty: { alignItems: 'center', justifyContent: 'center' },
-  cardBody: { flex: 1, gap: 4, justifyContent: 'center' },
+  cardBody: { flex: 1, gap: 4, justifyContent: 'center', marginRight: 20 },
   title: { fontSize: 17, fontWeight: '600' },
+  starButton: { position: 'absolute', top: 8, right: 8, padding: 6 },
+  starIcon: { fontSize: 24 },
+  emptyStar: { fontSize: 46, color: '#f5b301', opacity: 0.6 },
 
   statusRow: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
