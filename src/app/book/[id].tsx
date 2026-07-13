@@ -12,6 +12,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   useColorScheme,
 } from 'react-native';
@@ -36,6 +37,7 @@ import {
   getPagesForBook,
   reorderPages,
   setBookPrepStatus,
+  updateBookTitle,
   updatePagePrepResult,
 } from '../../lib/db';
 import type { Book, Cue, Page } from '../../lib/types';
@@ -105,6 +107,17 @@ export default function BookDetailScreen() {
   const [pages, setPages] = useState<Page[]>([]);
   const [cuesByPage, setCuesByPage] = useState<Map<string, Cue[]>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+
+  async function saveTitle() {
+    if (!book) return;
+    const next = titleDraft.trim();
+    setRenaming(false);
+    if (!next || next === book.title) return;
+    setBook({ ...book, title: next });
+    await updateBookTitle(book.id, next);
+  }
 
   const draggingIndex = useSharedValue(-1);
   const targetIndex = useSharedValue(-1);
@@ -396,6 +409,19 @@ export default function BookDetailScreen() {
 
       <ScrollView contentContainerStyle={styles.list}>
         <View style={styles.header}>
+          <Pressable
+            onPress={() => {
+              setTitleDraft(book.title);
+              setRenaming(true);
+            }}
+            hitSlop={8}
+            style={styles.titleRow}
+          >
+            <Text style={[styles.bookTitle, { color: textColor }]} numberOfLines={2}>
+              {book.title}
+            </Text>
+            <Text style={[styles.titleEdit, { color: subColor }]}>✏️</Text>
+          </Pressable>
           <View style={styles.statusRow}>
             <View style={[styles.dot, { backgroundColor: status.color }]} />
             <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
@@ -505,6 +531,33 @@ export default function BookDetailScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={renaming} transparent animationType="fade" onRequestClose={() => setRenaming(false)}>
+        <Pressable style={styles.processingOverlay} onPress={() => setRenaming(false)}>
+          <Pressable style={[styles.renameCard, { backgroundColor: cardBackground }]}>
+            <Text style={[styles.renameTitle, { color: textColor }]}>Rename book</Text>
+            <TextInput
+              value={titleDraft}
+              onChangeText={setTitleDraft}
+              autoFocus
+              selectTextOnFocus
+              placeholder="Book title"
+              placeholderTextColor={subColor}
+              style={[styles.renameInput, { color: textColor, backgroundColor: chipBackground }]}
+              onSubmitEditing={saveTitle}
+              returnKeyType="done"
+            />
+            <View style={styles.renameActions}>
+              <TactileButton style={[styles.renameBtn, { backgroundColor: chipBackground }]} onPress={() => setRenaming(false)}>
+                <Text style={[styles.renameBtnLabel, { color: subColor }]}>Cancel</Text>
+              </TactileButton>
+              <TactileButton style={[styles.renameBtn, { backgroundColor: '#208AEF' }]} onPress={saveTitle}>
+                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Save</Text>
+              </TactileButton>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -515,6 +568,9 @@ const styles = StyleSheet.create({
 
   list: { padding: 16, gap: PAGE_LIST_GAP },
   header: { marginBottom: 8, gap: 6 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bookTitle: { flex: 1, fontSize: 24, fontWeight: '800' },
+  titleEdit: { fontSize: 15, opacity: 0.7 },
   statusRow: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
   statusText: { fontSize: 14, fontWeight: '700' },
@@ -580,4 +636,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   trashBinIcon: { fontSize: 30 },
+
+  renameCard: { width: '86%', borderRadius: 16, padding: 20, gap: 14 },
+  renameTitle: { fontSize: 17, fontWeight: '700' },
+  renameInput: { borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, fontSize: 17 },
+  renameActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+  renameBtn: { borderRadius: 10, paddingVertical: 11, paddingHorizontal: 20, alignItems: 'center' },
+  renameBtnLabel: { fontSize: 15, fontWeight: '600' },
 });

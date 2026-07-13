@@ -79,6 +79,12 @@ export async function setBookFavorite(bookId: string, isFavorite: boolean): Prom
   await db.runAsync('UPDATE books SET is_favorite = ? WHERE id = ?', [isFavorite ? 1 : 0, bookId]);
 }
 
+/** Rename a book. */
+export async function updateBookTitle(bookId: string, title: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE books SET title = ? WHERE id = ?', [title, bookId]);
+}
+
 export async function setBookPrepStatus(
   bookId: string,
   prepStatus: PrepStatus,
