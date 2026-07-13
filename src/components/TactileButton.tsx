@@ -1,6 +1,13 @@
 import * as Haptics from 'expo-haptics';
 import { forwardRef, type ReactNode } from 'react';
-import { Pressable, type PressableProps, type StyleProp, type View, type ViewStyle } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  type PressableProps,
+  type StyleProp,
+  type View,
+  type ViewStyle,
+} from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 export interface TactileButtonProps extends Omit<PressableProps, 'style'> {
@@ -22,7 +29,11 @@ const TactileButton = forwardRef<View, TactileButtonProps>(function TactileButto
   ref
 ) {
   const scale = useSharedValue(1);
+  // Capped darken-toward-gray overlay while held — 0 (invisible) to 1, which
+  // maps to darkenOverlay's own fixed low alpha, not full black.
+  const pressDarken = useSharedValue(0);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const darkenStyle = useAnimatedStyle(() => ({ opacity: pressDarken.value }));
 
   return (
     <Pressable
@@ -30,9 +41,11 @@ const TactileButton = forwardRef<View, TactileButtonProps>(function TactileButto
       disabled={disabled}
       onPressIn={() => {
         scale.value = withTiming(pressScale, { duration: 80 });
+        pressDarken.value = withTiming(1, { duration: 80 });
       }}
       onPressOut={() => {
         scale.value = withTiming(1, { duration: 120 });
+        pressDarken.value = withTiming(0, { duration: 120 });
       }}
       onPress={(e) => {
         Haptics.impactAsync(hapticStyle);
@@ -40,11 +53,21 @@ const TactileButton = forwardRef<View, TactileButtonProps>(function TactileButto
       }}
       {...rest}
     >
-      <Animated.View style={[style, animatedStyle, disabled ? { opacity: 0.4 } : null]}>
+      <Animated.View
+        style={[style, animatedStyle, styles.clip, disabled ? { opacity: 0.4 } : null]}
+      >
         {children}
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.darkenOverlay, darkenStyle]} />
       </Animated.View>
     </Pressable>
   );
+});
+
+const styles = StyleSheet.create({
+  // overflow:'hidden' clips the overlay to whatever borderRadius `style`
+  // gave the button, whatever its value — no need to know it here.
+  clip: { overflow: 'hidden' },
+  darkenOverlay: { backgroundColor: 'rgba(0,0,0,0.18)' },
 });
 
 export default TactileButton;

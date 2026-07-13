@@ -21,6 +21,11 @@ export default function HomeScreen() {
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>Add a Book</Text>
             </TactileButton>
           </Link>
+          <Link href="/create-story" asChild>
+            <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
+              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>📖✨ Create a Story</Text>
+            </TactileButton>
+          </Link>
           <Link href="/library" asChild>
             <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>My Library</Text>

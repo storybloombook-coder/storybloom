@@ -108,7 +108,10 @@ export default function LibraryScreen() {
             Photograph a book’s pages and Storybloom will bring it to life.
           </Text>
           <TactileButton
-            style={StyleSheet.flatten([styles.cta, { backgroundColor: '#208AEF' }])}
+            style={StyleSheet.flatten([
+              styles.cta,
+              { backgroundColor: 'rgba(32,138,239,0.15)', borderWidth: 2, borderColor: '#208AEF' },
+            ])}
             onPress={() => router.push('/add-book')}
           >
             <Text style={styles.ctaLabel}>Add your first book</Text>
@@ -163,7 +166,9 @@ export default function LibraryScreen() {
                   <Text style={[styles.meta, { color: subColor }]}>{formatDate(item.createdAt)}</Text>
 
                   <View style={styles.badges}>
-                    <Badge label={item.source === 'pdf' ? 'PDF' : 'Photos'} />
+                    <Badge
+                      label={item.source === 'pdf' ? 'PDF' : item.source === 'dictation' ? '🎙️ Dictated' : 'Photos'}
+                    />
                     {item.hasDialogue && <Badge label="Dialogue" />}
                     <Badge label={REVIEW_LABEL[item.reviewStatus]} />
                   </View>
@@ -192,7 +197,7 @@ export default function LibraryScreen() {
             </Text>
             <View style={styles.sheetButtonWrap}>
               <TactileButton style={StyleSheet.flatten([styles.button, styles.deleteButton])} onPress={performDelete}>
-                <Text style={styles.buttonLabel}>Delete</Text>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#ff453a' }])}>Delete</Text>
               </TactileButton>
             </View>
             <View style={styles.sheetButtonWrap}>
@@ -214,7 +219,7 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 20, fontWeight: '700' },
   emptyText: { fontSize: 15, textAlign: 'center', lineHeight: 21, marginBottom: 8 },
   cta: { borderRadius: 12, paddingVertical: 15, paddingHorizontal: 22, alignItems: 'center' },
-  ctaLabel: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  ctaLabel: { color: '#208AEF', fontSize: 16, fontWeight: '600' },
 
   list: { padding: 16, gap: 12 },
   count: { fontSize: 13, fontWeight: '600', marginBottom: 4, marginLeft: 2 },
@@ -271,7 +276,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   deleteButton: {
-    backgroundColor: '#ff453a',
+    backgroundColor: 'rgba(255,69,58,0.15)',
+    borderWidth: 2,
+    borderColor: '#ff453a',
   },
   buttonLabel: {
     fontSize: 17,

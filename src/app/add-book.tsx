@@ -62,6 +62,7 @@ interface DebugPageInfo {
 export default function AddBookScreen() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
+  const subColor = isDark ? '#9a9a9e' : '#6b6b70';
   const backgroundColor = isDark ? '#000' : '#fff';
   const buttonBackground = isDark ? '#1c1c1e' : '#f2f2f2';
   const sheetBackground = isDark ? '#1c1c1e' : '#fff';
@@ -69,8 +70,10 @@ export default function AddBookScreen() {
   // toggle button needs its own border to stay visible against the sheet.
   const langBorderColor = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)';
 
-  const [photoSourceVisible, setPhotoSourceVisible] = useState(false);
   const [pages, setPages] = useState<Page[]>([]);
+  // Which initial square the parent tapped — lets "Next Photo" continue the
+  // SAME modality (library vs camera) instead of always defaulting to camera.
+  const [captureMode, setCaptureMode] = useState<'library' | 'camera' | null>(null);
   // Photo currently open in the editor; editIndex is set when re-editing an
   // existing page (vs. a brand-new photo, editIndex null).
   const [editingSource, setEditingSource] = useState<Page | null>(null);
@@ -148,7 +151,6 @@ export default function AddBookScreen() {
   }
 
   async function takePhoto() {
-    setPhotoSourceVisible(false);
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Camera access is required to photograph pages.');
@@ -168,7 +170,6 @@ export default function AddBookScreen() {
   }
 
   async function pickFromLibrary() {
-    setPhotoSourceVisible(false);
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Photo library access is required to add pages.');
@@ -372,21 +373,50 @@ export default function AddBookScreen() {
       ) : (
         <View style={styles.emptyState}>
           <Text style={StyleSheet.flatten([styles.emptyStateText, { color: textColor }])}>
-            No pages yet — add photos or a PDF below.
+            No pages yet — add photos below to get started.
           </Text>
         </View>
       )}
 
       <View style={styles.footer}>
-        <TactileButton
-          style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
-          onPress={() => setPhotoSourceVisible(true)}
-        >
-          <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-            Add Pictures / Photos
-          </Text>
-        </TactileButton>
-        {pages.length === 0 ? (
+        {pages.length === 0 && (
+          <>
+          <View style={styles.squareButtonRow}>
+            <View style={styles.squareButtonWrap}>
+              <TactileButton
+                style={StyleSheet.flatten([styles.squareButton, { backgroundColor: buttonBackground }])}
+                onPress={() => {
+                  setCaptureMode('library');
+                  pickFromLibrary();
+                }}
+              >
+                <Text style={styles.squareButtonEmoji}>🖼️</Text>
+                <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
+                  Add Pictures
+                </Text>
+                <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
+                  from your library or files
+                </Text>
+              </TactileButton>
+            </View>
+            <View style={styles.squareButtonWrap}>
+              <TactileButton
+                style={StyleSheet.flatten([styles.squareButton, { backgroundColor: buttonBackground }])}
+                onPress={() => {
+                  setCaptureMode('camera');
+                  takePhoto();
+                }}
+              >
+                <Text style={styles.squareButtonEmoji}>📷</Text>
+                <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
+                  Make Photos
+                </Text>
+                <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
+                  using your camera
+                </Text>
+              </TactileButton>
+            </View>
+          </View>
           <TactileButton
             style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
             onPress={pickFile}
@@ -395,63 +425,51 @@ export default function AddBookScreen() {
               Add a File (PDF)
             </Text>
           </TactileButton>
-        ) : (
-          <TactileButton
-            style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
-            onPress={takePhoto}
-          >
-            <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-              Next Photo
-            </Text>
-          </TactileButton>
+          </>
         )}
         {pages.length > 0 && (
-          <TactileButton
-            style={StyleSheet.flatten([styles.button, styles.doneButton])}
-            onPress={finishCapture}
-          >
-            <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#fff' }])}>
-              Done — {pages.length} page{pages.length === 1 ? '' : 's'}
-            </Text>
-          </TactileButton>
-        )}
-      </View>
-
-      <Modal
-        visible={photoSourceVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPhotoSourceVisible(false)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setPhotoSourceVisible(false)}>
-          <Pressable style={StyleSheet.flatten([styles.sheet, { backgroundColor: sheetBackground }])}>
-            <Text style={StyleSheet.flatten([styles.sheetTitle, { color: textColor }])}>
-              Add Pictures / Photos
-            </Text>
+          <>
+            <View style={styles.squareButtonRow}>
+              <View style={styles.squareButtonWrap}>
+                <TactileButton
+                  style={StyleSheet.flatten([styles.squareButton, { backgroundColor: buttonBackground }])}
+                  onPress={finishCapture}
+                >
+                  <Text style={styles.squareButtonEmoji}>✅</Text>
+                  <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
+                    Done
+                  </Text>
+                  <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
+                    {pages.length} page{pages.length === 1 ? '' : 's'}
+                  </Text>
+                </TactileButton>
+              </View>
+              <View style={styles.squareButtonWrap}>
+                <TactileButton
+                  style={StyleSheet.flatten([styles.squareButton, { backgroundColor: buttonBackground }])}
+                  onPress={captureMode === 'library' ? pickFromLibrary : takePhoto}
+                >
+                  <Text style={styles.squareButtonEmoji}>{captureMode === 'library' ? '🖼️' : '📷'}</Text>
+                  <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
+                    {captureMode === 'library' ? 'Next Picture' : 'Next Photo'}
+                  </Text>
+                  <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
+                    {captureMode === 'library' ? 'from your library or files' : 'using your camera'}
+                  </Text>
+                </TactileButton>
+              </View>
+            </View>
             <TactileButton
               style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
-              onPress={takePhoto}
+              onPress={() => router.back()}
             >
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-                Take Photo
-              </Text>
-            </TactileButton>
-            <TactileButton
-              style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
-              onPress={pickFromLibrary}
-            >
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-                Choose from Library
-              </Text>
-            </TactileButton>
-            <TactileButton style={styles.cancelButton} onPress={() => setPhotoSourceVisible(false)}>
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#ff453a' }])}>
                 Cancel
               </Text>
             </TactileButton>
-          </Pressable>
-        </Pressable>
-      </Modal>
+          </>
+        )}
+      </View>
 
       <PhotoEditor
         visible={editingSource !== null}
@@ -496,12 +514,12 @@ export default function AddBookScreen() {
                     style={StyleSheet.flatten([
                       styles.langBtn,
                       bookLanguage === 'en'
-                        ? { backgroundColor: '#208AEF', borderColor: '#208AEF' }
+                        ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
                         : { backgroundColor: buttonBackground, borderColor: langBorderColor },
                     ])}
                     onPress={() => setBookLanguage('en')}
                   >
-                    <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'en' ? '#fff' : textColor }])}>
+                    <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'en' ? '#208AEF' : textColor }])}>
                       English
                     </Text>
                   </TactileButton>
@@ -511,12 +529,12 @@ export default function AddBookScreen() {
                     style={StyleSheet.flatten([
                       styles.langBtn,
                       bookLanguage === 'ru'
-                        ? { backgroundColor: '#208AEF', borderColor: '#208AEF' }
+                        ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
                         : { backgroundColor: buttonBackground, borderColor: langBorderColor },
                     ])}
                     onPress={() => setBookLanguage('ru')}
                   >
-                    <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'ru' ? '#fff' : textColor }])}>
+                    <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'ru' ? '#208AEF' : textColor }])}>
                       Русский
                     </Text>
                   </TactileButton>
@@ -526,7 +544,7 @@ export default function AddBookScreen() {
                 style={StyleSheet.flatten([styles.button, styles.doneButton])}
                 onPress={startProcessing}
               >
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#fff' }])}>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#208AEF' }])}>
                   Start Processing ({pages.length} page{pages.length === 1 ? '' : 's'})
                 </Text>
               </TactileButton>
@@ -569,7 +587,7 @@ export default function AddBookScreen() {
                   router.replace('/library');
                 }}
               >
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#fff' }])}>OK</Text>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#208AEF' }])}>OK</Text>
               </TactileButton>
             )}
           </View>
@@ -610,11 +628,43 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   doneButton: {
-    backgroundColor: '#208AEF',
+    backgroundColor: 'rgba(32,138,239,0.15)',
+    borderWidth: 2,
+    borderColor: '#208AEF',
   },
   buttonLabel: {
     fontSize: 17,
     fontWeight: '600',
+  },
+  squareButtonRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  squareButtonWrap: {
+    flex: 1,
+  },
+  squareButton: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    gap: 6,
+  },
+  squareButtonEmoji: {
+    fontSize: 34,
+  },
+  squareButtonLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  squareButtonCaption: {
+    fontSize: 12,
+    fontWeight: '400',
+    textAlign: 'center',
+    textTransform: 'lowercase',
   },
   keyboardAvoider: {
     flex: 1,

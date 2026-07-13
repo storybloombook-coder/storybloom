@@ -4,7 +4,7 @@
 // (schema.ts) and the AI module (ai/gemini.ts) both build on these.
 // Standalone: no device, no API key, pure types.
 
-export type BookSource = "photos" | "pdf";
+export type BookSource = "photos" | "pdf" | "dictation";
 export type ReviewStatus = "unreviewed" | "in_progress" | "approved";
 export type PrepStatus = "pending" | "processing" | "ready" | "failed";
 /** Chosen by the parent at upload time. Drives which single-language Tesseract
@@ -46,6 +46,8 @@ export interface Page {
   id: string;
   bookId: string;
   pageNumber: number;
+  /** Empty string for a dictated (photo-less) page — there's no source image
+   *  to show, re-scan, or zoom. */
   imagePath: string;
   pageType: PageType;
   /** Clean text pulled from a PDF page, passed to Gemini as a wording hint.
@@ -58,6 +60,12 @@ export interface Page {
   ambientSoundId: string | null;
   /** Ordered list of library ids, best-first, powering "Try another". */
   ambientCandidates: string[];
+  /** Trim/fade envelope — only meaningful for a "custom:<uri>" recorded
+   *  ambientSoundId. Null for library sounds (played in full, no fade). */
+  ambientStartMs: number | null;
+  ambientEndMs: number | null;
+  ambientFadeInMs: number | null;
+  ambientFadeOutMs: number | null;
 }
 
 export interface Cue {

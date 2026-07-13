@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS pages (
   background_scene   TEXT,
   ambient_sound_id   TEXT,
   ambient_candidates TEXT NOT NULL DEFAULT '[]',
+  -- Trim/fade envelope, only meaningful for a "custom:<uri>" recorded
+  -- ambient_sound_id. Null for library sounds (played in full, no fade).
+  ambient_start_ms    INTEGER,
+  ambient_end_ms      INTEGER,
+  ambient_fade_in_ms  INTEGER,
+  ambient_fade_out_ms INTEGER,
   FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
 );
 
@@ -111,6 +117,14 @@ async function migrateSchema(db: any): Promise<void> {
       await db.execAsync(`ALTER TABLE cues ADD COLUMN ${col} INTEGER`);
     }
   }
+
+  const pageCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(pages)');
+  const pageColNames = new Set(pageCols.map((c) => c.name));
+  for (const col of ['ambient_start_ms', 'ambient_end_ms', 'ambient_fade_in_ms', 'ambient_fade_out_ms']) {
+    if (!pageColNames.has(col)) {
+      await db.execAsync(`ALTER TABLE pages ADD COLUMN ${col} INTEGER`);
+    }
+  }
 }
 
 // Helpers to (de)serialize the JSON-array columns. Use these at the
@@ -139,6 +153,7 @@ export const PAGE_COLUMNS = [
   "id", "book_id", "page_number", "image_path", "page_type",
   "embedded_text", "ocr_text", "background_scene",
   "ambient_sound_id", "ambient_candidates",
+  "ambient_start_ms", "ambient_end_ms", "ambient_fade_in_ms", "ambient_fade_out_ms",
 ] as const;
 
 export const CUE_COLUMNS = [

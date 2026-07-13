@@ -101,6 +101,10 @@ export async function createPage(params: {
     backgroundScene: null,
     ambientSoundId: null,
     ambientCandidates: [],
+    ambientStartMs: null,
+    ambientEndMs: null,
+    ambientFadeInMs: null,
+    ambientFadeOutMs: null,
   };
   await db.runAsync(
     `INSERT INTO pages (id, book_id, page_number, image_path, page_type, embedded_text, ocr_text, background_scene, ambient_sound_id, ambient_candidates)
@@ -254,6 +258,10 @@ type PageRow = {
   background_scene: string | null;
   ambient_sound_id: string | null;
   ambient_candidates: string;
+  ambient_start_ms: number | null;
+  ambient_end_ms: number | null;
+  ambient_fade_in_ms: number | null;
+  ambient_fade_out_ms: number | null;
 };
 
 function rowToPage(r: PageRow): Page {
@@ -268,6 +276,10 @@ function rowToPage(r: PageRow): Page {
     backgroundScene: r.background_scene,
     ambientSoundId: r.ambient_sound_id,
     ambientCandidates: parseStringArray(r.ambient_candidates),
+    ambientStartMs: r.ambient_start_ms,
+    ambientEndMs: r.ambient_end_ms,
+    ambientFadeInMs: r.ambient_fade_in_ms,
+    ambientFadeOutMs: r.ambient_fade_out_ms,
   };
 }
 
@@ -383,6 +395,23 @@ export async function deleteBook(id: string): Promise<void> {
   await db.runAsync('DELETE FROM books WHERE id = ?', [id]);
 }
 
+/** Delete a single page (and, via ON DELETE CASCADE, its cues). The page's
+ *  image file on disk is removed by the caller, same convention as deleteBook. */
+export async function deletePage(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.execAsync('PRAGMA foreign_keys = ON;');
+  await db.runAsync('DELETE FROM pages WHERE id = ?', [id]);
+}
+
+/** Renumbers a book's pages to match a new order (1-based), e.g. after a
+ *  drag-to-reorder. `orderedPageIds` must contain every page id for the book. */
+export async function reorderPages(orderedPageIds: string[]): Promise<void> {
+  const db = await getDatabase();
+  for (let i = 0; i < orderedPageIds.length; i++) {
+    await db.runAsync('UPDATE pages SET page_number = ? WHERE id = ?', [i + 1, orderedPageIds[i]]);
+  }
+}
+
 // ---- Single-page reads + edits (post-OCR text/cue editor) ----------------
 
 export async function getPage(pageId: string): Promise<Page | null> {
@@ -405,6 +434,26 @@ export async function getCuesForPage(pageId: string): Promise<Cue[]> {
 export async function updatePageOcrText(pageId: string, ocrText: string): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE pages SET ocr_text = ? WHERE id = ?', [ocrText, pageId]);
+}
+
+/** Sets (or clears, passing null) a page's ambient sound together with its
+ *  trim/fade envelope — mirrors updateCueSoundTrim for cues. */
+export async function updatePageAmbient(
+  pageId: string,
+  ambient: { soundId: string; startMs: number | null; endMs: number | null; fadeInMs: number | null; fadeOutMs: number | null } | null
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE pages SET ambient_sound_id = ?, ambient_start_ms = ?, ambient_end_ms = ?, ambient_fade_in_ms = ?, ambient_fade_out_ms = ? WHERE id = ?',
+    [
+      ambient?.soundId ?? null,
+      ambient?.startMs ?? null,
+      ambient?.endMs ?? null,
+      ambient?.fadeInMs ?? null,
+      ambient?.fadeOutMs ?? null,
+      pageId,
+    ]
+  );
 }
 
 export async function updateCueSoundId(cueId: string, soundId: string | null): Promise<void> {

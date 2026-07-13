@@ -309,7 +309,7 @@ export default function PhotoEditor({
               <Text style={StyleSheet.flatten([styles.circleGlyphCancel, { color: textColor }])}>↩</Text>
             </TactileButton>
             <TactileButton style={styles.circleAccept} onPress={handleSave} disabled={busy}>
-              {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.circleGlyphAccept}>✓</Text>}
+              {busy ? <ActivityIndicator color="#208AEF" /> : <Text style={styles.circleGlyphAccept}>✓</Text>}
             </TactileButton>
           </View>
         </View>
@@ -399,7 +399,9 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#208AEF',
+    backgroundColor: 'rgba(32,138,239,0.15)',
+    borderWidth: 2,
+    borderColor: '#208AEF',
   },
   circleGlyphCancel: {
     fontSize: 24,
@@ -409,6 +411,6 @@ const styles = StyleSheet.create({
   circleGlyphAccept: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#fff',
+    color: '#208AEF',
   },
 });
