@@ -1,13 +1,20 @@
 // read/[id].tsx — the Reader. Press ▶ Read on a book and this plays it back one
-// page at a time: the page's ambient bed fades in and loops automatically, and
-// the parent (or child) taps a highlighted word to fire its sound. Manual
-// "Next / Back" page turns. Hands-free firing as the parent reads aloud is a
-// later milestone (Vosk speech alignment) that drops in behind this same UI.
+// page at a time: the page's ambient bed fades in and loops automatically, the
+// mic listens as you read aloud (on-device Vosk) and fires cue sounds itself
+// as it recognizes their trigger words, saying "next page"/"следующая
+// страница" turns the page hands-free, and a highlighted word can still be
+// tapped directly — the mic and the tap are just two ways to fire the same
+// cue. A status pill under the header shows Listening/Starting up/Mic
+// paused/Mic unavailable, and doubles as a mute toggle.
+//
+// Alignment (matching live speech to the page's known OCR text) is the hard
+// part CLAUDE.md warns about — expect to retune ALIGN_LOOKAHEAD and watch for
+// missed/duplicate fires on real books.
 //
 // The first read-through also doubles as verification — reaching the end offers
 // "Looks good ✓", which marks the book reviewStatus = 'approved'.
 
-import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { createAudioPlayer, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -19,9 +26,52 @@ import { playFull, playLooping, playRange } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook, updateBookReviewStatus } from '../../lib/db';
 import { cueAtRange, tokenize } from '../../lib/reader/text';
+import { createVoskRecognizer } from '../../lib/speech/vosk';
+import { NEXT_PAGE_PHRASES, type SpeechLang } from '../../lib/speech/types';
 import { isReadablePage, type Book, type Cue, type Page } from '../../lib/types';
 
 type Player = ReturnType<typeof createAudioPlayer>;
+type MicStatus = 'idle' | 'loading' | 'listening' | 'muted' | 'error';
+
+/** True if the char at index i is a Unicode letter — word-boundary aware
+ *  search (JS's \b is ASCII-only and mishandles Cyrillic). */
+function isLetter(ch: string | undefined): boolean {
+  return ch !== undefined && /\p{L}/u.test(ch);
+}
+
+/** Whole-word index of `needle` in `hay` at or after `from`, or -1. */
+function findWordFrom(hay: string, needle: string, from: number): number {
+  if (!needle) return -1;
+  let pos = Math.max(0, from);
+  for (;;) {
+    const idx = hay.indexOf(needle, pos);
+    if (idx < 0) return -1;
+    const before = hay[idx - 1];
+    const after = hay[idx + needle.length];
+    if (!isLetter(before) && !isLetter(after)) return idx;
+    pos = idx + 1;
+  }
+}
+
+// How far ahead of the current read position a recognized word is still
+// trusted to belong to — keeps a misheard/filler word from yanking the
+// cursor (and cue-firing) far down the page.
+const ALIGN_LOOKAHEAD = 180;
+
+function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
+  switch (status) {
+    case 'listening':
+      return { label: 'Listening…', color: '#2fb344', bg: 'rgba(47,179,68,0.15)' };
+    case 'muted':
+      return { label: 'Mic paused — tap to resume', color: '#8e8e93', bg: 'rgba(142,142,147,0.15)' };
+    case 'error':
+      return { label: error ?? 'Mic unavailable — tap to retry', color: '#ff453a', bg: 'rgba(255,69,58,0.15)' };
+    case 'loading':
+    case 'idle':
+    default:
+      return { label: 'Starting up…', color: '#e8a33d', bg: 'rgba(232,163,61,0.15)' };
+  }
+}
 
 export default function ReaderScreen() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -42,14 +92,27 @@ export default function ReaderScreen() {
   const [approved, setApproved] = useState(false);
   // Which token is mid-press / mid-play, for a quick visual pop on tap.
   const [firingToken, setFiringToken] = useState<number | null>(null);
+  const [micStatus, setMicStatus] = useState<MicStatus>('idle');
+  const [micError, setMicError] = useState<string | null>(null);
 
   const ambientPlayerRef = useRef<Player | null>(null);
   const ambientStopRef = useRef<(() => void) | null>(null);
   const cuePlayerRef = useRef<Player | null>(null);
   const cueStopRef = useRef<(() => void) | null>(null);
+  const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
+  // Kept fresh every render (see the no-deps effect below) so the ONE
+  // long-lived onResult subscription (registered once, kept running across
+  // page turns so listening never gaps) always aligns against the CURRENT
+  // page/cues instead of whatever they were when it was first registered.
+  const pageRef = useRef<Page | null>(null);
+  const cuesRef = useRef<Cue[]>([]);
+  const langRef = useRef<SpeechLang>('en');
+  const handleResultRef = useRef<(text: string) => void>(() => {});
+  const readCursorRef = useRef(0);
+  const firedCueIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+    setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -139,6 +202,130 @@ export default function ReaderScreen() {
     [stopAmbient, stopCue]
   );
 
+  // Keep the alignment refs current for whichever page is showing, and reset
+  // the read position/fired-cue set on every page turn.
+  useEffect(() => {
+    const page = storyPages[index] ?? null;
+    pageRef.current = page;
+    cuesRef.current = page ? cuesByPage.get(page.id) ?? [] : [];
+    readCursorRef.current = 0;
+    firedCueIdsRef.current = new Set();
+  }, [index, storyPages, cuesByPage]);
+
+  useEffect(() => {
+    langRef.current = (book?.language as SpeechLang) ?? 'en';
+  }, [book]);
+
+  // Re-pointed every render (cheap — just a ref write) so the ONE persistent
+  // onResult subscription below always calls into fresh state/closures
+  // (goNext, fireCue) without needing to tear down and re-register the
+  // recognizer — which would gap the listening across every page turn.
+  useEffect(() => {
+    handleResultRef.current = (text: string) => {
+      const lang = langRef.current;
+      if (text.toLowerCase().includes(NEXT_PAGE_PHRASES[lang])) {
+        goNext();
+        return;
+      }
+      const page = pageRef.current;
+      if (!page) return;
+      const ocrLower = page.ocrText.toLowerCase();
+      const tokens = tokenize(page.ocrText);
+      const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+      for (const word of words) {
+        const from = readCursorRef.current;
+        const idx = findWordFrom(ocrLower, word, from);
+        if (idx < 0 || idx > from + ALIGN_LOOKAHEAD) continue; // not found nearby — skip, don't jump wildly
+        const newCursor = idx + word.length;
+        for (const cue of cuesRef.current) {
+          if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
+          if (firedCueIdsRef.current.has(cue.id)) continue;
+          if (cue.charStart >= from && cue.charStart < newCursor) {
+            firedCueIdsRef.current.add(cue.id);
+            const tokenIndex = tokens.findIndex(
+              (t) => !t.isSpace && cue.charStart! >= t.start && cue.charStart! < t.end
+            );
+            fireCue(cue, tokenIndex);
+          }
+        }
+        readCursorRef.current = newCursor;
+      }
+    };
+  });
+
+  const startListening = useCallback(async () => {
+    setMicStatus('loading');
+    setMicError(null);
+    try {
+      const perm = await requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        setMicStatus('error');
+        setMicError('Microphone access needed to listen while you read.');
+        return;
+      }
+      let recognizer = recognizerRef.current;
+      if (!recognizer) {
+        recognizer = createVoskRecognizer();
+        recognizerRef.current = recognizer;
+        await recognizer.load(langRef.current);
+      }
+      await recognizer.start({
+        lang: langRef.current,
+        onPartial: () => {},
+        onResult: (text) => handleResultRef.current(text),
+      });
+      setMicStatus('listening');
+    } catch (e: any) {
+      setMicStatus('error');
+      setMicError(e?.message ?? String(e));
+    }
+  }, []);
+
+  // Start listening once the book's loaded, and stop for good on unmount.
+  useEffect(() => {
+    if (loading || !book || storyPages.length === 0) return;
+    startListening();
+    return () => {
+      recognizerRef.current?.stop().catch(() => {});
+      recognizerRef.current?.unload().catch(() => {});
+      recognizerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, book, storyPages.length]);
+
+  async function toggleMic() {
+    if (micStatus === 'listening') {
+      await recognizerRef.current?.stop().catch(() => {});
+      setMicStatus('muted');
+    } else if (micStatus === 'muted') {
+      try {
+        await recognizerRef.current?.start({
+          lang: langRef.current,
+          onPartial: () => {},
+          onResult: (text) => handleResultRef.current(text),
+        });
+        setMicStatus('listening');
+      } catch (e: any) {
+        setMicStatus('error');
+        setMicError(e?.message ?? String(e));
+      }
+    } else if (micStatus === 'error') {
+      startListening();
+    }
+  }
+
+  // Stop listening at "The End" (nothing left to align against); resume if
+  // the parent hits "Read again".
+  useEffect(() => {
+    if (finished) {
+      recognizerRef.current?.stop().catch(() => {});
+      setMicStatus('muted');
+    } else if (micStatus === 'muted' && recognizerRef.current) {
+      startListening();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished]);
+
   function fireCue(cue: Cue, tokenIndex: number) {
     if (!cue.soundId) return;
     const source = resolveSoundSource(cue.soundId);
@@ -219,7 +406,7 @@ export default function ReaderScreen() {
         </Text>
         <View style={styles.endActions}>
           <TactileButton
-            style={[styles.endPrimary]}
+            style={styles.endPrimary}
             onPress={markApproved}
             disabled={approved}
           >
@@ -260,6 +447,20 @@ export default function ReaderScreen() {
         </Text>
         <View style={{ width: 24 }} />
       </View>
+
+      {(() => {
+        const mic = micDisplay(micStatus, micError);
+        return (
+          <Pressable onPress={toggleMic} style={styles.micRow}>
+            <View style={[styles.micPill, { backgroundColor: mic.bg, borderColor: mic.color }]}>
+              <View style={[styles.micDot, { backgroundColor: mic.color }]} />
+              <Text style={[styles.micPillText, { color: mic.color }]} numberOfLines={1}>
+                {mic.label}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })()}
 
       <View style={styles.body}>
         {page.imagePath ? (
@@ -306,9 +507,14 @@ export default function ReaderScreen() {
         >
           <Text style={[styles.navBackLabel, { color: textColor }]}>← Back</Text>
         </TactileButton>
-        <TactileButton style={styles.navNext} onPress={goNext}>
-          <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
-        </TactileButton>
+        {/* TactileButton only sizes its own inner view — this wrapper is what
+            actually carries the flex:1 in the row layout (same fix already
+            applied in create-story.tsx / library.tsx). */}
+        <View style={styles.navNextWrap}>
+          <TactileButton style={styles.navNext} onPress={goNext}>
+            <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
+          </TactileButton>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -328,6 +534,20 @@ const styles = StyleSheet.create({
   exit: { fontSize: 22, fontWeight: '600' },
   pageCount: { fontSize: 14, fontWeight: '700' },
 
+  micRow: { alignItems: 'center', paddingBottom: 8 },
+  micPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 2,
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    maxWidth: '90%',
+  },
+  micDot: { width: 8, height: 8, borderRadius: 4 },
+  micPillText: { fontSize: 13, fontWeight: '700' },
+
   body: { flex: 1 },
   pageImage: { width: '100%', height: 220, marginBottom: 8 },
   textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
@@ -345,22 +565,31 @@ const styles = StyleSheet.create({
   },
   navBack: { borderRadius: 14, paddingVertical: 16, paddingHorizontal: 22, alignItems: 'center', justifyContent: 'center' },
   navBackLabel: { fontSize: 16, fontWeight: '700' },
+  navNextWrap: { flex: 1 },
   navNext: {
-    flex: 1,
-    backgroundColor: '#2fb344',
+    backgroundColor: 'rgba(47,179,68,0.15)',
+    borderWidth: 2,
+    borderColor: '#2fb344',
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navNextLabel: { color: '#fff', fontSize: 18, fontWeight: '800' },
+  navNextLabel: { color: '#2fb344', fontSize: 18, fontWeight: '800' },
 
   endEmoji: { fontSize: 52, marginBottom: 8 },
   endTitle: { fontSize: 30, fontWeight: '800' },
   endSub: { fontSize: 15, textAlign: 'center', marginTop: 8, marginBottom: 28 },
   endActions: { alignSelf: 'stretch', gap: 12 },
-  endPrimary: { backgroundColor: '#2fb344', borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  endPrimaryLabel: { color: '#fff', fontSize: 17, fontWeight: '800' },
+  endPrimary: {
+    backgroundColor: 'rgba(47,179,68,0.15)',
+    borderWidth: 2,
+    borderColor: '#2fb344',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  endPrimaryLabel: { color: '#2fb344', fontSize: 17, fontWeight: '800' },
   secondaryBtn: { borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
   secondaryLabel: { fontSize: 16, fontWeight: '700' },
 });
