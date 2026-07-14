@@ -45,7 +45,7 @@ export default function CreateStoryScreen() {
   const [dictateStatus, setDictateStatus] = useState<'idle' | 'loading' | 'listening'>('idle');
   const [dictateFinal, setDictateFinal] = useState('');
   const [dictatePartial, setDictatePartial] = useState('');
-  const [infoModal, setInfoModal] = useState<{ emoji: string; title: string; message: string } | null>(null);
+  const [infoModal, setInfoModal] = useState<{ title: string; message: string } | null>(null);
 
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
 
@@ -57,7 +57,7 @@ export default function CreateStoryScreen() {
 
   function startStory() {
     if (!title.trim()) {
-      setInfoModal({ emoji: '✏️', title: 'Name your story', message: 'Give your story a title before you start.' });
+      setInfoModal({ title: 'Name your story', message: 'Give your story a title before you start.' });
       return;
     }
     setPhase('writing');
@@ -79,7 +79,7 @@ export default function CreateStoryScreen() {
       setDictateStatus('listening');
     } catch (e: any) {
       setDictateStatus('idle');
-      setInfoModal({ emoji: '🎙️', title: 'Dictation unavailable', message: e?.message ?? String(e) });
+      setInfoModal({ title: 'Dictation unavailable', message: e?.message ?? String(e) });
     }
   }
 
@@ -114,7 +114,6 @@ export default function CreateStoryScreen() {
     const allPages = finalText ? [...pages, finalText] : pages;
     if (allPages.length === 0) {
       setInfoModal({
-        emoji: '📖',
         title: 'Nothing to save yet',
         message: 'Dictate (or type) at least one page before finishing.',
       });
@@ -136,7 +135,7 @@ export default function CreateStoryScreen() {
       router.replace({ pathname: '/book/[id]', params: { id: book.id } });
     } catch (e: any) {
       setPhase('writing');
-      setInfoModal({ emoji: '⚠️', title: 'Could not save story', message: e?.message ?? String(e) });
+      setInfoModal({ title: 'Could not save story', message: e?.message ?? String(e) });
     }
   }
 
@@ -152,7 +151,6 @@ export default function CreateStoryScreen() {
         <ScrollView contentContainerStyle={styles.content}>
           {phase === 'setup' && (
             <View style={styles.setupWrap}>
-              <Text style={styles.bigEmoji}>📖✨</Text>
               <Text style={[styles.setupTitle, { color: textColor }]}>Create a Story</Text>
               <Text style={[styles.setupSubtitle, { color: subColor }]}>
                 Dictate your own fairytale, page by page — then add sound effects and ambient just
@@ -201,9 +199,11 @@ export default function CreateStoryScreen() {
                 </View>
               </View>
 
-              <TactileButton style={[styles.primaryButton, styles.dictateStartButton]} onPress={startStory}>
-                <Text style={[styles.primaryButtonLabel, styles.dictateStartLabel]}>🎙️ Start dictating</Text>
-              </TactileButton>
+              <View style={styles.dictateStartWrap}>
+                <TactileButton style={[styles.primaryButton, styles.dictateStartButton]} onPress={startStory}>
+                  <Text style={[styles.primaryButtonLabel, styles.dictateStartLabel]}>Start dictating</Text>
+                </TactileButton>
+              </View>
             </View>
           )}
 
@@ -236,7 +236,7 @@ export default function CreateStoryScreen() {
                   style={[styles.actionButton, { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' }]}
                   onPress={stopDictation}
                 >
-                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop dictating</Text>
+                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>Stop dictating</Text>
                 </TactileButton>
               ) : (
                 <TactileButton
@@ -245,7 +245,7 @@ export default function CreateStoryScreen() {
                   disabled={dictateStatus === 'loading'}
                 >
                   <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>
-                    {dictateStatus === 'loading' ? 'Loading model…' : '🎙️ Start dictating'}
+                    {dictateStatus === 'loading' ? 'Loading model…' : 'Start dictating'}
                   </Text>
                 </TactileButton>
               )}
@@ -259,7 +259,7 @@ export default function CreateStoryScreen() {
                   onPress={addPageAndContinue}
                   disabled={!draft.trim()}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>➕ Add page & continue</Text>
+                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>Add page & continue</Text>
                 </TactileButton>
               </View>
 
@@ -273,7 +273,7 @@ export default function CreateStoryScreen() {
                 style={[styles.primaryButton, { backgroundColor: 'rgba(47,179,68,0.15)', borderWidth: 2, borderColor: '#2fb344' }]}
                 onPress={finishStory}
               >
-                <Text style={[styles.primaryButtonLabel, { color: '#2fb344' }]}>🏁 Finish story</Text>
+                <Text style={[styles.primaryButtonLabel, { color: '#2fb344' }]}>Finish story</Text>
               </TactileButton>
             </View>
           )}
@@ -290,7 +290,6 @@ export default function CreateStoryScreen() {
       <Modal visible={infoModal !== null} transparent animationType="fade" onRequestClose={() => setInfoModal(null)}>
         <View style={styles.infoOverlay}>
           <View style={[styles.infoCard, { backgroundColor: cardBackground }]}>
-            <Text style={styles.infoEmoji}>{infoModal?.emoji}</Text>
             <Text style={[styles.infoTitle, { color: textColor }]}>{infoModal?.title}</Text>
             <Text style={[styles.infoMessage, { color: subColor }]}>{infoModal?.message}</Text>
             <TactileButton
@@ -311,7 +310,6 @@ const styles = StyleSheet.create({
   content: { padding: 20, gap: 14 },
 
   setupWrap: { gap: 12, alignItems: 'center', paddingTop: 24 },
-  bigEmoji: { fontSize: 48 },
   setupTitle: { fontSize: 24, fontWeight: '800' },
   setupSubtitle: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 8 },
   titleInput: {
@@ -345,15 +343,21 @@ const styles = StyleSheet.create({
 
   savingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingTop: 80 },
 
-  actionButton: { borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  actionButton: { borderRadius: 12, paddingVertical: 14, paddingHorizontal: 20, alignItems: 'center' },
   actionButtonLabel: { fontSize: 16, fontWeight: '600', color: '#fff' },
 
   primaryButton: { width: '100%', borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
   primaryButtonLabel: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  // TactileButton only sizes its own inner view — the setupWrap parent centers
+  // (rather than stretches) children, so without this the outer Pressable
+  // shrink-wraps to the text and "width: 100%" above never actually reaches
+  // full width. This wrapper is what actually carries the width.
+  dictateStartWrap: { alignSelf: 'stretch' },
   // The setup screen's dictate CTA: red, taller, with room to breathe above it.
   dictateStartButton: {
     marginTop: 24,
     paddingVertical: 20,
+    paddingHorizontal: 20,
     backgroundColor: 'rgba(255,69,58,0.15)',
     borderWidth: 2,
     borderColor: '#ff453a',
@@ -365,7 +369,6 @@ const styles = StyleSheet.create({
 
   infoOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
   infoCard: { borderRadius: 16, padding: 24, alignItems: 'center', gap: 10, minWidth: 260, maxWidth: 320 },
-  infoEmoji: { fontSize: 32 },
   infoTitle: { fontSize: 17, fontWeight: '700', textAlign: 'center' },
   infoMessage: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 6 },
 });

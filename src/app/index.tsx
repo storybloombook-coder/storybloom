@@ -23,7 +23,7 @@ export default function HomeScreen() {
           </Link>
           <Link href="/create-story" asChild>
             <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>📖✨ Create a Story</Text>
+              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>Create a Story</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
