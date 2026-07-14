@@ -1,54 +1,63 @@
 # Storybloom — Handover
 
-_Snapshot for picking up on another machine / another day._
+_Snapshot for picking up on another machine / another day. **Update this file
+every time you commit + push meaningful work** — it's the first thing a fresh
+session (or a fresh PC) should read._
 
 - **Branch:** `feat/ondevice-vision-tesseract` (NOT `main` — main is far behind).
-- **Everything is committed + pushed.** Latest: `3ab314a`.
+- **Everything is committed + pushed.** Latest: see `git log -1`.
 - **To set up + run:** see **[SETUP.md](./SETUP.md)** (clone, `.env`, Vosk models, dev-client build, connect).
 
 ---
 
 ## Where the app is right now
 
-The core loop is **capture → prep → library → per-page edit**, running **fully
-on-device** (no cloud, no keys).
+The full loop works end to end, **fully on-device** (no cloud, no keys):
+
+**capture → prep → library → per-page edit → readiness check → read aloud**
 
 **Working:**
 - **Capture/import** — photos + PDF, per-page crop/rotate editor, drag-reorder,
-  add-more-pages, dictation.
+  add-more-pages, dictation (speak a story instead of photographing one).
 - **Prep (on-device)** — Tesseract OCR (per the book's chosen language) + a local
-  bilingual (EN/RU) trigger matcher assigns ambient + keyword cues. A dev-only
-  debug readout shows raw OCR text + confidence + matched cues.
-- **Library** — rich cards (cover, counts, status, badges), **favorites ⭐** with a
-  Favorites filter, pull-to-refresh, delete (cascade + file cleanup).
-- **Book detail** — per-page inspector, **tap the title to rename**, drag-reorder /
-  delete pages, add pages.
-- **Page editor** — tap a word to attach/remove a sound; correct OCR text;
-  **"Re-scan area"** (crop to the text → OCR just that); record/trim/fade custom
-  sounds per word.
-- **Sound library** — **114 effects + 18 ambient**, now with **real CC0 audio**
-  from Freesound (`assets/sounds/`, provenance in `assets/sounds/CREDITS.json`).
-  Matched cues play; **ambient loops** until the page changes. Voices (8) are
-  still synth placeholders.
+  bilingual (EN/RU) trigger matcher assigns ambient + keyword cues. Tolerates
+  common English inflections (`bark` also matches `barked`/`barking`). A
+  dev-only debug readout shows raw OCR text + confidence + matched cues.
+  **Confirmed working on real EN + RU camera photos** — English needed the
+  "Re-scan area" crop tool to cut illustration-text noise; that's the fix,
+  not a Tesseract quality problem.
+- **Library** — rich cards (cover, counts, status, badges), **favorites ⭐**,
+  a **▶ Play button** (bottom-right, soft-tint) that jumps straight into the
+  Reader, an inline **"⚠️ N" readiness chip** that opens a "what's missing"
+  sheet deep-linking to the page that needs fixing, **swipe left → delete
+  bin** / **swipe right → mark approved** (both with a haptic tick at the
+  open threshold), pull-to-refresh.
+- **Book detail** — per-page inspector, tap the title to rename, drag-reorder
+  / delete pages, add pages, and a pinned **readiness gate + ▶ Read** bar
+  (green "Ready" or amber "N things to check" with an expandable checklist).
+- **Page editor** — tap a word to attach/remove a sound; correct OCR text
+  (keyboard no longer covers the input); "Re-scan area" (crop → re-OCR just
+  that region); record/trim/fade custom sounds per word; **ambient
+  play/stop toggle** (used to loop forever with no way to stop it — fixed).
+- **Sound picker** — search bar (by id or trigger word), a "Suggested"
+  section ranked by relevance to the tapped word, the 114 effects grouped
+  into a collapsible category tree, and a **play/stop preview button on
+  every row** so you can hear a sound before assigning it.
+- **Reader (`/read/[id]`)** — the payoff screen. Ambient bed **fades in and
+  loops automatically** per page; **tap a highlighted word to fire its
+  sound**; Next/Back page turns; end screen offers Looks good (→
+  `reviewStatus = 'approved'`), Read again, or Done. This is the exact seam
+  Vosk speech alignment will hook into later (fire the same cue from speech
+  instead of a tap — no reader UI change needed).
+- **Sound library** — 115 effects + 18 ambient, all real CC0 audio from
+  Freesound, **loudness-normalized** (effects −16 LUFS, ambient −23 LUFS so
+  beds sit under effects) and **all playing with a short fade in/out**
+  instead of an abrupt click. Voices (8) are still synth placeholders.
 
-**Gemini is fully removed** — vision is on-device only. If the Tesseract native
-module isn't present (e.g. Expo Go), `createVisionProvider` throws a clear error
-instead of falling back.
-
----
-
-## ⚠️ The one big unknown — still not verified
-
-**Is Tesseract `rus`/`eng` OCR actually good enough on real phone-camera photos**
-of a children's book (glare, curved pages, stylized/italic fonts)? We built the
-whole on-device path but haven't confirmed quality on a real book yet. **This is
-the first thing to test.** Prep an English page, then a Russian page, and read the
-debug panel (`ondevice/tesseract`, confidence %, raw text).
-
-If it's rough, levers (in order, all behind the same seam so no rearchitecting):
-1. Image pre-processing before OCR (grayscale/threshold/deskew) — JS-side.
-2. The **"Re-scan area"** crop tool (already built) to cut illustration noise.
-3. Swap the OCR engine (e.g. a PaddleOCR/docTR ONNX model) behind `OcrProvider`.
+**Gemini is fully removed** — vision is on-device only, and every leftover
+env var/reference is gone too. If the Tesseract native module isn't present
+(e.g. Expo Go), `createVisionProvider` throws a clear error instead of
+falling back.
 
 ---
 
@@ -57,26 +66,36 @@ If it's rough, levers (in order, all behind the same seam so no rearchitecting):
 - APK from the last EAS build is on **expo.dev → project Storybloom → Builds**
   (install via its URL/QR or `adb install`).
 - **Rebuild the dev client only after native changes** (Kotlin, gradle,
-  `app.json` plugins/permissions, new native npm deps). JS changes just hot-reload
-  over Metro (`npx expo start --dev-client`).
+  `app.json` plugins/permissions, new native npm deps). Everything shipped
+  this round was JS + bundled assets only — no rebuild was needed, just
+  reload over Metro (`npx expo start --dev-client`).
 
 ---
 
 ## Next steps (suggested order)
 
-1. **Verify on-device OCR** on a real EN + RU book (the unknown above).
-2. **Sound-to-text workflow** — design the flow now that there are 132 real
-   sounds: auto-match → review → tap-word-to-assign → **preview-before-choose**.
-   (Owed from last session.)
-3. **Sound picker UX** — 114 effects is a long scroll; add **categories + search
-   + tap-to-preview**.
-4. **Reading view (milestone 6)** — play ambient on page open (loop), fire keyword
-   cues in order, manual "Next page". This is the payoff screen and doesn't exist
-   yet.
-5. **Speech recognition (milestone 7)** — Vosk is wired (`src/lib/speech/`);
-   align spoken words to `ocr_text`, fire cues at position, "next page" voice cmd.
-6. **Polish sounds** — replace the 8 placeholder voices; re-fetch any dud CC0
-   clips with better queries (`node scripts/fetch-freesound.mjs`).
+1. **Real-book testing pass** — run the readiness gate + Reader on several
+   full books (not just single pages) to shake out edge cases: multi-page
+   ambient transitions, ordering of many cues on a dense page, the "what's
+   missing" chip's accuracy.
+2. **Character voices (milestone 8-10)** — still deliberately deferred. Known
+   gap: even the manual "Change from library" picker offers sound *effects*
+   for a dialogue cue, never the 8 *voices* — intentionally left broken until
+   this milestone is actually built (see CLAUDE.md).
+3. **Speech recognition (milestone 7)** — Vosk is wired (`src/lib/speech/`);
+   the next step is aligning spoken words to `ocr_text` and calling the
+   Reader's `fireCue()` from that alignment instead of a tap, plus a "next
+   page" voice command.
+4. **More trigger-vocab coverage** — the offline matcher still has ~60
+   effect ids with no trigger words at all (manual-assign only). Expand
+   `TRIGGER_VOCAB` in `src/lib/ai/soundLibrary.ts` as real books surface gaps.
+5. **App size** — currently ~170MB of bundled assets, ~90% of which is the
+   two Vosk speech models (156MB). Discussed but not decided: defer Vosk
+   models to a first-use download (like Tesseract's traineddata already
+   works) instead of bundling, if install size becomes a concern.
+6. **Polish sounds** — replace the 8 placeholder voices with real recordings;
+   re-fetch any other dud CC0 clips as they're noticed
+   (`node scripts/fetch-freesound.mjs --only=<id>`).
 
 ---
 
@@ -84,16 +103,34 @@ If it's rough, levers (in order, all behind the same seam so no rearchitecting):
 
 ```bash
 npx expo start --dev-client          # run (JS hot-reloads)
-npx tsc --noEmit                     # typecheck (currently 0 errors)
-node scripts/fetch-freesound.mjs     # (re)build sound library from Freesound (needs token)
-node scripts/gen-placeholder-sounds.mjs   # synth placeholders for any id without audio
+npx tsc --noEmit                     # typecheck (currently 0 errors) — use
+                                      # `node node_modules/typescript/bin/tsc`
+                                      # if `npx tsc` tries to fetch a wrong package
+node scripts/fetch-freesound.mjs                    # (re)build the sound library from Freesound (needs token)
+node scripts/fetch-freesound.mjs --only=fx_some_id  # re-fetch just ONE sound (safe, doesn't touch the rest)
+node scripts/gen-placeholder-sounds.mjs             # synth placeholders for any id without audio
+node scripts/normalize-sounds.mjs                   # loudness-normalize all bundled sounds (needs ffmpeg-static, temp-install it)
 npx eas-cli build --platform android --profile development   # new dev-client build
 ```
 
 ## Gotchas learned this project
 - **Commit before an EAS build** — EAS doesn't upload untracked files, so new
   modules/assets silently miss the build if uncommitted.
-- **Not in git (recreate per machine):** `.env`, `node_modules/`, the Vosk models,
-  generated `android/`.
-- **Windows file locks:** if renaming/deleting model folders hits "Access denied",
-  stop Metro/`node` (the file watcher) and retry.
+- **Not in git (recreate per machine):** `.env`, `node_modules/`, the Vosk
+  models, generated `android/`.
+- **Windows file locks:** if renaming/deleting model folders hits "Access
+  denied", stop Metro/`node` (the file watcher) and retry.
+- **Installing/uninstalling a dev-only npm package (e.g. `ffmpeg-static` for
+  audio trimming/normalization) while Metro is running can crash it** — Metro's
+  file watcher throws an uncaught `ENOENT` on the vanished temp directory and
+  the whole process dies (app shows a white screen, nothing in the log
+  explains why until you check for the crash). **Always stop Metro first**,
+  do the npm install/uninstall, then restart Metro (`--clear` if the cache
+  looks stale).
+- **adb USB connection drops silently mid-session** — if the app shows a
+  white screen or stops hot-reloading, check `adb devices` before assuming
+  it's a code bug; replug + re-run `adb reverse tcp:8081 tcp:8081`.
+- **`npx tsc` can resolve to the wrong package** if TypeScript isn't a
+  top-level enough dependency in npx's resolution — use
+  `node node_modules/typescript/bin/tsc --noEmit` if you see a "This is not
+  the tsc command you are looking for" message.

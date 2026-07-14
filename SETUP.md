@@ -45,13 +45,22 @@ Folder names must be exactly `vosk-model-small-en-us` and `vosk-model-small-ru`
 hits "Access denied", stop any running Metro/`node` (it's the file watcher) and retry.
 
 ## 4. Sound effects — already in git ✅
-The real CC0 sound clips live under `assets/sounds/` and are committed, so nothing
-to do. To regenerate or expand them:
+The real CC0 sound clips live under `assets/sounds/` and are committed
+(loudness-normalized, so nothing sounds jarringly loud/quiet next to
+another), so nothing to do. To regenerate or expand them:
 - `node scripts/gen-placeholder-sounds.mjs` — synth placeholders for every id.
 - `node scripts/fetch-freesound.mjs` — real CC0 clips from Freesound (needs
   `FREESOUND_API_TOKEN`). Provenance is in `assets/sounds/CREDITS.json`.
-Both read the id lists from `src/lib/ai/soundLibrary.ts` and regenerate
-`src/lib/audio/soundAssets.ts`.
+  Add `--only=<id>[,<id>]` to re-fetch just specific ids (e.g. after finding
+  one bad match) without re-walking the whole library.
+- `node scripts/normalize-sounds.mjs` — re-run loudness normalization (EBU
+  R128: effects −16 LUFS, ambient −23 LUFS) after fetching new sounds. Needs
+  `ffmpeg-static` (`npm install --no-save ffmpeg-static` first, `npm
+  uninstall ffmpeg-static` after — **stop Metro before doing this**, see the
+  gotcha in HANDOVER.md, or its file watcher can crash on the temp dir).
+
+All three read the id lists from `src/lib/ai/soundLibrary.ts` and (fetch/
+placeholder scripts) regenerate `src/lib/audio/soundAssets.ts`.
 
 ## 5. Build the dev client (native code → must be compiled)
 **Option A — EAS cloud build (no local Android toolchain):**
