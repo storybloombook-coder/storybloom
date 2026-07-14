@@ -39,10 +39,21 @@ function isLetter(ch: string | undefined): boolean {
   return ch !== undefined && /\p{L}/u.test(ch);
 }
 
+/** Common English inflectional endings tolerated after a trigger word, so
+ *  "bark" also fires on "barked"/"barking" without a separate vocab entry for
+ *  every verb form. Checked longest-first (harmless order since only one can
+ *  match a given tail). Latin-only on purpose: Russian inflection is a
+ *  different, riskier problem and TRIGGER_VOCAB's ru entries are matched
+ *  as-is. */
+const INFLECTION_SUFFIXES = ['ing', 'ed', 'es', 's', 'd'];
+
 /** Index of the first WHOLE-WORD occurrence of `needle` in `hay`, or -1.
  *  Word-bounded so "гром" (thunder) does NOT match inside "громкий" (loud) and
  *  "ran" does NOT match inside "orange". Precision over recall: for the offline
- *  matcher, skipping a cue beats firing the wrong sound (see CLAUDE.md). */
+ *  matcher, skipping a cue beats firing the wrong sound (see CLAUDE.md).
+ *  Tolerates a trailing common inflection ("bark" -> "barked") as long as the
+ *  suffix is the WHOLE remainder of the word, so "door" still doesn't match
+ *  inside "doorway". */
 function wordIndex(hay: string, needle: string): number {
   if (!needle) return -1;
   let from = 0;
@@ -50,8 +61,15 @@ function wordIndex(hay: string, needle: string): number {
     const pos = hay.indexOf(needle, from);
     if (pos < 0) return -1;
     const before = hay[pos - 1];
-    const after = hay[pos + needle.length];
-    if (!isLetter(before) && !isLetter(after)) return pos;
+    if (!isLetter(before)) {
+      const afterPos = pos + needle.length;
+      if (!isLetter(hay[afterPos])) return pos;
+      for (const suffix of INFLECTION_SUFFIXES) {
+        if (hay.startsWith(suffix, afterPos) && !isLetter(hay[afterPos + suffix.length])) {
+          return pos;
+        }
+      }
+    }
     from = pos + 1;
   }
 }
