@@ -95,12 +95,19 @@ falling back.
 - **Rebuild the dev client only after native changes** (Kotlin, gradle,
   `app.json` plugins/permissions, new native npm deps). Everything else ships
   as JS + bundled assets and just needs a Metro reload.
-- **Still needs real-device verification:** the gyroscope tilt-gravity axis
-  mapping and shake-detection thresholds in `Bookshelf.tsx` were written on
-  best-guess reasoning, not yet confirmed on hardware. Try tilting the phone
-  left/right on the Library screen with a few favorited books — if books
-  slide the wrong direction, the fix is flipping the sign on the
-  accelerometer `x` reading in `Bookshelf.tsx`.
+- **Tilt-gravity and shake-to-mix — verified on real hardware, both were
+  broken and are now fixed:**
+  - Tilt did nothing: the home-slot spring (`STIFFNESS=90`) was ~30x
+    stronger than `GRAVITY_STRENGTH=260`, capping displacement at an
+    invisible ~3px even at a full 90° tilt. Fixed by switching the spring
+    off while gravity is active — gravity now actually wins, and the
+    wall/neighbor collisions do the stopping, like a real tilted shelf.
+  - Shake never fired: `SHAKE_DELTA=1.8` was tuned above what a real
+    hand-shake produces (observed peaks ~1.0–1.5g on-device). Lowered to
+    `1.0`.
+  - Diagnosed live via temporary `console.log`s tailed over `adb logcat`
+    while the user physically tilted/shook the connected phone — useful
+    pattern if similar sensor-tuning issues come up again.
 
 ---
 
