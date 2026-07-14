@@ -63,12 +63,39 @@ falling back.
 
 ## Latest dev-client build
 
-- APK from the last EAS build is on **expo.dev → project Storybloom → Builds**
-  (install via its URL/QR or `adb install`).
+- **Why this build exists:** `expo-sensors` (Accelerometer) was added for the
+  Bookshelf's tilt-gravity + shake-to-mix features (`da8b222`). That's a new
+  native module, so the previously-installed dev-client APK doesn't have it —
+  the app will crash with `Cannot find native module 'ExponentPedometer'` on
+  those features until this build is installed. (The code already guards this
+  with a `require()`/try-catch so the *rest* of the app doesn't crash even on
+  an old APK — only the tilt/shake bookshelf bits need the new build.)
+- **Build page (bookmark this):**
+  https://expo.dev/accounts/alexstorybloom/projects/Storybloom/builds/affd14bc-ea5f-40b0-8f4c-6f671b525ace
+  Refresh that page (or run `npx eas-cli build:view affd14bc-ea5f-40b0-8f4c-6f671b525ace`,
+  needs `npx eas-cli login` or `EXPO_TOKEN` set first) to see live status:
+  `in queue` → `in progress` → `finished`.
+- **Once status is `finished`**, that same page shows a QR code and a direct
+  `.apk` download link ("Application Archive URL" in the CLI output). Install with
+  **either**:
+  - **On-phone:** open that build page's URL (or scan its QR) directly on the
+    Android phone → tap the download → tap the downloaded APK → allow "install
+    from this source" if prompted → Install.
+  - **From this PC via adb** (phone already shows up in `adb devices`):
+    ```bash
+    curl -L -o storybloom-dev.apk "<Application Archive URL from the build page>"
+    adb install -r storybloom-dev.apk
+    ```
+    `-r` reinstalls over the existing dev-client app without wiping its data.
+- **After installing**, run `npx expo start --dev-client` and open the app —
+  it connects to Metro the same way as before (USB: `adb reverse tcp:8081
+  tcp:8081` then use `localhost:8081` in the dev-client's connect screen;
+  Wi-Fi: scan the Metro QR). All JS-only work merged after this build
+  (speech recognition wiring, Reader button layout) hot-reloads automatically
+  once connected — no second install needed for those.
 - **Rebuild the dev client only after native changes** (Kotlin, gradle,
-  `app.json` plugins/permissions, new native npm deps). Everything shipped
-  this round was JS + bundled assets only — no rebuild was needed, just
-  reload over Metro (`npx expo start --dev-client`).
+  `app.json` plugins/permissions, new native npm deps). Everything else ships
+  as JS + bundled assets and just needs a Metro reload.
 
 ---
 
