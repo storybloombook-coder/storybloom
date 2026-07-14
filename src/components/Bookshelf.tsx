@@ -20,14 +20,17 @@
 // it's the axis that matters for left-right tilt) and the shelf's own
 // "gravity" tilts with it — past a deadzone, books slide toward the low side
 // and pile against the wall through the same collision system as a drag.
+// Shake the phone hard enough (a sudden jolt in total acceleration) and the
+// whole shelf mixes itself up — randomized order, each spine kicked outward
+// so they tumble into place rather than silently snapping.
 // NEEDS A NEW DEV-CLIENT BUILD — expo-sensors is a native module not present
 // in the currently-installed dev-client APK. A static `import` of it crashes
 // the WHOLE APP at launch (the package touches a native module eagerly at
-// import time), so it's required defensively below and the tilt feature just
-// stays inert (gravity = 0) until a build that actually links it exists.
+// import time), so it's required defensively below and both features just
+// stay inert until a build that actually links it exists.
 
 import * as Haptics from 'expo-haptics';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -84,6 +87,14 @@ const TILT_UPDATE_MS = 80;
 // the physics loop (and its battery cost) running permanently. Above it, a
 // deliberate tilt is unambiguous.
 const TILT_DEADZONE = 0.12;
+
+// Shake-to-mix: a sudden jolt in total acceleration (not just tilt) shuffles
+// the whole shelf, same physics as everything else — a randomized order plus
+// an outward velocity kick per spine so they visibly tumble before settling,
+// rather than silently snapping to a new arrangement.
+const SHAKE_DELTA = 1.8; // jump in |acceleration| (g) between readings
+const SHAKE_DEBOUNCE_MS = 1200;
+const SHAKE_KICK = 220;
 
 /** Deterministic, distinct-enough hue per book id — there's no real spine
  *  artwork, so color is how spines read as different books. */
@@ -257,15 +268,53 @@ export default function Bookshelf({
     slotShared.value = spineWidth + SPINE_GAP;
   }, [spineWidth, slotShared]);
 
-  // Tilt the phone, tilt the shelf's gravity. Accelerometer updates land on
-  // the JS thread; writing a shared value from there is fine — the physics
-  // loop just reads whatever it last saw. No-ops (gravity stays 0) until a
-  // dev-client build actually links expo-sensors.
+  const lastMagnitude = useRef(1);
+  const lastShakeAt = useRef(0);
+
+  /** Randomize the shelf order and give every spine an outward velocity kick
+   *  so they visibly tumble into their new slots instead of silently
+   *  snapping — then persist the new order like a drag would. */
+  function shuffleShelf() {
+    const len = xs.value.length;
+    if (len < 2) return;
+    const shuffled = order.value.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = shuffled[i];
+      shuffled[i] = shuffled[j];
+      shuffled[j] = tmp;
+    }
+    order.value = shuffled;
+    const kicked = vxs.value.slice();
+    for (let i = 0; i < len; i++) kicked[i] = (Math.random() - 0.5) * 2 * SHAKE_KICK;
+    vxs.value = kicked;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+    handleReordered(shuffled);
+  }
+
+  // Tilt the phone, tilt the shelf's gravity; shake it hard enough and the
+  // whole shelf mixes itself up. Accelerometer updates land on the JS thread;
+  // writing a shared value from there is fine — the physics loop just reads
+  // whatever it last saw. No-ops until a dev-client build actually links
+  // expo-sensors.
   useEffect(() => {
     if (!Accelerometer) return;
     Accelerometer.setUpdateInterval(TILT_UPDATE_MS);
-    const sub = Accelerometer.addListener(({ x }) => {
+    const sub = Accelerometer.addListener(({ x, y, z }) => {
       tiltX.value = x;
+
+      const magnitude = Math.sqrt(x * x + y * y + z * z);
+      const delta = Math.abs(magnitude - lastMagnitude.current);
+      lastMagnitude.current = magnitude;
+      const now = Date.now();
+      if (
+        delta > SHAKE_DELTA &&
+        now - lastShakeAt.current > SHAKE_DEBOUNCE_MS &&
+        draggingIndex.value === -1
+      ) {
+        lastShakeAt.current = now;
+        shuffleShelf();
+      }
     });
     return () => sub.remove();
   }, [tiltX]);
