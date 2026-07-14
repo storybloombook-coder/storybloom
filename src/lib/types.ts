@@ -40,8 +40,12 @@ export interface Book {
   source: BookSource;
   /** Language the parent selected at upload time. */
   language: BookLanguage;
-  /** Parent starred this book — surfaced in the library's Favorites filter. */
+  /** Parent starred this book — surfaced in the library's Favorites filter
+   *  and the bookshelf. */
   isFavorite: boolean;
+  /** Left-to-right position on the favorites bookshelf. Null until first
+   *  favorited (sorts after any set position — joins at the shelf's right end). */
+  shelfPosition: number | null;
 }
 
 export interface Page {

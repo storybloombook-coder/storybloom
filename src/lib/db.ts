@@ -52,6 +52,7 @@ export async function createBook(params: {
     source: params.source,
     language: params.language,
     isFavorite: false,
+    shelfPosition: null,
   };
   await db.runAsync(
     `INSERT INTO books (id, title, isbn, cover_image_path, created_at, prep_status, has_dialogue, review_status, source, language, is_favorite)
@@ -73,10 +74,34 @@ export async function createBook(params: {
   return book;
 }
 
-/** Star / unstar a book (library Favorites filter). */
+/** Star / unstar a book (library Favorites filter + bookshelf). Starring for
+ *  the first time appends it to the right end of the shelf; unstarring clears
+ *  its shelf position so a later re-favorite appends fresh rather than
+ *  reclaiming a stale slot. */
 export async function setBookFavorite(bookId: string, isFavorite: boolean): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('UPDATE books SET is_favorite = ? WHERE id = ?', [isFavorite ? 1 : 0, bookId]);
+  const flag = isFavorite ? 1 : 0;
+  await db.runAsync(
+    `UPDATE books SET is_favorite = ?, shelf_position = CASE
+       WHEN ? = 1 AND shelf_position IS NULL
+         THEN (SELECT COALESCE(MAX(shelf_position), -1) + 1 FROM books WHERE is_favorite = 1)
+       WHEN ? = 0 THEN NULL
+       ELSE shelf_position
+     END
+     WHERE id = ?`,
+    [flag, flag, flag, bookId]
+  );
+}
+
+/** Persist a new left-to-right shelf order after a drag (bookIds already in
+ *  the desired order). Writes every position in one transaction. */
+export async function updateShelfOrder(bookIds: string[]): Promise<void> {
+  const db = await getDatabase();
+  await db.withTransactionAsync(async () => {
+    for (let i = 0; i < bookIds.length; i++) {
+      await db.runAsync('UPDATE books SET shelf_position = ? WHERE id = ?', [i, bookIds[i]]);
+    }
+  });
 }
 
 /** Rename a book. */
@@ -245,6 +270,7 @@ type BookRow = {
   source: BookSource;
   language: BookLanguage;
   is_favorite: number;
+  shelf_position: number | null;
 };
 
 function rowToBook(row: BookRow): Book {
@@ -260,6 +286,7 @@ function rowToBook(row: BookRow): Book {
     source: row.source,
     language: row.language,
     isFavorite: row.is_favorite === 1,
+    shelfPosition: row.shelf_position,
   };
 }
 

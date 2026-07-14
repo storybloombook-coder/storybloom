@@ -22,6 +22,7 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Bookshelf from '../components/Bookshelf';
 import TactileButton from '../components/TactileButton';
 import {
   deleteBook,
@@ -30,6 +31,7 @@ import {
   listBookSummaries,
   setBookFavorite,
   updateBookReviewStatus,
+  updateShelfOrder,
   type BookSummary,
 } from '../lib/db';
 import {
@@ -66,6 +68,9 @@ function formatDate(ms: number): string {
 
 /** Fraction of the card width the row slides open to reveal a swipe action. */
 const REVEAL_FRACTION = 0.2;
+/** How long a touch must hold before the bin/approve action is allowed to
+ *  start appearing — avoids a flash on a light touch or a scroll's first ms. */
+const REVEAL_DELAY_MS = 140;
 
 /** A library row you swipe to reveal an action: LEFT reveals a delete bin
  *  (right side), RIGHT reveals a "mark approved" ✓ (left side). It slides ~20%
@@ -87,17 +92,34 @@ function SwipeableRow({
   // -1 left-open / 0 closed / 1 right-open — so we buzz once each time the
   // slide crosses into a new zone, not every frame.
   const zone = useSharedValue(0);
+  // Timestamp the finger touched down — the bin/approve reveal stays hidden
+  // for REVEAL_DELAY_MS after this, so a light touch or the very start of a
+  // scroll doesn't flash the action before a real slide is underway.
+  const touchedAt = useSharedValue(0);
   const [revealW, setRevealW] = useState(0);
   const [open, setOpen] = useState(false);
 
   const setOpenJS = (v: boolean) => setOpen(v);
-  const tick = () => {
+  const touchTick = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  };
+  const tick = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   };
 
   const pan = Gesture.Pan()
     .activeOffsetX([-12, 12])
     .failOffsetY([-12, 12])
+    .onBegin(() => {
+      // Fires on first touch, before horizontal/vertical is even decided —
+      // the earliest possible moment to hint "this can slide". Only reset the
+      // reveal-delay clock for a FRESH swipe (row currently closed) — touching
+      // an already-open row must not make its visible action flash away.
+      if (zone.value === 0) {
+        touchedAt.value = Date.now();
+      }
+      runOnJS(touchTick)();
+    })
     .onStart(() => {
       startX.value = translateX.value;
     })
@@ -125,14 +147,17 @@ function SwipeableRow({
 
   const cardStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }] }));
   // Keep each action hidden at rest (the card dims to 0.7 opacity on press,
-  // which would otherwise let it peek through) — fade in over the first few
-  // pixels of a slide in that direction.
-  const binStyle = useAnimatedStyle(() => ({
-    opacity: Math.min(1, Math.max(0, -translateX.value / 8)),
-  }));
-  const approveStyle = useAnimatedStyle(() => ({
-    opacity: Math.min(1, Math.max(0, translateX.value / 8)),
-  }));
+  // which would otherwise let it peek through), AND for the first
+  // REVEAL_DELAY_MS of any touch — only after that does it fade in over the
+  // next few pixels of an actual slide in that direction.
+  const binStyle = useAnimatedStyle(() => {
+    const delayed = Date.now() - touchedAt.value < REVEAL_DELAY_MS;
+    return { opacity: delayed ? 0 : Math.min(1, Math.max(0, -translateX.value / 8)) };
+  });
+  const approveStyle = useAnimatedStyle(() => {
+    const delayed = Date.now() - touchedAt.value < REVEAL_DELAY_MS;
+    return { opacity: delayed ? 0 : Math.min(1, Math.max(0, translateX.value / 8)) };
+  });
 
   const close = () => {
     translateX.value = withSpring(0, { damping: 22, stiffness: 220 });
@@ -201,6 +226,9 @@ export default function LibraryScreen() {
 
   const favoriteCount = books.filter((b) => b.isFavorite).length;
   const visibleBooks = favoritesOnly ? books.filter((b) => b.isFavorite) : books;
+  const shelfBooks = books
+    .filter((b) => b.isFavorite)
+    .sort((a, b) => (a.shelfPosition ?? Infinity) - (b.shelfPosition ?? Infinity));
 
   const load = useCallback(async () => {
     const [summaries, allPages, allCues] = await Promise.all([
@@ -263,6 +291,18 @@ export default function LibraryScreen() {
 
   function openBook(book: BookSummary) {
     router.push({ pathname: '/book/[id]', params: { id: book.id } });
+  }
+
+  async function handleShelfReorder(orderedIds: string[]) {
+    // Optimistic: stamp the new shelfPosition locally so a re-render (e.g.
+    // pull-to-refresh) doesn't briefly show the pre-drag order.
+    const rank = new Map(orderedIds.map((id, i) => [id, i]));
+    setBooks((prev) => prev.map((b) => (rank.has(b.id) ? { ...b, shelfPosition: rank.get(b.id)! } : b)));
+    try {
+      await updateShelfOrder(orderedIds);
+    } catch {
+      await load();
+    }
   }
 
   async function toggleFavorite(book: BookSummary) {
@@ -353,11 +393,24 @@ export default function LibraryScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={subColor} />
           }
           ListHeaderComponent={
-            <Text style={[styles.count, { color: subColor }]}>
-              {favoritesOnly
-                ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
-                : `${books.length} book${books.length === 1 ? '' : 's'}${favoriteCount > 0 ? ` · ${favoriteCount} ★` : ''}`}
-            </Text>
+            <>
+              {!favoritesOnly && shelfBooks.length > 0 && (
+                <Bookshelf
+                  // Remount (fresh physics arrays, correctly sized) only when
+                  // the SET of favorited ids changes — order-independent, so
+                  // persisting a drag's new order doesn't itself reset it.
+                  key={shelfBooks.map((b) => b.id).slice().sort().join(',')}
+                  books={shelfBooks}
+                  onOpen={openBook}
+                  onReorder={handleShelfReorder}
+                />
+              )}
+              <Text style={[styles.count, { color: subColor }]}>
+                {favoritesOnly
+                  ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
+                  : `${books.length} book${books.length === 1 ? '' : 's'}${favoriteCount > 0 ? ` · ${favoriteCount} ★` : ''}`}
+              </Text>
+            </>
           }
           renderItem={({ item }) => {
             const status = STATUS[item.prepStatus];

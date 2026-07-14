@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS books (
   review_status  TEXT NOT NULL DEFAULT 'unreviewed',
   source         TEXT NOT NULL DEFAULT 'photos',
   language       TEXT NOT NULL DEFAULT 'en',
-  is_favorite    INTEGER NOT NULL DEFAULT 0
+  is_favorite    INTEGER NOT NULL DEFAULT 0,
+  -- Left-to-right position on the favorites bookshelf. Null until a book is
+  -- first favorited; NULLs sort after any set position (see listBookSummaries)
+  -- so a newly-favorited book joins at the shelf's right end.
+  shelf_position INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pages (
@@ -113,6 +117,18 @@ async function migrateSchema(db: any): Promise<void> {
   if (!bookCols.some((c) => c.name === 'is_favorite')) {
     await db.execAsync('ALTER TABLE books ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0');
   }
+  if (!bookCols.some((c) => c.name === 'shelf_position')) {
+    await db.execAsync('ALTER TABLE books ADD COLUMN shelf_position INTEGER');
+    // Backfill: books already favorited before this column existed get a
+    // stable position now (oldest-favorited first) instead of sitting at
+    // NULL indefinitely.
+    const alreadyFavorited: Array<{ id: string }> = await db.getAllAsync(
+      'SELECT id FROM books WHERE is_favorite = 1 ORDER BY created_at ASC'
+    );
+    for (let i = 0; i < alreadyFavorited.length; i++) {
+      await db.runAsync('UPDATE books SET shelf_position = ? WHERE id = ?', [i, alreadyFavorited[i].id]);
+    }
+  }
 
   const cueCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(cues)');
   const cueColNames = new Set(cueCols.map((c) => c.name));
@@ -151,6 +167,7 @@ export function parseStringArray(raw: string | null | undefined): string[] {
 export const BOOK_COLUMNS = [
   "id", "title", "isbn", "cover_image_path", "created_at",
   "prep_status", "has_dialogue", "review_status", "source", "language", "is_favorite",
+  "shelf_position",
 ] as const;
 
 export const PAGE_COLUMNS = [
