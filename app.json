@@ -43,6 +43,7 @@
       ],
       "expo-sqlite",
       "expo-audio",
+      "expo-sensors",
       [
         "react-native-vosk",
         {
