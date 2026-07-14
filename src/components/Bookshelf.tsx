@@ -92,7 +92,7 @@ const TILT_DEADZONE = 0.12;
 // the whole shelf, same physics as everything else — a randomized order plus
 // an outward velocity kick per spine so they visibly tumble before settling,
 // rather than silently snapping to a new arrangement.
-const SHAKE_DELTA = 1.8; // jump in |acceleration| (g) between readings
+const SHAKE_DELTA = 1.0; // jump in |acceleration| (g) between readings
 const SHAKE_DEBOUNCE_MS = 1200;
 const SHAKE_KICK = 220;
 
@@ -365,10 +365,15 @@ export default function Bookshelf({
       }
       const rank = ord.indexOf(i);
       const homeX = rank * slot;
-      const springForce = (homeX - nextXs[i]) * STIFFNESS;
+      // While gravity is active, the home-slot spring is switched off entirely
+      // — at STIFFNESS=90 it was strong enough to cancel out any realistic
+      // GRAVITY_STRENGTH, capping tilt displacement at a few invisible pixels.
+      // Real tilt behavior needs gravity to actually win: books slide freely
+      // until the wall or a neighbor (the collision pass below) stops them,
+      // same as a real object on a tilted shelf. The spring only resumes once
+      // the phone is leveled again, pulling everything back to its rank slot.
+      const springForce = gravity === 0 ? (homeX - nextXs[i]) * STIFFNESS : 0;
       const dampingForce = -nextVxs[i] * DAMPING;
-      // Tilt the phone hard enough and gravity overpowers the spring — books
-      // slide off their slot and pile against the low-side wall.
       nextVxs[i] += (springForce + dampingForce + gravity) * dt;
       nextXs[i] += nextVxs[i] * dt;
     }
