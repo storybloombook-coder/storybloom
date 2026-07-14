@@ -1,7 +1,7 @@
 import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -30,7 +30,6 @@ import { SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
 import {
   createCue,
   createPage,
-  deleteBook,
   deletePage,
   getBook,
   getCuesForBook,
@@ -40,6 +39,7 @@ import {
   updateBookTitle,
   updatePagePrepResult,
 } from '../../lib/db';
+import { checkReadiness, warningLabel } from '../../lib/reader/readiness';
 import type { Book, Cue, Page } from '../../lib/types';
 import { createVisionProvider } from '../../lib/vision';
 
@@ -109,6 +109,7 @@ export default function BookDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [warningsOpen, setWarningsOpen] = useState(false);
 
   async function saveTitle() {
     if (!book) return;
@@ -154,9 +155,11 @@ export default function BookDetailScreen() {
     setLoading(false);
   }, [bookId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   useEffect(() => {
     itemHeights.value = new Array(pages.length).fill(0);
@@ -344,27 +347,6 @@ export default function BookDetailScreen() {
     await load();
   }
 
-  function confirmDelete() {
-    if (!book) return;
-    Alert.alert('Delete book?', `"${book.title}" and its pages will be permanently removed.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteBook(book.id);
-          try {
-            const dir = new Directory(Paths.document, 'books', book.id);
-            if (dir.exists) dir.delete();
-          } catch {
-            // Non-fatal — rows are gone; a leftover folder is harmless.
-          }
-          router.back();
-        },
-      },
-    ]);
-  }
-
   if (loading) {
     return (
       <SafeAreaView style={[styles.safeArea, styles.center, { backgroundColor }]}>
@@ -386,6 +368,8 @@ export default function BookDetailScreen() {
   const status = STATUS[book.prepStatus];
   const storyPages = pages.filter((p) => p.pageType === 'story' || p.pageType === 'illustration_only');
   const totalCues = [...cuesByPage.values()].reduce((n, arr) => n + arr.length, 0);
+  const readiness = checkReadiness(pages, cuesByPage);
+  const canRead = storyPages.length > 0;
 
   const AmbientChip = ({ active }: { active: boolean }) => (
     <View style={[styles.chip, styles.ambientChip, { backgroundColor: chipBackground }]}>
@@ -407,7 +391,7 @@ export default function BookDetailScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
       <Stack.Screen options={{ headerShown: true, title: book.title }} />
 
-      <ScrollView contentContainerStyle={styles.list}>
+      <ScrollView contentContainerStyle={[styles.list, { paddingBottom: 150 }]}>
         <View style={styles.header}>
           <Pressable
             onPress={() => {
@@ -507,13 +491,66 @@ export default function BookDetailScreen() {
             </TactileButton>
           </View>
         </View>
-
-        <TactileButton style={styles.deleteButton} onPress={confirmDelete}>
-          <Text style={styles.deleteLabel}>Delete book</Text>
-        </TactileButton>
       </ScrollView>
 
       <TrashBin draggingIndex={draggingIndex} binHover={binHover} />
+
+      {/* Pre-flight gate + the primary "Read" action, pinned bottom (thumb). */}
+      <View style={[styles.readBar, { backgroundColor, borderTopColor: chipBackground }]}>
+        {warningsOpen && readiness.warnings.length > 0 && (
+          <View style={[styles.warnPanel, { backgroundColor: cardBackground }]}>
+            <ScrollView style={{ maxHeight: 180 }}>
+              {readiness.warnings.map((w, i) => (
+                <Pressable
+                  key={`${w.pageId}-${w.kind}-${i}`}
+                  style={styles.warnRow}
+                  onPress={() => {
+                    setWarningsOpen(false);
+                    router.push({ pathname: '/page/[id]', params: { id: w.pageId } });
+                  }}
+                >
+                  <Text style={[styles.warnText, { color: textColor }]}>{warningLabel(w)}</Text>
+                  <Text style={[styles.chevron, { color: subColor }]}>›</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+        <View style={styles.readBarRow}>
+          <Pressable
+            style={styles.readStatus}
+            disabled={readiness.warnings.length === 0}
+            onPress={() => setWarningsOpen((v) => !v)}
+          >
+            {readiness.ready ? (
+              <>
+                <Text style={styles.readStatusIcon}>✅</Text>
+                <Text style={[styles.readStatusText, { color: '#2fb344' }]} numberOfLines={2}>
+                  Ready · {readiness.storyPageCount} page{readiness.storyPageCount === 1 ? '' : 's'} ·{' '}
+                  {readiness.soundCount} sound{readiness.soundCount === 1 ? '' : 's'}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.readStatusIcon}>{warningsOpen ? '▾' : '⚠️'}</Text>
+                <Text style={[styles.readStatusText, { color: '#e8a33d' }]} numberOfLines={2}>
+                  {readiness.warnings.length} thing{readiness.warnings.length === 1 ? '' : 's'} to check
+                </Text>
+              </>
+            )}
+          </Pressable>
+          <TactileButton
+            style={[styles.readButton, { opacity: canRead ? 1 : 0.4 }]}
+            onPress={() => {
+              if (!canRead) return;
+              setWarningsOpen(false);
+              router.push({ pathname: '/read/[id]', params: { id: book.id } });
+            }}
+          >
+            <Text style={styles.readButtonLabel}>▶  Read</Text>
+          </TactileButton>
+        </View>
+      </View>
 
       <PhotoEditor
         visible={editingSource !== null}
@@ -568,6 +605,40 @@ const styles = StyleSheet.create({
 
   list: { padding: 16, gap: PAGE_LIST_GAP },
   header: { marginBottom: 8, gap: 6 },
+
+  readBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  warnPanel: { borderRadius: 12, marginBottom: 10, overflow: 'hidden' },
+  warnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(127,127,127,0.2)',
+  },
+  warnText: { flex: 1, fontSize: 14, marginRight: 8 },
+  readBarRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  readStatus: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  readStatusIcon: { fontSize: 18 },
+  readStatusText: { flex: 1, fontSize: 14, fontWeight: '700' },
+  readButton: {
+    backgroundColor: '#2fb344',
+    borderRadius: 14,
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    alignItems: 'center',
+  },
+  readButtonLabel: { color: '#fff', fontSize: 17, fontWeight: '800' },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   bookTitle: { flex: 1, fontSize: 24, fontWeight: '800' },
   titleEdit: { fontSize: 15, opacity: 0.7 },
@@ -609,15 +680,6 @@ const styles = StyleSheet.create({
   squareButtonEmoji: { fontSize: 34 },
   squareButtonLabel: { fontSize: 16, fontWeight: '700', textAlign: 'center' },
   squareButtonCaption: { fontSize: 12, fontWeight: '400', textAlign: 'center', textTransform: 'lowercase' },
-
-  deleteButton: {
-    marginTop: 8,
-    borderRadius: 12,
-    paddingVertical: 15,
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,69,58,0.12)',
-  },
-  deleteLabel: { color: '#ff453a', fontSize: 16, fontWeight: '600' },
 
   processingOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
   processingCard: { borderRadius: 16, padding: 28, alignItems: 'center', gap: 14, minWidth: 240 },

@@ -1,0 +1,366 @@
+// read/[id].tsx — the Reader. Press ▶ Read on a book and this plays it back one
+// page at a time: the page's ambient bed fades in and loops automatically, and
+// the parent (or child) taps a highlighted word to fire its sound. Manual
+// "Next / Back" page turns. Hands-free firing as the parent reads aloud is a
+// later milestone (Vosk speech alignment) that drops in behind this same UI.
+//
+// The first read-through also doubles as verification — reaching the end offers
+// "Looks good ✓", which marks the book reviewStatus = 'approved'.
+
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import TactileButton from '../../components/TactileButton';
+import { playFull, playLooping, playRange } from '../../lib/audio/playRange';
+import { resolveSoundSource } from '../../lib/audio/soundResolver';
+import { getBook, getCuesForBook, getPagesForBook, updateBookReviewStatus } from '../../lib/db';
+import { cueAtRange, tokenize } from '../../lib/reader/text';
+import { isReadablePage, type Book, type Cue, type Page } from '../../lib/types';
+
+type Player = ReturnType<typeof createAudioPlayer>;
+
+export default function ReaderScreen() {
+  const params = useLocalSearchParams<{ id: string }>();
+  const bookId = Array.isArray(params.id) ? params.id[0] : params.id;
+
+  const isDark = useColorScheme() === 'dark';
+  const textColor = isDark ? '#fff' : '#000';
+  const subColor = isDark ? '#9a9a9e' : '#6b6b70';
+  const backgroundColor = isDark ? '#000' : '#fff';
+  const cardBackground = isDark ? '#141416' : '#f4f4f6';
+
+  const [book, setBook] = useState<Book | null>(null);
+  const [storyPages, setStoryPages] = useState<Page[]>([]);
+  const [cuesByPage, setCuesByPage] = useState<Map<string, Cue[]>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [index, setIndex] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const [approved, setApproved] = useState(false);
+  // Which token is mid-press / mid-play, for a quick visual pop on tap.
+  const [firingToken, setFiringToken] = useState<number | null>(null);
+
+  const ambientPlayerRef = useRef<Player | null>(null);
+  const ambientStopRef = useRef<(() => void) | null>(null);
+  const cuePlayerRef = useRef<Player | null>(null);
+  const cueStopRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [b, ps, cs] = await Promise.all([
+        getBook(bookId),
+        getPagesForBook(bookId),
+        getCuesForBook(bookId),
+      ]);
+      if (cancelled) return;
+      const story = ps.filter(isReadablePage).sort((a, b) => a.pageNumber - b.pageNumber);
+      const map = new Map<string, Cue[]>();
+      for (const c of cs) {
+        const arr = map.get(c.pageId) ?? [];
+        arr.push(c);
+        map.set(c.pageId, arr);
+      }
+      setBook(b);
+      setStoryPages(story);
+      setCuesByPage(map);
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
+  const stopAmbient = useCallback(() => {
+    ambientStopRef.current?.();
+    ambientStopRef.current = null;
+    const p = ambientPlayerRef.current;
+    ambientPlayerRef.current = null;
+    // Let the fade-out finish before freeing the native player.
+    if (p) setTimeout(() => {
+      try {
+        p.remove();
+      } catch {}
+    }, 700);
+  }, []);
+
+  const stopCue = useCallback(() => {
+    cueStopRef.current?.();
+    cueStopRef.current = null;
+    const p = cuePlayerRef.current;
+    cuePlayerRef.current = null;
+    if (p) setTimeout(() => {
+      try {
+        p.remove();
+      } catch {}
+    }, 120);
+  }, []);
+
+  // Start (and, on change, stop) the current page's ambient bed.
+  useEffect(() => {
+    if (loading || finished) return;
+    const page = storyPages[index];
+    if (!page) return;
+    const source = page.ambientSoundId ? resolveSoundSource(page.ambientSoundId) : null;
+    if (source) {
+      const player = createAudioPlayer(source);
+      ambientPlayerRef.current = player;
+      if (page.ambientEndMs != null) {
+        // A parent's custom recording with a trim window — play that range once.
+        ambientStopRef.current = playRange(player, {
+          startSec: (page.ambientStartMs ?? 0) / 1000,
+          endSec: page.ambientEndMs / 1000,
+          fadeInSec: (page.ambientFadeInMs ?? 0) / 1000,
+          fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000,
+        });
+      } else {
+        ambientStopRef.current = playLooping(player, { fadeInSec: 0.6, fadeOutSec: 0.5 });
+      }
+    }
+    return () => {
+      stopAmbient();
+      stopCue();
+    };
+  }, [index, loading, finished, storyPages, stopAmbient, stopCue]);
+
+  // Safety net on unmount.
+  useEffect(
+    () => () => {
+      stopAmbient();
+      stopCue();
+    },
+    [stopAmbient, stopCue]
+  );
+
+  function fireCue(cue: Cue, tokenIndex: number) {
+    if (!cue.soundId) return;
+    const source = resolveSoundSource(cue.soundId);
+    if (!source) return; // missing asset — the readiness gate flags these up front
+    stopCue();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setFiringToken(tokenIndex);
+    const player = createAudioPlayer(source);
+    cuePlayerRef.current = player;
+    const onEnd = () => {
+      cueStopRef.current = null;
+      setFiringToken((t) => (t === tokenIndex ? null : t));
+    };
+    if (cue.soundEndMs != null) {
+      cueStopRef.current = playRange(player, {
+        startSec: (cue.soundStartMs ?? 0) / 1000,
+        endSec: cue.soundEndMs / 1000,
+        fadeInSec: (cue.fadeInMs ?? 0) / 1000,
+        fadeOutSec: (cue.fadeOutMs ?? 0) / 1000,
+        onEnd,
+      });
+    } else {
+      // Library sound: play in full with a short fade in/out.
+      cueStopRef.current = playFull(player, { onEnd });
+    }
+  }
+
+  function goNext() {
+    stopCue();
+    if (index < storyPages.length - 1) {
+      setIndex((i) => i + 1);
+    } else {
+      setFinished(true);
+    }
+  }
+
+  function goPrev() {
+    stopCue();
+    if (index > 0) setIndex((i) => i - 1);
+  }
+
+  async function markApproved() {
+    if (!book) return;
+    await updateBookReviewStatus(book.id, 'approved');
+    setApproved(true);
+    router.back();
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <ActivityIndicator size="large" color="#2fb344" />
+      </SafeAreaView>
+    );
+  }
+
+  if (storyPages.length === 0) {
+    return (
+      <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <Text style={{ color: textColor, marginBottom: 16 }}>This book has no story pages to read.</Text>
+        <TactileButton style={[styles.secondaryBtn, { backgroundColor: cardBackground }]} onPress={() => router.back()}>
+          <Text style={[styles.secondaryLabel, { color: textColor }]}>Back</Text>
+        </TactileButton>
+      </SafeAreaView>
+    );
+  }
+
+  if (finished) {
+    return (
+      <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <Text style={styles.endEmoji}>🌸</Text>
+        <Text style={[styles.endTitle, { color: textColor }]}>The End</Text>
+        <Text style={[styles.endSub, { color: subColor }]}>
+          {book?.title ? `You finished “${book.title}.”` : 'You finished the book.'}
+        </Text>
+        <View style={styles.endActions}>
+          <TactileButton
+            style={[styles.endPrimary]}
+            onPress={markApproved}
+            disabled={approved}
+          >
+            <Text style={styles.endPrimaryLabel}>✓  Looks good</Text>
+          </TactileButton>
+          <TactileButton
+            style={[styles.secondaryBtn, { backgroundColor: cardBackground }]}
+            onPress={() => {
+              setFinished(false);
+              setIndex(0);
+            }}
+          >
+            <Text style={[styles.secondaryLabel, { color: textColor }]}>↻  Read again</Text>
+          </TactileButton>
+          <TactileButton style={[styles.secondaryBtn, { backgroundColor: cardBackground }]} onPress={() => router.back()}>
+            <Text style={[styles.secondaryLabel, { color: subColor }]}>Done</Text>
+          </TactileButton>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const page = storyPages[index];
+  const cues = cuesByPage.get(page.id) ?? [];
+  const tokens = tokenize(page.ocrText);
+  const isLast = index === storyPages.length - 1;
+
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor }]}>
+      <Stack.Screen options={{ headerShown: false }} />
+
+      <View style={styles.topBar}>
+        <Pressable hitSlop={12} onPress={() => router.back()}>
+          <Text style={[styles.exit, { color: subColor }]}>✕</Text>
+        </Pressable>
+        <Text style={[styles.pageCount, { color: subColor }]}>
+          Page {index + 1} of {storyPages.length}
+        </Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      <View style={styles.body}>
+        {page.imagePath ? (
+          <Image source={{ uri: page.imagePath }} style={styles.pageImage} contentFit="contain" transition={150} />
+        ) : null}
+
+        <ScrollView contentContainerStyle={styles.textWrap}>
+          {page.ocrText.trim() ? (
+            <Text style={[styles.flow, { color: textColor }]}>
+              {tokens.map((t, i) => {
+                if (t.isSpace) return <Text key={i}>{t.text}</Text>;
+                const cue = cueAtRange(cues, t.start, t.end);
+                const active = cue && cue.reviewState !== 'removed' && !!cue.soundId;
+                if (!active) return <Text key={i}>{t.text}</Text>;
+                const firing = firingToken === i;
+                return (
+                  <Text
+                    key={i}
+                    onPress={() => fireCue(cue!, i)}
+                    style={[
+                      styles.cueWord,
+                      {
+                        backgroundColor: firing ? 'rgba(32,138,239,0.6)' : 'rgba(32,138,239,0.28)',
+                        color: textColor,
+                      },
+                    ]}
+                  >
+                    {t.text}
+                  </Text>
+                );
+              })}
+            </Text>
+          ) : (
+            <Text style={[styles.noText, { color: subColor }]}>No text on this page — just turn the page.</Text>
+          )}
+          <Text style={[styles.hint, { color: subColor }]}>Tap a highlighted word to play its sound.</Text>
+        </ScrollView>
+      </View>
+
+      <View style={styles.footer}>
+        <TactileButton
+          style={[styles.navBack, { backgroundColor: cardBackground, opacity: index === 0 ? 0.4 : 1 }]}
+          onPress={goPrev}
+        >
+          <Text style={[styles.navBackLabel, { color: textColor }]}>← Back</Text>
+        </TactileButton>
+        <TactileButton style={styles.navNext} onPress={goNext}>
+          <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
+        </TactileButton>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  center: { alignItems: 'center', justifyContent: 'center', padding: 24 },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  exit: { fontSize: 22, fontWeight: '600' },
+  pageCount: { fontSize: 14, fontWeight: '700' },
+
+  body: { flex: 1 },
+  pageImage: { width: '100%', height: 220, marginBottom: 8 },
+  textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
+  flow: { fontSize: 22, lineHeight: 36 },
+  cueWord: { borderRadius: 5, overflow: 'hidden' },
+  noText: { fontSize: 16, fontStyle: 'italic', textAlign: 'center', marginTop: 30 },
+  hint: { fontSize: 13, textAlign: 'center', fontStyle: 'italic' },
+
+  footer: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 28,
+  },
+  navBack: { borderRadius: 14, paddingVertical: 16, paddingHorizontal: 22, alignItems: 'center', justifyContent: 'center' },
+  navBackLabel: { fontSize: 16, fontWeight: '700' },
+  navNext: {
+    flex: 1,
+    backgroundColor: '#2fb344',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navNextLabel: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
+  endEmoji: { fontSize: 52, marginBottom: 8 },
+  endTitle: { fontSize: 30, fontWeight: '800' },
+  endSub: { fontSize: 15, textAlign: 'center', marginTop: 8, marginBottom: 28 },
+  endActions: { alignSelf: 'stretch', gap: 12 },
+  endPrimary: { backgroundColor: '#2fb344', borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  endPrimaryLabel: { color: '#fff', fontSize: 17, fontWeight: '800' },
+  secondaryBtn: { borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+  secondaryLabel: { fontSize: 16, fontWeight: '700' },
+});

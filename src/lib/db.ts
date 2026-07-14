@@ -98,6 +98,14 @@ export async function setBookPrepStatus(
   ]);
 }
 
+export async function updateBookReviewStatus(
+  bookId: string,
+  reviewStatus: ReviewStatus
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE books SET review_status = ? WHERE id = ?', [reviewStatus, bookId]);
+}
+
 export async function createPage(params: {
   bookId: string;
   pageNumber: number;
@@ -399,6 +407,23 @@ export async function getCuesForBook(bookId: string): Promise<Cue[]> {
        ORDER BY p.page_number, c.char_start`,
     [bookId]
   );
+  return rows.map(rowToCue);
+}
+
+/** All pages across every book — for the library's per-book readiness check,
+ *  so it doesn't fan out one query per book. Ordered so a book's pages stay in
+ *  page order after grouping by bookId. */
+export async function getAllPages(): Promise<Page[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<PageRow>('SELECT * FROM pages ORDER BY book_id, page_number');
+  return rows.map(rowToPage);
+}
+
+/** All cues across every book — pairs with getAllPages() for the library
+ *  readiness check (group by pageId; page ids are globally unique). */
+export async function getAllCues(): Promise<Cue[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<CueRow>('SELECT * FROM cues');
   return rows.map(rowToCue);
 }
 
