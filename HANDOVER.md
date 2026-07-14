@@ -61,41 +61,46 @@ falling back.
 
 ---
 
-## Latest dev-client build
+## Latest dev-client build — ✅ FINISHED, already installed on the dev phone
 
 - **Why this build exists:** `expo-sensors` (Accelerometer) was added for the
   Bookshelf's tilt-gravity + shake-to-mix features (`da8b222`). That's a new
-  native module, so the previously-installed dev-client APK doesn't have it —
-  the app will crash with `Cannot find native module 'ExponentPedometer'` on
-  those features until this build is installed. (The code already guards this
-  with a `require()`/try-catch so the *rest* of the app doesn't crash even on
-  an old APK — only the tilt/shake bookshelf bits need the new build.)
-- **Build page (bookmark this):**
-  https://expo.dev/accounts/alexstorybloom/projects/Storybloom/builds/affd14bc-ea5f-40b0-8f4c-6f671b525ace
-  Refresh that page (or run `npx eas-cli build:view affd14bc-ea5f-40b0-8f4c-6f671b525ace`,
-  needs `npx eas-cli login` or `EXPO_TOKEN` set first) to see live status:
-  `in queue` → `in progress` → `finished`.
-- **Once status is `finished`**, that same page shows a QR code and a direct
-  `.apk` download link ("Application Archive URL" in the CLI output). Install with
-  **either**:
-  - **On-phone:** open that build page's URL (or scan its QR) directly on the
-    Android phone → tap the download → tap the downloaded APK → allow "install
-    from this source" if prompted → Install.
-  - **From this PC via adb** (phone already shows up in `adb devices`):
+  native module, so the previously-installed dev-client APK didn't have it —
+  the app would crash with `Cannot find native module 'ExponentPedometer'` on
+  those features without this build. (The code already guards this with a
+  `require()`/try-catch so the *rest* of the app doesn't crash even on an old
+  APK — only the tilt/shake bookshelf bits needed the new build.)
+- **Build:** https://expo.dev/accounts/alexstorybloom/projects/Storybloom/builds/affd14bc-ea5f-40b0-8f4c-6f671b525ace
+  (commit `6606763`, SDK 57, finished 2026-07-14).
+- **Direct APK download** (valid ~2 weeks from build date, then expires —
+  rebuild if it 404s):
+  https://expo.dev/artifacts/eas/xIoxT7uo2SGgnKH4bOjpShNtXp3CQfd744zEU5GocU4.apk
+- **To install on a phone that doesn't have it yet**, either:
+  - **On-phone:** open the build page URL above (or scan its QR) directly on
+    the Android phone → tap the download → tap the downloaded APK → allow
+    "install from this source" if prompted → Install.
+  - **From a PC via adb** (phone already shows up in `adb devices`):
     ```bash
-    curl -L -o storybloom-dev.apk "<Application Archive URL from the build page>"
+    curl -L -o storybloom-dev.apk "https://expo.dev/artifacts/eas/xIoxT7uo2SGgnKH4bOjpShNtXp3CQfd744zEU5GocU4.apk"
     adb install -r storybloom-dev.apk
     ```
-    `-r` reinstalls over the existing dev-client app without wiping its data.
+    `-r` reinstalls over an existing dev-client app without wiping its data.
+    (This is exactly how it was installed on the current dev phone.)
 - **After installing**, run `npx expo start --dev-client` and open the app —
-  it connects to Metro the same way as before (USB: `adb reverse tcp:8081
+  connects to Metro the same way as before (USB: `adb reverse tcp:8081
   tcp:8081` then use `localhost:8081` in the dev-client's connect screen;
-  Wi-Fi: scan the Metro QR). All JS-only work merged after this build
-  (speech recognition wiring, Reader button layout) hot-reloads automatically
-  once connected — no second install needed for those.
+  Wi-Fi: scan the Metro QR). All JS-only work merged after this build (speech
+  recognition wiring, Reader button layout) hot-reloads automatically once
+  connected — no second install needed for those.
 - **Rebuild the dev client only after native changes** (Kotlin, gradle,
   `app.json` plugins/permissions, new native npm deps). Everything else ships
   as JS + bundled assets and just needs a Metro reload.
+- **Still needs real-device verification:** the gyroscope tilt-gravity axis
+  mapping and shake-detection thresholds in `Bookshelf.tsx` were written on
+  best-guess reasoning, not yet confirmed on hardware. Try tilting the phone
+  left/right on the Library screen with a few favorited books — if books
+  slide the wrong direction, the fix is flipping the sign on the
+  accelerometer `x` reading in `Bookshelf.tsx`.
 
 ---
 
