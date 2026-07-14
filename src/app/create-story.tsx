@@ -201,11 +201,8 @@ export default function CreateStoryScreen() {
                 </View>
               </View>
 
-              <TactileButton
-                style={[styles.primaryButton, { backgroundColor: 'rgba(32,138,239,0.15)', borderWidth: 2, borderColor: '#208AEF' }]}
-                onPress={startStory}
-              >
-                <Text style={[styles.primaryButtonLabel, { color: '#208AEF' }]}>Start dictating</Text>
+              <TactileButton style={[styles.primaryButton, styles.dictateStartButton]} onPress={startStory}>
+                <Text style={[styles.primaryButtonLabel, styles.dictateStartLabel]}>🎙️ Start dictating</Text>
               </TactileButton>
             </View>
           )}
@@ -353,6 +350,15 @@ const styles = StyleSheet.create({
 
   primaryButton: { width: '100%', borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
   primaryButtonLabel: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  // The setup screen's dictate CTA: red, taller, with room to breathe above it.
+  dictateStartButton: {
+    marginTop: 24,
+    paddingVertical: 20,
+    backgroundColor: 'rgba(255,69,58,0.15)',
+    borderWidth: 2,
+    borderColor: '#ff453a',
+  },
+  dictateStartLabel: { color: '#ff453a', fontSize: 18 },
 
   smallBtn: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center' },
   smallBtnLabel: { fontSize: 14, fontWeight: '600' },
