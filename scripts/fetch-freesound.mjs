@@ -19,6 +19,10 @@ import { fileURLToPath } from 'url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FORCE = process.argv.includes('--force');
+// --only=<id>[,<id>] re-fetches just those ids (implies force for them) so a
+// single bad clip can be replaced without re-walking the whole library.
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').split('=')[1] || null;
+const ONLY_IDS = ONLY ? new Set(ONLY.split(',').map((s) => s.trim())) : null;
 
 // --- token from .env ---
 const env = readFileSync(join(ROOT, '.env'), 'utf8');
@@ -35,7 +39,10 @@ const idsOf = (name) => {
   return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
 };
 const AMBIENT_IDS = idsOf('AMBIENT_IDS');
-const EFFECT_IDS = idsOf('EFFECT_IDS');
+// EFFECT_IDS is derived (EFFECT_CATEGORIES.flatMap(...)), not a literal array,
+// so pull every fx_ id referenced anywhere in the file instead (TRIGGER_VOCAB
+// entries are a subset of EFFECT_CATEGORIES's, so the dedup set is exact).
+const EFFECT_IDS = [...new Set([...LIB.matchAll(/'(fx_[a-z0-9_]+)'/g)].map((m) => m[1]))];
 const VOICE_IDS = idsOf('VOICE_IDS');
 
 // --- search query per id ---
@@ -52,11 +59,11 @@ const Q = {
   fx_animal_horse: 'horse neigh', fx_animal_sheep: 'sheep baa', fx_animal_pig: 'pig oink', fx_animal_duck: 'duck quack',
   fx_animal_rooster: 'rooster crow', fx_animal_frog: 'frog croak', fx_animal_owl: 'owl hoot', fx_animal_lion: 'lion roar',
   fx_animal_elephant: 'elephant trumpet', fx_animal_monkey: 'monkey call', fx_animal_bee: 'bee buzz', fx_animal_wolf: 'wolf howl',
-  fx_animal_mouse: 'mouse squeak', fx_animal_goat: 'goat bleat', fx_animal_chicken: 'chicken cluck', fx_animal_snake: 'snake hiss',
+  fx_animal_mouse: 'mouse squeak', fx_animal_goat: 'goat bleat', fx_animal_chicken: 'chicken clucking', fx_animal_snake: 'snake hiss',
   fx_animal_cricket: 'cricket chirp', fx_animal_seagull: 'seagull call', fx_animal_whale: 'whale call',
   fx_animal_cat_purr: 'cat purr', fx_animal_horse_gallop: 'horse gallop hooves',
   // vehicles
-  fx_engine: 'car engine start', fx_car_horn: 'car horn honk', fx_train: 'train horn', fx_plane: 'airplane flyby',
+  fx_engine: 'car engine start', fx_car_pass: 'traffic passing by exterior', fx_car_horn: 'car horn honk', fx_train: 'train horn', fx_plane: 'airplane flyby',
   fx_helicopter: 'helicopter', fx_boat: 'boat horn', fx_siren: 'siren', fx_motorcycle: 'motorcycle engine',
   fx_bicycle_bell: 'bicycle bell', fx_rocket: 'rocket launch',
   // nature / weather
@@ -86,7 +93,9 @@ const Q = {
 };
 
 const folderOf = (id) => (id.startsWith('amb_') ? 'ambient' : id.startsWith('voice_') ? 'voices' : 'effects');
-const durationFilter = (id) => (id.startsWith('amb_') ? 'duration:[3 TO 40]' : 'duration:[0.2 TO 4]');
+// Effects widened from [0.2 TO 4] → [0.3 TO 6] so one-shots aren't clipped
+// unnaturally short (avoids the tiniest snippets, allows a fuller sound).
+const durationFilter = (id) => (id.startsWith('amb_') ? 'duration:[3 TO 40]' : 'duration:[0.3 TO 6]');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -95,7 +104,8 @@ async function fetchOne(id) {
   if (!query) return { id, status: 'no-query' };
   const folder = folderOf(id);
   const outMp3 = join(ROOT, 'assets', 'sounds', folder, `${id}.mp3`);
-  if (existsSync(outMp3) && !FORCE) return { id, status: 'exists' };
+  const forced = FORCE || (ONLY_IDS && ONLY_IDS.has(id));
+  if (existsSync(outMp3) && !forced) return { id, status: 'exists' };
 
   const filter = encodeURIComponent(`license:"Creative Commons 0" ${durationFilter(id)}`);
   const url = `https://freesound.org/apiv2/search/text/?query=${encodeURIComponent(query)}&filter=${filter}&fields=id,name,previews,license,username,duration&sort=score&page_size=5&token=${TOKEN}`;
@@ -154,7 +164,8 @@ ${lines}
   writeFileSync(join(ROOT, 'src', 'lib', 'audio', 'soundAssets.ts'), ts);
 }
 
-const ids = [...AMBIENT_IDS, ...EFFECT_IDS]; // voices skipped
+let ids = [...AMBIENT_IDS, ...EFFECT_IDS]; // voices skipped
+if (ONLY_IDS) ids = ids.filter((id) => ONLY_IDS.has(id));
 const credits = [];
 let ok = 0;
 const misses = [];

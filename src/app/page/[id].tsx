@@ -33,8 +33,18 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import PhotoEditor from '../../components/PhotoEditor';
 import TactileButton from '../../components/TactileButton';
-import { AMBIENT_IDS, EFFECT_IDS, SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
+import {
+  AMBIENT_IDS,
+  EFFECT_CATEGORIES,
+  EFFECT_IDS,
+  SCENE_VOCAB,
+  SOUND_ALLOWLISTS,
+  TRIGGER_VOCAB,
+  type TriggerEntry,
+} from '../../lib/ai/soundLibrary';
+import { playFull, playRange } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
+import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import {
   createCue,
   getBook,
@@ -61,33 +71,42 @@ function findRange(text: string, trigger: string): { start: number | null; end: 
   return { start: idx, end: idx + trigger.length };
 }
 
-/** Split into word/space tokens carrying their char offsets so we can map each
- *  word back to a cue's [charStart, charEnd). */
-interface Token {
-  text: string;
-  start: number;
-  end: number;
-  isSpace: boolean;
-}
-function tokenize(text: string): Token[] {
-  const tokens: Token[] = [];
-  let idx = 0;
-  for (const part of text.split(/(\s+)/)) {
-    if (part.length === 0) continue;
-    const start = idx;
-    idx += part.length;
-    tokens.push({ text: part, start, end: idx, isSpace: /^\s+$/.test(part) });
-  }
-  return tokens;
-}
-
-function cueAtRange(cues: Cue[], start: number, end: number): Cue | undefined {
-  return cues.find(
-    (c) => c.charStart != null && c.charEnd != null && start < c.charEnd && end > c.charStart
-  );
-}
 
 type PickerTarget = { mode: 'add'; token: Token } | { mode: 'change'; cue: Cue } | { mode: 'ambient' };
+
+/** The word/phrase a picker was opened for — drives its "Suggested" section. */
+function pickerQueryWord(p: PickerTarget | null): string {
+  if (!p) return '';
+  if (p.mode === 'add') return p.token.text;
+  if (p.mode === 'change') return p.cue.triggerText;
+  return '';
+}
+
+/** Sound ids whose trigger vocabulary relates to `word` — a looser, bidirectional
+ *  substring check (not the auto-matcher's strict whole-word rule), since this
+ *  only ranks manual suggestions and a false positive here is just a skippable
+ *  row, not a wrongly-fired sound. */
+function relatedSoundIds(word: string, vocab: TriggerEntry[], allow: string[]): Set<string> {
+  const w = word.trim().toLowerCase();
+  const ids = new Set<string>();
+  if (!w) return ids;
+  for (const entry of vocab) {
+    if (!allow.includes(entry.soundId)) continue;
+    if (entry.triggers.some((t) => w.includes(t) || t.includes(w))) ids.add(entry.soundId);
+  }
+  return ids;
+}
+
+/** Sound ids matching free-text search, by id or by trigger vocabulary. */
+function searchSoundIds(query: string, ids: string[], vocab: TriggerEntry[]): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return ids;
+  return ids.filter((id) => {
+    if (id.toLowerCase().includes(q)) return true;
+    const entry = vocab.find((e) => e.soundId === id);
+    return entry?.triggers.some((t) => t.includes(q)) ?? false;
+  });
+}
 /** What a word-tap is about: an existing cue, or a bare word with none yet. */
 type CueTarget = { cue: Cue } | { token: Token };
 /** What the record-your-own sheet is recording for: a word cue, or the
@@ -103,66 +122,6 @@ function isCustomSound(soundId: string | null): boolean {
 function soundLabel(soundId: string | null): string {
   if (!soundId) return 'no sound';
   return isCustomSound(soundId) ? '🎤 your recording' : soundId;
-}
-
-/** Plays [startSec, endSec) of `player`, ramping volume in/out over the given
- *  fade durations. expo-audio has no built-in "stop at time" / fade API, so
- *  this polls currentTime on an interval — fine for short sound-effect clips,
- *  and it's the ONE playback path used for both live preview and saved cues,
- *  so what you hear while recording is exactly what plays later. Returns a
- *  `stop()` handle so a caller can cancel playback early (a real stop, not a
- *  pause — the interval is torn down, so a later replay always restarts
- *  fresh from startSec rather than resuming mid-clip). */
-function playRange(
-  player: ReturnType<typeof createAudioPlayer>,
-  opts: {
-    startSec: number;
-    endSec: number;
-    fadeInSec: number;
-    fadeOutSec: number;
-    onTick?: (currentTime: number) => void;
-    onEnd?: () => void;
-  }
-): () => void {
-  const { startSec, endSec, fadeInSec, fadeOutSec, onTick, onEnd } = opts;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  player.volume = fadeInSec > 0 ? 0 : 1;
-  // The interval used to bail out early whenever `player.playing` read false,
-  // including checking it before play() had actually taken effect. That's a
-  // race, not a reliable signal — a player loading a file fresh from disk
-  // (as opposed to one just recorded, still warm) can take longer than one
-  // 50ms tick to flip `playing` true, and bailing out early left the fade-in
-  // ramp never applied — since fade-in defaults on, that meant total silence.
-  // `currentTime` reaching endSec is the only stop condition we actually
-  // need; a tick cap just guards against a genuinely stuck/failed player.
-  player.seekTo(startSec).then(() => {
-    player.play();
-    let ticks = 0;
-    timer = setInterval(() => {
-      ticks += 1;
-      const t = player.currentTime;
-      if (t >= endSec || ticks > 400) {
-        if (timer) clearInterval(timer);
-        player.pause();
-        onEnd?.();
-        return;
-      }
-      onTick?.(t);
-      const elapsed = t - startSec;
-      const remaining = endSec - t;
-      let vol = 1;
-      if (fadeInSec > 0 && elapsed < fadeInSec) vol = Math.max(0, elapsed / fadeInSec);
-      if (fadeOutSec > 0 && remaining < fadeOutSec) vol = Math.min(vol, Math.max(0, remaining / fadeOutSec));
-      player.volume = vol;
-    }, 50);
-  });
-
-  return () => {
-    if (timer) clearInterval(timer);
-    try {
-      player.pause();
-    } catch {}
-  };
 }
 
 /** Fixed number of bars the waveform always renders, regardless of how long
@@ -212,6 +171,27 @@ export default function PageEditorScreen() {
   const [wordSoundPlaying, setWordSoundPlaying] = useState(false);
   const activeWordSoundStopRef = useRef<(() => void) | null>(null);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  // Which library sound is previewing in the picker (its row shows Stop), plus
+  // a dedicated player so previewing never disturbs the ambient/word players.
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const previewStopRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    setPickerSearch('');
+    setExpandedCategories(new Set());
+    // Closing (or switching) the picker stops any in-progress preview.
+    stopPreview();
+  }, [picker]);
+  function toggleCategory(label: string) {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
   // Small action sheet for the page's single ambient bed — play / library /
   // record / remove, mirroring wordDetail's structure for word cues.
   const [ambientDetailOpen, setAmbientDetailOpen] = useState(false);
@@ -270,13 +250,22 @@ export default function PageEditorScreen() {
 
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const recorderState = useAudioRecorderState(recorder, 100);
+  const scrollRef = useRef<ScrollView>(null);
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  // Whether the ambient bed is currently previewing — drives the Play/Stop
+  // toggle in the ambient sheet. Ambient loops with no natural end, so without
+  // this there'd be no way to stop it.
+  const [ambientPlaying, setAmbientPlaying] = useState(false);
+  const ambientPreviewStopRef = useRef<(() => void) | null>(null);
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
 
   useEffect(() => {
     return () => {
       try {
         playerRef.current?.remove();
+      } catch {}
+      try {
+        previewPlayerRef.current?.remove();
       } catch {}
       recognizerRef.current?.unload().catch(() => {});
     };
@@ -369,26 +358,9 @@ export default function PageEditorScreen() {
         onEnd,
       });
     } else {
-      // Legacy custom sound recorded before trim/fade existed — no stored
-      // end point, so probe the clip's real duration once and play it in
-      // full through the same playRange path (keeps Stop/state handling
-      // unified instead of a second, untracked playback mechanism).
-      let tries = 0;
-      const waitForDuration = () => {
-        tries += 1;
-        if (player.duration > 0 || tries > 40) {
-          activeWordSoundStopRef.current = playRange(player, {
-            startSec: 0,
-            endSec: player.duration > 0 ? player.duration : 20,
-            fadeInSec: 0,
-            fadeOutSec: 0,
-            onEnd,
-          });
-        } else {
-          setTimeout(waitForDuration, 50);
-        }
-      };
-      waitForDuration();
+      // A library sound (or legacy custom sound with no stored end) — play it
+      // in full with a short fade in/out, through the same tracked path.
+      activeWordSoundStopRef.current = playFull(player, { onEnd });
     }
   }
 
@@ -546,11 +518,13 @@ export default function PageEditorScreen() {
   }
 
   function openAmbientLibraryPicker() {
+    stopAmbientPreview();
     setAmbientDetailOpen(false);
     setPicker({ mode: 'ambient' });
   }
 
   function openAmbientRecorder() {
+    stopAmbientPreview();
     setAmbientDetailOpen(false);
     setRecordTarget('ambient');
     setRecordedUri(null);
@@ -558,13 +532,70 @@ export default function PageEditorScreen() {
 
   async function removeAmbient() {
     if (!page) return;
+    stopAmbientPreview();
     await updatePageAmbient(page.id, null);
     setAmbientDetailOpen(false);
     await reload();
   }
 
+  function stopAmbientPreview() {
+    ambientPreviewStopRef.current?.();
+    ambientPreviewStopRef.current = null;
+    try {
+      playerRef.current?.pause();
+    } catch {}
+    setAmbientPlaying(false);
+  }
+
+  function stopPreview() {
+    previewStopRef.current?.();
+    previewStopRef.current = null;
+    const p = previewPlayerRef.current;
+    previewPlayerRef.current = null;
+    if (p) {
+      try {
+        p.remove();
+      } catch {}
+    }
+    setPreviewingId(null);
+  }
+
+  /** Play (or stop) a library sound from the picker, so a parent can hear a
+   *  sound before choosing it. Only one previews at a time. */
+  function togglePreview(id: string) {
+    if (previewingId === id) {
+      stopPreview();
+      return;
+    }
+    stopPreview();
+    const source = resolveSoundSource(id);
+    if (!source) {
+      setInfoModal({
+        emoji: '🔈',
+        title: 'No sound yet',
+        message: `"${id}" has no audio bundled yet.`,
+      });
+      return;
+    }
+    const player = createAudioPlayer(source);
+    previewPlayerRef.current = player;
+    setPreviewingId(id);
+    const onEnd = () => {
+      previewStopRef.current = null;
+      setPreviewingId((cur) => (cur === id ? null : cur));
+    };
+    // Play the whole clip with a short fade in/out (same path as a fired cue).
+    previewStopRef.current = playFull(player, { onEnd });
+  }
+
   function playAmbient() {
     if (!page?.ambientSoundId) return;
+    // Tapping the button again while it's playing stops it (looping ambient has
+    // no natural end, so this is the only way to stop the preview).
+    if (ambientPlaying) {
+      stopAmbientPreview();
+      return;
+    }
     try {
       playerRef.current?.remove();
     } catch {}
@@ -579,18 +610,28 @@ export default function PageEditorScreen() {
     }
     const player = createAudioPlayer(source);
     playerRef.current = player;
+    setAmbientPlaying(true);
     if (page.ambientEndMs != null) {
       // Custom recording with a trim window — play that range once.
-      playRange(player, {
+      ambientPreviewStopRef.current = playRange(player, {
         startSec: (page.ambientStartMs ?? 0) / 1000,
         endSec: page.ambientEndMs / 1000,
         fadeInSec: (page.ambientFadeInMs ?? 0) / 1000,
         fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000,
+        onEnd: () => {
+          ambientPreviewStopRef.current = null;
+          setAmbientPlaying(false);
+        },
       });
     } else {
-      // Ambient beds loop until the page changes / playback is stopped.
+      // Ambient beds loop until stopped (via the button, or closing the sheet).
       player.loop = true;
       player.play();
+      ambientPreviewStopRef.current = () => {
+        try {
+          player.pause();
+        } catch {}
+      };
     }
   }
 
@@ -722,6 +763,7 @@ export default function PageEditorScreen() {
 
   async function chooseSound(soundId: string) {
     if (!picker || !page) return;
+    stopPreview();
     if (picker.mode === 'ambient') {
       await updatePageAmbient(page.id, { soundId, startMs: null, endMs: null, fadeInMs: null, fadeOutMs: null });
     } else if (picker.mode === 'change') {
@@ -855,6 +897,41 @@ export default function PageEditorScreen() {
   const activeCueCount = cues.filter((c) => c.reviewState !== 'removed').length;
   const unplaced = cues.filter((c) => c.charStart == null && c.reviewState !== 'removed');
 
+  const pickerAllIds = picker?.mode === 'ambient' ? AMBIENT_IDS : EFFECT_IDS;
+  const pickerVocab = picker?.mode === 'ambient' ? SCENE_VOCAB : TRIGGER_VOCAB;
+  const pickerSearched = searchSoundIds(pickerSearch, pickerAllIds, pickerVocab);
+  const pickerSuggestedIds = relatedSoundIds(pickerQueryWord(picker), pickerVocab, pickerAllIds);
+  const pickerSuggested = pickerSearched.filter((id) => pickerSuggestedIds.has(id));
+  const pickerRest = pickerSearched.filter((id) => !pickerSuggestedIds.has(id));
+  const pickerSearching = pickerSearch.trim().length > 0;
+  // Ambient has no category tree (only 18 ids) — group the rest only for effects.
+  const pickerRestCategories =
+    picker && picker.mode !== 'ambient'
+      ? EFFECT_CATEGORIES.map((cat) => ({
+          label: cat.label,
+          ids: cat.ids.filter((id) => pickerRest.includes(id)),
+        })).filter((cat) => cat.ids.length > 0)
+      : null;
+
+  // One picker row: a preview Play/Stop button (hear it before choosing) plus
+  // the tappable label that actually assigns the sound.
+  const renderSoundRow = (id: string) => {
+    const kindIcon = picker?.mode === 'ambient' ? '🎵' : '🔊';
+    const previewing = previewingId === id;
+    return (
+      <View key={id} style={styles.soundRow}>
+        <Pressable hitSlop={8} style={styles.soundPreviewBtn} onPress={() => togglePreview(id)}>
+          <Text style={styles.soundPreviewIcon}>{previewing ? '⏹' : '▶️'}</Text>
+        </Pressable>
+        <Pressable style={styles.soundRowLabel} onPress={() => chooseSound(id)}>
+          <Text style={[styles.soundId, { color: textColor }]}>
+            {kindIcon} {id}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor }]}>
       <Stack.Screen options={{ headerShown: true, title: `Page ${page.pageNumber}` }} />
@@ -864,7 +941,11 @@ export default function PageEditorScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}
       >
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={[styles.content, editing && styles.contentEditing]}
+        keyboardShouldPersistTaps="handled"
+      >
         {page.imagePath ? (
           <Pressable onPress={() => setViewerOpen(true)}>
             <Image source={{ uri: page.imagePath }} style={styles.image} contentFit="contain" transition={120} />
@@ -940,6 +1021,7 @@ export default function PageEditorScreen() {
               style={[styles.input, { color: textColor, backgroundColor: inputBackground, borderColor: cardBackground }]}
               placeholder="Type the page's story text…"
               placeholderTextColor={subColor}
+              onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 250)}
             />
           </View>
         ) : (
@@ -1145,9 +1227,18 @@ export default function PageEditorScreen() {
         visible={ambientDetailOpen}
         transparent
         animationType="slide"
-        onRequestClose={() => setAmbientDetailOpen(false)}
+        onRequestClose={() => {
+          stopAmbientPreview();
+          setAmbientDetailOpen(false);
+        }}
       >
-        <Pressable style={styles.backdrop} onPress={() => setAmbientDetailOpen(false)}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => {
+            stopAmbientPreview();
+            setAmbientDetailOpen(false);
+          }}
+        >
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
             <Text style={[styles.sheetTitle, { color: textColor }]}>
               🎵 Ambient — {soundLabel(page.ambientSoundId)}
@@ -1167,8 +1258,10 @@ export default function PageEditorScreen() {
                   </View>
                   <View style={styles.wordGridCell}>
                     <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
-                      <Text style={styles.wordGridIcon}>▶️</Text>
-                      <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>Play ambient</Text>
+                      <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
+                      <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
+                        {ambientPlaying ? 'Stop' : 'Play ambient'}
+                      </Text>
                     </TactileButton>
                   </View>
                 </View>
@@ -1212,7 +1305,13 @@ export default function PageEditorScreen() {
                 </View>
               </View>
             )}
-            <TactileButton style={styles.cancelRow} onPress={() => setAmbientDetailOpen(false)}>
+            <TactileButton
+              style={styles.cancelRow}
+              onPress={() => {
+                stopAmbientPreview();
+                setAmbientDetailOpen(false);
+              }}
+            >
               <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
             </TactileButton>
           </Pressable>
@@ -1457,7 +1556,10 @@ export default function PageEditorScreen() {
             <Text style={styles.infoEmoji}>{infoModal?.emoji}</Text>
             <Text style={[styles.infoTitle, { color: textColor }]}>{infoModal?.title}</Text>
             <Text style={[styles.infoMessage, { color: subColor }]}>{infoModal?.message}</Text>
-            <TactileButton style={[styles.actionButton, styles.softBlue]} onPress={() => setInfoModal(null)}>
+            <TactileButton
+              style={[styles.actionButton, styles.softBlue, styles.infoOkButton]}
+              onPress={() => setInfoModal(null)}
+            >
               <Text style={[styles.actionButtonLabel, { color: '#208AEF' }]}>OK</Text>
             </TactileButton>
           </View>
@@ -1466,6 +1568,10 @@ export default function PageEditorScreen() {
 
       {/* Sound picker */}
       <Modal visible={picker !== null} transparent animationType="slide" onRequestClose={() => setPicker(null)}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
         <Pressable style={styles.backdrop} onPress={() => setPicker(null)}>
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
             <Text style={[styles.sheetTitle, { color: subColor }]}>
@@ -1475,20 +1581,49 @@ export default function PageEditorScreen() {
                   ? 'Choose an ambient sound'
                   : 'Choose a sound'}
             </Text>
+            <TextInput
+              style={[styles.pickerSearchInput, { backgroundColor: inputBackground, color: textColor }]}
+              placeholder="Search sounds…"
+              placeholderTextColor={subColor}
+              value={pickerSearch}
+              onChangeText={setPickerSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
             <ScrollView style={{ maxHeight: 360 }}>
-              {(picker?.mode === 'ambient' ? AMBIENT_IDS : EFFECT_IDS).map((id) => (
-                <Pressable key={id} style={styles.soundRow} onPress={() => chooseSound(id)}>
-                  <Text style={[styles.soundId, { color: textColor }]}>
-                    {picker?.mode === 'ambient' ? '🎵' : '🔊'} {id}
-                  </Text>
-                </Pressable>
-              ))}
+              {pickerSuggested.length > 0 && (
+                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>Suggested</Text>
+              )}
+              {pickerSuggested.map(renderSoundRow)}
+              {pickerSuggested.length > 0 && pickerRest.length > 0 && (
+                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>All sounds</Text>
+              )}
+              {pickerRestCategories === null
+                ? pickerRest.map(renderSoundRow)
+                : pickerRestCategories.map((cat) => {
+                    const open = pickerSearching || expandedCategories.has(cat.label);
+                    return (
+                      <View key={cat.label}>
+                        <Pressable style={styles.categoryHeader} onPress={() => toggleCategory(cat.label)}>
+                          <Text style={[styles.categoryHeaderLabel, { color: textColor }]}>
+                            {open ? '▾' : '▸'} {cat.label}
+                          </Text>
+                          <Text style={[styles.categoryHeaderCount, { color: subColor }]}>{cat.ids.length}</Text>
+                        </Pressable>
+                        {open && cat.ids.map(renderSoundRow)}
+                      </View>
+                    );
+                  })}
+              {pickerSearched.length === 0 && (
+                <Text style={[styles.pickerEmpty, { color: subColor }]}>No sounds match “{pickerSearch}”.</Text>
+              )}
             </ScrollView>
             <TactileButton style={styles.cancelRow} onPress={() => setPicker(null)}>
               <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Region selector — reuse PhotoEditor to crop to the text area, then re-OCR */}
@@ -1539,6 +1674,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   content: { padding: 16, gap: 14 },
+  // Room to scroll the text input clear above the keyboard while correcting text.
+  contentEditing: { paddingBottom: 340 },
 
   image: { width: '100%', height: 220, borderRadius: 12, backgroundColor: 'rgba(127,127,127,0.12)' },
 
@@ -1595,8 +1732,31 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
   sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 32, gap: 8 },
   sheetTitle: { fontSize: 14, fontWeight: '600', textAlign: 'center', marginBottom: 6 },
-  soundRow: { paddingVertical: 12, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(127,127,127,0.2)' },
+  soundRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(127,127,127,0.2)',
+  },
+  soundPreviewBtn: { paddingVertical: 12, paddingHorizontal: 8 },
+  soundPreviewIcon: { fontSize: 18 },
+  soundRowLabel: { flex: 1, paddingVertical: 12, paddingHorizontal: 2 },
   soundId: { fontSize: 16 },
+  pickerSearchInput: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15, marginBottom: 8 },
+  pickerSectionLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', marginTop: 8, marginBottom: 2 },
+  pickerEmpty: { fontSize: 14, textAlign: 'center', paddingVertical: 24 },
+  categoryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(127,127,127,0.2)',
+  },
+  categoryHeaderLabel: { fontSize: 15, fontWeight: '600' },
+  categoryHeaderCount: { fontSize: 13 },
   cancelRow: { paddingVertical: 14, alignItems: 'center', marginTop: 4 },
 
   actionButton: { borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
@@ -1708,6 +1868,7 @@ const styles = StyleSheet.create({
   checkboxLabel: { fontSize: 14, fontWeight: '600' },
 
   infoCard: { borderRadius: 16, padding: 24, alignItems: 'center', gap: 10, minWidth: 260, maxWidth: 320 },
+  infoOkButton: { alignSelf: 'stretch', paddingHorizontal: 32 },
   infoEmoji: { fontSize: 32 },
   infoTitle: { fontSize: 17, fontWeight: '700', textAlign: 'center' },
   infoMessage: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 6 },

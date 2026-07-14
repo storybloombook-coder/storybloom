@@ -221,13 +221,13 @@
   },
   {
     "id": "fx_animal_chicken",
-    "query": "chicken cluck",
-    "freesoundId": 668805,
-    "name": "Chicken clucking 1",
-    "author": "MBPL",
+    "query": "chicken clucking",
+    "freesoundId": 424076,
+    "name": "chicken sound - clucking.wav",
+    "author": "chanyatenn",
     "license": "CC0 1.0",
-    "url": "https://freesound.org/s/668805/",
-    "duration": 1
+    "url": "https://freesound.org/s/424076/",
+    "duration": 4.1
   },
   {
     "id": "fx_animal_cow",
@@ -548,6 +548,16 @@
     "license": "CC0 1.0",
     "url": "https://freesound.org/s/349922/",
     "duration": 3.2
+  },
+  {
+    "id": "fx_car_pass",
+    "query": "car pass by (hand-picked; 4s peak trimmed from a 50.8s recording via ffmpeg)",
+    "freesoundId": 441881,
+    "name": "car passing by.wav",
+    "author": "brunobegot",
+    "license": "CC0 1.0",
+    "url": "https://freesound.org/s/441881/",
+    "duration": 4
   },
   {
     "id": "fx_cheer",

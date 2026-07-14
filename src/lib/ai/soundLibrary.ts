@@ -25,44 +25,82 @@ export const AMBIENT_IDS = [
   'amb_underwater',
 ];
 
-// One-shot effects. Big palette (100+) so the review picker always has a good
+export interface SoundCategory {
+  label: string;
+  ids: string[];
+}
+
+// One-shot effects, grouped for the sound-picker's category tree (see
+// page/[id].tsx). Big palette (100+) so the review picker always has a good
 // option; the offline matcher auto-fires the subset that has TRIGGER_VOCAB rows,
 // the rest are chosen manually. Ids are stable — never rename (cues reference them).
-export const EFFECT_IDS = [
-  // animals
-  'fx_animal_dog', 'fx_animal_bird', 'fx_animal_cat', 'fx_animal_cow', 'fx_animal_horse',
-  'fx_animal_sheep', 'fx_animal_pig', 'fx_animal_duck', 'fx_animal_rooster', 'fx_animal_frog',
-  'fx_animal_owl', 'fx_animal_lion', 'fx_animal_elephant', 'fx_animal_monkey', 'fx_animal_bee',
-  'fx_animal_wolf', 'fx_animal_mouse', 'fx_animal_goat', 'fx_animal_chicken', 'fx_animal_snake',
-  'fx_animal_cricket', 'fx_animal_seagull', 'fx_animal_whale', 'fx_animal_cat_purr', 'fx_animal_horse_gallop',
-  // vehicles
-  'fx_engine', 'fx_car_horn', 'fx_train', 'fx_plane', 'fx_helicopter',
-  'fx_boat', 'fx_siren', 'fx_motorcycle', 'fx_bicycle_bell', 'fx_rocket',
-  // nature / weather
-  'fx_thunder', 'fx_wind', 'fx_waves', 'fx_waterfall', 'fx_fire',
-  'fx_leaves', 'fx_rain', 'fx_stream', 'fx_splash',
-  // household / objects
-  'fx_door', 'fx_doorbell', 'fx_knock', 'fx_bell', 'fx_clock',
-  'fx_phone', 'fx_switch', 'fx_glass_clink', 'fx_keys', 'fx_zipper',
-  'fx_scissors', 'fx_camera', 'fx_paper', 'fx_creak', 'fx_drawer',
-  'fx_kettle', 'fx_clap',
-  // human / body
-  'fx_laugh', 'fx_cry', 'fx_cheer', 'fx_snore', 'fx_sneeze',
-  'fx_cough', 'fx_yawn', 'fx_kiss', 'fx_hiccup', 'fx_gasp',
-  'fx_whistle', 'fx_gulp', 'fx_eat', 'fx_slurp', 'fx_heartbeat',
-  'fx_footsteps', 'fx_footsteps_run',
-  // toys / fun / game
-  'fx_pop', 'fx_bubbles', 'fx_squeak', 'fx_boing', 'fx_balloon',
-  'fx_party_horn', 'fx_drum', 'fx_xylophone', 'fx_twinkle', 'fx_tada',
-  'fx_buzz', 'fx_coin', 'fx_powerup', 'fx_bounce', 'fx_sparkle',
-  'fx_magic', 'fx_whoosh', 'fx_swoosh',
-  // music / bells
-  'fx_chime', 'fx_jingle', 'fx_gong', 'fx_music_box',
-  // impact / misc
-  'fx_plop', 'fx_crunch', 'fx_crash', 'fx_bang', 'fx_thud',
-  'fx_ding', 'fx_click', 'fx_sizzle', 'fx_drip', 'fx_snap',
-  'fx_splat', 'fx_boom', 'fx_roar', 'fx_farm',
+export const EFFECT_CATEGORIES: SoundCategory[] = [
+  {
+    label: 'Animals',
+    ids: [
+      'fx_animal_dog', 'fx_animal_bird', 'fx_animal_cat', 'fx_animal_cow', 'fx_animal_horse',
+      'fx_animal_sheep', 'fx_animal_pig', 'fx_animal_duck', 'fx_animal_rooster', 'fx_animal_frog',
+      'fx_animal_owl', 'fx_animal_lion', 'fx_animal_elephant', 'fx_animal_monkey', 'fx_animal_bee',
+      'fx_animal_wolf', 'fx_animal_mouse', 'fx_animal_goat', 'fx_animal_chicken', 'fx_animal_snake',
+      'fx_animal_cricket', 'fx_animal_seagull', 'fx_animal_whale', 'fx_animal_cat_purr', 'fx_animal_horse_gallop',
+    ],
+  },
+  {
+    label: 'Vehicles',
+    ids: [
+      'fx_engine', 'fx_car_pass', 'fx_car_horn', 'fx_train', 'fx_plane', 'fx_helicopter',
+      'fx_boat', 'fx_siren', 'fx_motorcycle', 'fx_bicycle_bell', 'fx_rocket',
+    ],
+  },
+  {
+    label: 'Nature / weather',
+    ids: [
+      'fx_thunder', 'fx_wind', 'fx_waves', 'fx_waterfall', 'fx_fire',
+      'fx_leaves', 'fx_rain', 'fx_stream', 'fx_splash',
+    ],
+  },
+  {
+    label: 'Household / objects',
+    ids: [
+      'fx_door', 'fx_doorbell', 'fx_knock', 'fx_bell', 'fx_clock',
+      'fx_phone', 'fx_switch', 'fx_glass_clink', 'fx_keys', 'fx_zipper',
+      'fx_scissors', 'fx_camera', 'fx_paper', 'fx_creak', 'fx_drawer',
+      'fx_kettle', 'fx_clap',
+    ],
+  },
+  {
+    label: 'Human / body',
+    ids: [
+      'fx_laugh', 'fx_cry', 'fx_cheer', 'fx_snore', 'fx_sneeze',
+      'fx_cough', 'fx_yawn', 'fx_kiss', 'fx_hiccup', 'fx_gasp',
+      'fx_whistle', 'fx_gulp', 'fx_eat', 'fx_slurp', 'fx_heartbeat',
+      'fx_footsteps', 'fx_footsteps_run',
+    ],
+  },
+  {
+    label: 'Toys / fun / game',
+    ids: [
+      'fx_pop', 'fx_bubbles', 'fx_squeak', 'fx_boing', 'fx_balloon',
+      'fx_party_horn', 'fx_drum', 'fx_xylophone', 'fx_twinkle', 'fx_tada',
+      'fx_buzz', 'fx_coin', 'fx_powerup', 'fx_bounce', 'fx_sparkle',
+      'fx_magic', 'fx_whoosh', 'fx_swoosh',
+    ],
+  },
+  {
+    label: 'Music / bells',
+    ids: ['fx_chime', 'fx_jingle', 'fx_gong', 'fx_music_box'],
+  },
+  {
+    label: 'Impact / misc',
+    ids: [
+      'fx_plop', 'fx_crunch', 'fx_crash', 'fx_bang', 'fx_thud',
+      'fx_ding', 'fx_click', 'fx_sizzle', 'fx_drip', 'fx_snap',
+      'fx_splat', 'fx_boom', 'fx_roar', 'fx_farm',
+    ],
+  },
 ];
+
+export const EFFECT_IDS = EFFECT_CATEGORIES.flatMap((c) => c.ids);
 
 export const VOICE_IDS = [
   'voice_child',
@@ -124,7 +162,8 @@ export const SCENE_VOCAB: TriggerEntry[] = [
  *  The main 12 rows are verbatim from the manifest; the Bedtime-Frog additions
  *  use obvious trigger words derived from their described use. */
 export const TRIGGER_VOCAB: TriggerEntry[] = [
-  { soundId: 'fx_engine', triggers: ['engine', 'car', 'truck', 'roared', 'motor', 'мотор', 'машина', 'ревел', 'гудок'] },
+  { soundId: 'fx_engine', triggers: ['engine', 'car', 'truck', 'bus', 'roared', 'motor', 'мотор', 'машина', 'автобус', 'ревел', 'гудок'] },
+  { soundId: 'fx_car_pass', triggers: ['drove past', 'drove by', 'passed by', 'zoomed past', 'sped past', 'rushed past', 'проехала мимо', 'промчалась мимо'] },
   { soundId: 'fx_laugh', triggers: ['laughed', 'giggled', 'hooray', 'смеялся', 'хихикал', 'ура'] },
   { soundId: 'fx_splash', triggers: ['splash', 'jumped in', 'water', 'плеск', 'брызги', 'плюх'] },
   { soundId: 'fx_footsteps', triggers: ['ran', 'walked', 'footsteps', 'stomped', 'бежал', 'шёл', 'шаги', 'топал'] },

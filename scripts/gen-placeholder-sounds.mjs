@@ -20,7 +20,10 @@ function extractIds(name) {
   return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
 }
 const AMBIENT_IDS = extractIds('AMBIENT_IDS');
-const EFFECT_IDS = extractIds('EFFECT_IDS');
+// EFFECT_IDS is derived (EFFECT_CATEGORIES.flatMap(...)), not a literal array,
+// so pull every fx_ id referenced anywhere in the file instead (TRIGGER_VOCAB
+// entries are a subset of EFFECT_CATEGORIES's, so the dedup set is exact).
+const EFFECT_IDS = [...new Set([...LIB.matchAll(/'(fx_[a-z0-9_]+)'/g)].map((m) => m[1]))];
 const VOICE_IDS = extractIds('VOICE_IDS');
 
 function toWav(samples) {
