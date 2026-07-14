@@ -73,6 +73,23 @@ function micDisplay(status: MicStatus, error: string | null): { label: string; c
   }
 }
 
+/** Label + color for the dedicated listen-toggle button — action-oriented
+ *  ("stop"/"start"), unlike micDisplay's status-oriented pill wording. */
+function listenToggleDisplay(status: MicStatus): { label: string; color: string } {
+  switch (status) {
+    case 'listening':
+      return { label: 'Stop Listening', color: '#ff453a' };
+    case 'error':
+      return { label: 'Retry Mic', color: '#ff453a' };
+    case 'loading':
+      return { label: 'Starting up…', color: '#8e8e93' };
+    case 'muted':
+    case 'idle':
+    default:
+      return { label: 'Start Listening', color: '#2fb344' };
+  }
+}
+
 export default function ReaderScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const bookId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -500,22 +517,50 @@ export default function ReaderScreen() {
         </ScrollView>
       </View>
 
-      <View style={styles.footer}>
-        <TactileButton
-          style={[styles.navBack, { backgroundColor: cardBackground, opacity: index === 0 ? 0.4 : 1 }]}
-          onPress={goPrev}
-        >
-          <Text style={[styles.navBackLabel, { color: textColor }]}>← Back</Text>
-        </TactileButton>
-        {/* TactileButton only sizes its own inner view — this wrapper is what
-            actually carries the flex:1 in the row layout (same fix already
-            applied in create-story.tsx / library.tsx). */}
-        <View style={styles.navNextWrap}>
-          <TactileButton style={styles.navNext} onPress={goNext}>
-            <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
-          </TactileButton>
-        </View>
-      </View>
+      {(() => {
+        const listen = listenToggleDisplay(micStatus);
+        return (
+          <View style={styles.footer}>
+            {/* TactileButton only sizes its own inner view — these wrappers are
+                what actually carry flex:1 in the row layout (same fix already
+                applied in create-story.tsx / library.tsx). */}
+            <View style={styles.footerRow}>
+              <View style={styles.footerHalf}>
+                <TactileButton
+                  style={[styles.navBack, { opacity: index === 0 ? 0.4 : 1 }]}
+                  onPress={goPrev}
+                >
+                  <Text style={styles.navBackLabel}>← Previous page</Text>
+                </TactileButton>
+              </View>
+              <View style={styles.footerHalf}>
+                <TactileButton style={styles.navNext} onPress={goNext}>
+                  <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
+                </TactileButton>
+              </View>
+            </View>
+            <View style={styles.footerRow}>
+              <View style={styles.footerHalf}>
+                <TactileButton
+                  style={[styles.toLibraryBtn, { backgroundColor: cardBackground }]}
+                  onPress={() => router.replace('/library')}
+                >
+                  <Text style={[styles.toLibraryLabel, { color: textColor }]}>To Library</Text>
+                </TactileButton>
+              </View>
+              <View style={styles.footerHalf}>
+                <TactileButton
+                  style={[styles.toLibraryBtn, { backgroundColor: cardBackground }]}
+                  onPress={toggleMic}
+                  disabled={micStatus === 'loading'}
+                >
+                  <Text style={[styles.toLibraryLabel, { color: listen.color }]}>{listen.label}</Text>
+                </TactileButton>
+              </View>
+            </View>
+          </View>
+        );
+      })()}
     </SafeAreaView>
   );
 }
@@ -557,15 +602,23 @@ const styles = StyleSheet.create({
   hint: { fontSize: 13, textAlign: 'center', fontStyle: 'italic' },
 
   footer: {
-    flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 28,
   },
-  navBack: { borderRadius: 14, paddingVertical: 16, paddingHorizontal: 22, alignItems: 'center', justifyContent: 'center' },
-  navBackLabel: { fontSize: 16, fontWeight: '700' },
-  navNextWrap: { flex: 1 },
+  footerRow: { flexDirection: 'row', gap: 12 },
+  footerHalf: { flex: 1 },
+  navBack: {
+    backgroundColor: 'rgba(47,179,68,0.15)',
+    borderWidth: 2,
+    borderColor: '#2fb344',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navBackLabel: { color: '#2fb344', fontSize: 16, fontWeight: '800' },
   navNext: {
     backgroundColor: 'rgba(47,179,68,0.15)',
     borderWidth: 2,
@@ -576,6 +629,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   navNextLabel: { color: '#2fb344', fontSize: 18, fontWeight: '800' },
+  toLibraryBtn: { borderRadius: 14, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
+  toLibraryLabel: { fontSize: 15, fontWeight: '700' },
 
   endEmoji: { fontSize: 52, marginBottom: 8 },
   endTitle: { fontSize: 30, fontWeight: '800' },
