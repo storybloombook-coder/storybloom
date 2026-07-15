@@ -31,19 +31,24 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
   button** (bottom-right, soft-tint) that jumps straight into the Reader, an
   inline **"⚠️ N" readiness chip** that opens a "what's missing" sheet
   deep-linking to the page that needs fixing, **swipe left → delete bin**
-  (haptic tick at the open threshold), pull-to-refresh. A physical
-  **Bookshelf** of favorited books sits above the list — tilt-gravity, a
-  drag-to-reorder physics system, spines at a fixed size (never shrink/scroll
-  to cram more in); once more books are favorited than fit one shelf, the
-  rest spill onto additional numbered shelves switched via a selector below
-  (1, 2, 3…). The manual
-  approval workflow (unreviewed/in_progress/approved, swipe-right-to-approve)
-  was removed — the readiness gate already signals whether a book plays back
-  well, so approval was a redundant second step. The `review_status`
-  column/type are still in the schema (no migration) but nothing reads or
-  writes them anymore.
+  (with a confirm-delete bottom sheet, haptic tick at the open threshold),
+  pull-to-refresh. A physical **Bookshelf** of favorited books sits above the
+  list — tilt-gravity, a drag-to-reorder physics system, spines at a fixed
+  size (never shrink/scroll to cram more in); once more books are favorited
+  than fit one shelf, the rest spill onto additional numbered shelves
+  switched via a selector below (1, 2, 3…). Lifting a book off the shelf
+  (drag it up) can visibly clip against the shelf's own scrollable-list
+  boundary near the top of its range — known, accepted tradeoff (a tried fix
+  that reserved growing/shrinking space above the shelf looked worse than the
+  clipping itself, so it was reverted). The manual approval workflow
+  (unreviewed/in_progress/approved, swipe-right-to-approve) was removed — the
+  readiness gate already signals whether a book plays back well, so approval
+  was a redundant second step. The `review_status` column/type are still in
+  the schema (no migration) but nothing reads or writes them anymore.
 - **Book detail** — per-page inspector, tap the title to rename, drag-reorder
-  / delete pages, add pages, and a pinned **readiness gate + ▶ Read** bar
+  pages (long-press), **swipe a page left → delete bin** (same
+  confirm-delete pattern as the library, replacing the old drag-onto-a-
+  fixed-bin gesture), add pages, and a pinned **readiness gate + ▶ Read** bar
   (green "Ready" or amber "N things to check" with an expandable checklist).
   Tapping "Ready" now opens a popup summarizing what was checked (story pages,
   matched sounds, ambient pages) instead of doing nothing.
