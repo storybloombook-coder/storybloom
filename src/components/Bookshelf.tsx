@@ -62,7 +62,7 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -95,6 +95,13 @@ const MAX_SPINE_WIDTH = 56;
 // inside a SHELF_HEIGHT-tall shelf). Used to normalize where on the spine a
 // drag gesture started, for the grab-point-dependent rotation below.
 const SPINE_VISIBLE_HEIGHT = SHELF_HEIGHT - 8;
+// Width of the visible bookend wall at each end of the shelf (see the
+// `shelfWall` style). The sliding range is inset by this much on each side
+// so a pinned spine always stops just short of the wall instead of
+// overlapping/covering it — relying on z-order to hide the seam looked
+// glitchy on real hardware, insetting the range avoids the overlap
+// altogether.
+const WALL_WIDTH = 6;
 
 // Grab-point-dependent tilt: picking a spine up off-center from its own
 // midpoint (like a real book grabbed near one end) makes it rotate as it's
@@ -108,6 +115,10 @@ const ROTATION_DAMPING = 12;
 // into a torque. Sign is a first pass, not yet confirmed on hardware — if a
 // book tips the wrong way for where it was grabbed, flip this to negative.
 const ROTATION_TORQUE = 0.16;
+// How much of the "ideal pendulum" corner-hang angle to actually use — see
+// the note at its use site. Confirmed on hardware to need taming from 1.0;
+// 0.3 was still "way too much" on a second pass, cut hard again.
+const CORNER_HANG_STRENGTH = 0.12;
 
 // Ambient tilt lean: even without touching a book, every spine visibly
 // tilts a little as the phone tilts — the same rotation spring-damper above,
@@ -128,6 +139,16 @@ const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued f
 const DAMPING = 14; // velocity drag
 const BUMP = 3; // extra velocity kick imparted on collision
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
+
+// Quick swipe across the shelf (distinct from the long-press-to-drag
+// interaction): a normal-speed brush of the finger across several spines
+// gives each one it passes over a one-time outward impulse in the swipe
+// direction, so they shake/jostle as your finger goes by — like flicking a
+// finger across a real row of books. Doesn't pick anything up or reorder;
+// purely a physical reaction. Only fires when no spine is actively being
+// dragged, and each spine is only impulsed once per continuous swipe.
+const SWIPE_IMPULSE = 160; // outward velocity kick
+const SWIPE_WIGGLE = 100; // rotational velocity kick, degrees/sec
 
 // Make-room reaction: while dragging a spine (especially while lifted,
 // hovering to insert it into a gap), the moment its live-reordered target
@@ -212,7 +233,9 @@ function hueFromId(id: string): number {
 function reorderForDrag(order: number[], bookIndex: number, x: number, slot: number): number[] {
   'worklet';
   const currentRank = order.indexOf(bookIndex);
-  const targetRank = Math.min(order.length - 1, Math.max(0, Math.round(x / slot)));
+  // x is offset by WALL_WIDTH (the inset sliding range) — subtract it back
+  // out so rank 0 lines up with x === WALL_WIDTH, not x === 0.
+  const targetRank = Math.min(order.length - 1, Math.max(0, Math.round((x - WALL_WIDTH) / slot)));
   if (targetRank === currentRank) return order;
   const next = order.slice();
   next.splice(currentRank, 1);
@@ -232,6 +255,10 @@ function hapticGap() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 }
 
+function hapticSwipe() {
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+}
+
 function Spine({
   book,
   index,
@@ -248,6 +275,7 @@ function Spine({
   grabOffsetFrac,
   grabOffsetXPx,
   grabOffsetYPx,
+  shelfSwipeGesture,
   onOpen,
   onReordered,
 }: {
@@ -284,6 +312,11 @@ function Spine({
    *  axis — used (together) for the diagonal corner-hang while lifted. */
   grabOffsetXPx: SharedValue<number>;
   grabOffsetYPx: SharedValue<number>;
+  /** The whole-shelf quick-swipe gesture (see SWIPE_IMPULSE above) — this
+   *  spine's own long-press drag is marked simultaneous with it so a fast
+   *  swipe across several books still registers even though it starts on
+   *  top of a spine's own gesture-handler view. */
+  shelfSwipeGesture: GestureType;
   onOpen: (book: BookSummary) => void;
   onReordered: (order: number[]) => void;
 }) {
@@ -294,6 +327,7 @@ function Spine({
 
   const pan = Gesture.Pan()
     .activateAfterLongPress(300)
+    .simultaneousWithExternalGesture(shelfSwipeGesture)
     .onStart((e) => {
       startX.value = xs.value[index];
       lastDragX.value = xs.value[index];
@@ -313,7 +347,7 @@ function Spine({
     })
     .onUpdate((e) => {
       let nx = startX.value + e.translationX;
-      nx = Math.min(Math.max(nx, 0), containerWidth - spineWidth);
+      nx = Math.min(Math.max(nx, WALL_WIDTH), containerWidth - spineWidth - WALL_WIDTH);
       xs.value[index] = nx;
       order.value = reorderForDrag(order.value, index, nx, slot);
       liftYs.value[index] = Math.min(LIFT_MAX, Math.max(LIFT_MIN, e.translationY));
@@ -405,7 +439,7 @@ export default function Bookshelf({
 
   // books arrives pre-sorted by shelf position, so initial rank == array
   // index — these seed values already match, no snap-into-place on mount.
-  const xs = useSharedValue<number[]>(books.map((_, i) => i * (spineWidth + SPINE_GAP)));
+  const xs = useSharedValue<number[]>(books.map((_, i) => WALL_WIDTH + i * (spineWidth + SPINE_GAP)));
   const vxs = useSharedValue<number[]>(books.map(() => 0));
   const order = useSharedValue<number[]>(books.map((_, i) => i));
   const draggingIndex = useSharedValue(-1);
@@ -429,6 +463,11 @@ export default function Bookshelf({
   // reapplying it continuously every frame.
   const gapLeft = useSharedValue(-1);
   const gapRight = useSharedValue(-1);
+  // Which spines have already been impulsed during the CURRENT swipe pass —
+  // reset at the start of every swipe so each spine only gets hit once per
+  // continuous brush across the shelf, not once per frame it's under the
+  // finger.
+  const swipedIndices = useSharedValue<number[]>([]);
 
   // xs/vxs/order/rotations/rotationVs are all indexed by POSITION in the
   // `books` array, but the parent re-sorts that array (by shelfPosition)
@@ -610,7 +649,7 @@ export default function Bookshelf({
     const nextRotationVs = rotationVs.value.slice();
     const nextLiftYs = liftYs.value.slice();
     const nextLiftVYs = liftVYs.value.slice();
-    const maxX = Math.max(0, widthShared.value - spineWidth);
+    const maxX = Math.max(WALL_WIDTH, widthShared.value - spineWidth - WALL_WIDTH);
 
     // Velocity of whichever spine is being dragged, finite-differenced against
     // its position at the end of the LAST physics tick (lastDragX) — not the
@@ -672,12 +711,21 @@ export default function Bookshelf({
         // Diagonal corner-hang: rotate toward wherever the grab point implies
         // the center of mass should hang below it, plus however much the
         // phone's own tilt has shifted "down" sideways on screen.
+        // Raw atan2 gives the FULL "ideal pendulum" angle, which swings
+        // toward ±90° for almost any grab near the vertical center (the
+        // denominator shrinks toward 0) — felt wild/uncontrolled on real
+        // hardware. A held book has enough rigidity/grip friction that it
+        // only leans PART of the way there, not a free-swinging pendulum —
+        // CORNER_HANG_STRENGTH scales it down to a believable slight lean.
         const cornerHangDeg = Math.atan2(grabOffsetXPx.value, grabOffsetYPx.value) * (180 / Math.PI);
         const tiltLean = Math.abs(tiltX.value) > TILT_DEADZONE ? tiltX.value * TILT_LEAN_DEG_PER_UNIT : 0;
-        restTarget = Math.min(FALL_ROTATION_DEG, Math.max(-FALL_ROTATION_DEG, cornerHangDeg + tiltLean));
+        restTarget = Math.min(
+          FALL_ROTATION_DEG,
+          Math.max(-FALL_ROTATION_DEG, cornerHangDeg * CORNER_HANG_STRENGTH + tiltLean)
+        );
       } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
         restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
-        const atLeftWall = nextXs[i] <= 0.5;
+        const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
         const atRightWall = nextXs[i] >= maxX - 0.5;
         const pinned = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
         if (pinned && Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
@@ -762,8 +810,8 @@ export default function Bookshelf({
     }
 
     for (let i = 0; i < len; i++) {
-      if (nextXs[i] < 0) {
-        nextXs[i] = 0;
+      if (nextXs[i] < WALL_WIDTH) {
+        nextXs[i] = WALL_WIDTH;
         if (nextVxs[i] < 0) nextVxs[i] = 0;
       } else if (nextXs[i] > maxX) {
         nextXs[i] = maxX;
@@ -787,42 +835,70 @@ export default function Bookshelf({
     setContainerWidth(e.nativeEvent.layout.width);
   }
 
+  // Quick swipe across the shelf — see SWIPE_IMPULSE above. No long-press
+  // requirement (unlike each spine's own drag gesture), and marked
+  // simultaneous with every spine's pan (via .simultaneousWithExternalGesture
+  // on the Spine side) so a fast brush still registers even though it
+  // begins on top of a spine's own gesture-handler view.
+  const shelfSwipeGesture = Gesture.Pan()
+    .onStart(() => {
+      swipedIndices.value = [];
+    })
+    .onUpdate((e) => {
+      if (draggingIndex.value !== -1) return; // a real drag is in progress — don't also impulse
+      const dir = e.velocityX >= 0 ? 1 : -1;
+      const len = xs.value.length;
+      for (let i = 0; i < len; i++) {
+        if (swipedIndices.value.includes(i)) continue;
+        const left = xs.value[i];
+        const right = left + spineWidth;
+        if (e.x < left || e.x > right) continue;
+        vxs.value[i] += dir * SWIPE_IMPULSE;
+        rotationVs.value[i] += dir * SWIPE_WIGGLE;
+        swipedIndices.value = [...swipedIndices.value, i];
+        runOnJS(hapticSwipe)();
+      }
+    });
+
   if (n === 0) return null;
 
   return (
     <View style={styles.wrap} onLayout={onLayout}>
       <Text style={styles.label}>⭐ Bookshelf</Text>
-      <View style={[styles.shelfArea, { height: SHELF_HEIGHT }]}>
-        {/* Solid bookend walls at the shelf's own physical boundary — the
-            same edges the physics already pins spines against, just made
-            visible instead of an invisible wall. Rendered behind the
-            spines (default z-index), so a pinned book naturally covers it. */}
-        <View style={[styles.shelfWall, styles.shelfWallLeft]} />
-        <View style={[styles.shelfWall, styles.shelfWallRight]} />
-        {containerWidth > 0 &&
-          books.map((book, index) => (
-            <Spine
-              key={book.id}
-              book={book}
-              index={index}
-              spineWidth={spineWidth}
-              containerWidth={containerWidth}
-              xs={xs}
-              order={order}
-              draggingIndex={draggingIndex}
-              lastDragX={lastDragX}
-              liftYs={liftYs}
-              lastDragLiftY={lastDragLiftY}
-              bounceY={bounceY}
-              rotations={rotations}
-              grabOffsetFrac={grabOffsetFrac}
-              grabOffsetXPx={grabOffsetXPx}
-              grabOffsetYPx={grabOffsetYPx}
-              onOpen={onOpen}
-              onReordered={handleReordered}
-            />
-          ))}
-      </View>
+      <GestureDetector gesture={shelfSwipeGesture}>
+        <View style={[styles.shelfArea, { height: SHELF_HEIGHT }]}>
+          {/* Solid bookend walls at the shelf's own physical boundary — the
+              same edges the physics already pins spines against, just made
+              visible instead of an invisible wall. Rendered behind the
+              spines (default z-index), so a pinned book naturally covers it. */}
+          <View style={[styles.shelfWall, styles.shelfWallLeft]} />
+          <View style={[styles.shelfWall, styles.shelfWallRight]} />
+          {containerWidth > 0 &&
+            books.map((book, index) => (
+              <Spine
+                key={book.id}
+                book={book}
+                index={index}
+                spineWidth={spineWidth}
+                containerWidth={containerWidth}
+                xs={xs}
+                order={order}
+                draggingIndex={draggingIndex}
+                lastDragX={lastDragX}
+                liftYs={liftYs}
+                lastDragLiftY={lastDragLiftY}
+                bounceY={bounceY}
+                rotations={rotations}
+                grabOffsetFrac={grabOffsetFrac}
+                grabOffsetXPx={grabOffsetXPx}
+                grabOffsetYPx={grabOffsetYPx}
+                shelfSwipeGesture={shelfSwipeGesture}
+                onOpen={onOpen}
+                onReordered={handleReordered}
+              />
+            ))}
+        </View>
+      </GestureDetector>
       <View style={styles.shelfLip} />
     </View>
   );
