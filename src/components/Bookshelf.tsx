@@ -119,17 +119,30 @@ const ROTATION_TORQUE = 0.16;
 // the note at its use site. Confirmed on hardware to need taming from 1.0;
 // 0.3 was still "way too much" on a second pass, cut hard again.
 const CORNER_HANG_STRENGTH = 0.12;
+// Collision-impact rotation: on top of the continuous shove torque above,
+// the dragged spine gets an extra instantaneous rotational jolt exactly
+// when it hits another book — scaled by the grab point (same lever-arm
+// idea as ROTATION_TORQUE) and how deep the impact is. First pass, not yet
+// confirmed on hardware.
+const COLLISION_ROTATION_KICK = 2.2;
 
 // Ambient tilt lean: even without touching a book, every spine visibly
 // tilts a little as the phone tilts — the same rotation spring-damper above,
 // just aimed at a target that tracks tiltX instead of always being level, so
-// you can SEE gravity's direction on the shelf even before anything slides.
+// you can SEE gravity's direction on the shelf even before anything falls or
+// slides. Three deliberately separate stages as tilt increases (tiltX is
+// roughly sin(tilt angle) in g's):
+//   1. Past TILT_DEADZONE (~7°)         — just the proportional lean, above.
+//   2. Past FALL_TILT_THRESHOLD (~15°)  — topples fully onto its side, UNLESS
+//      it's pinned against a wall — a rigid wall holds a book upright rather
+//      than being what tips it over (see the "pinned" check at its use site).
+//   3. Past SLIDE_TILT_THRESHOLD (~20°) — gravity ALSO starts actually
+//      sliding books across the shelf (see the `gravity` computation below),
+//      not just leaning/toppling them in place.
 const TILT_LEAN_DEG_PER_UNIT = 16; // degrees of lean per unit of tiltX
-// Past this tilt, a spine that's already pinned against a wall (nowhere left
-// to slide) stops merely leaning and topples fully onto its side instead —
-// same spring, just retargeted to a much steeper angle.
-const FALL_TILT_THRESHOLD = 0.4;
+const FALL_TILT_THRESHOLD = 0.26; // ~15°
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
+const SLIDE_TILT_THRESHOLD = 0.34; // ~20° — sliding across the shelf gated to here
 
 // Physics tuning — soft enough to feel weighty, damped enough not to jitter.
 // No home-slot spring — books never get pulled toward a tidy packed
@@ -611,7 +624,10 @@ export default function Bookshelf({
     // the user has navigated elsewhere, since Expo Router keeps the screen
     // mounted), so skip the array-clone/sort/spring work entirely when idle
     // rather than paying it 60x/sec for no visible effect.
-    const rawGravity = Math.abs(tiltX.value) > TILT_DEADZONE ? tiltX.value * GRAVITY_STRENGTH : 0;
+    // Sliding is gated behind SLIDE_TILT_THRESHOLD specifically (~20°) — a
+    // lesser tilt only leans/topples books in place (see the rotation
+    // target below), it never translates them across the shelf.
+    const rawGravity = Math.abs(tiltX.value) > SLIDE_TILT_THRESHOLD ? tiltX.value * GRAVITY_STRENGTH : 0;
     // Friction: a book won't creep at all unless gravity's pull exceeds it,
     // and even while sliding, friction keeps opposing the motion (Coulomb
     // friction, not just velocity damping) — without this ANY tilt above the
@@ -725,11 +741,18 @@ export default function Bookshelf({
         );
       } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
         restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
-        const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
-        const atRightWall = nextXs[i] >= maxX - 0.5;
-        const pinned = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
-        if (pinned && Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
-          restTarget = Math.sign(tiltX.value) * FALL_ROTATION_DEG;
+        if (Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
+          // Past the fall threshold a book topples fully onto its side —
+          // UNLESS it's pinned against a wall on the low side, in which case
+          // the wall is rigid and holds it upright instead of being what
+          // tips it over. Only the wall it's actually leaning INTO braces
+          // it; the far wall is irrelevant.
+          const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
+          const atRightWall = nextXs[i] >= maxX - 0.5;
+          const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
+          if (!bracedByWall) {
+            restTarget = Math.sign(tiltX.value) * FALL_ROTATION_DEG;
+          }
         }
       }
       const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
@@ -797,9 +820,14 @@ export default function Bookshelf({
         if (iDragged && !jDragged) {
           nextXs[j] += overlap;
           nextVxs[j] += overlap * BUMP + Math.max(0, draggedVel) * 0.5;
+          // Extra rotational jolt for the DRAGGED spine itself at the moment
+          // of impact — on top of the continuous shove torque — using the
+          // same grab-point lever-arm idea, scaled by how deep it hit.
+          nextRotationVs[i] += grabOffsetFrac.value * overlap * COLLISION_ROTATION_KICK;
         } else if (jDragged && !iDragged) {
           nextXs[i] -= overlap;
           nextVxs[i] -= overlap * BUMP + Math.max(0, -draggedVel) * 0.5;
+          nextRotationVs[j] -= grabOffsetFrac.value * overlap * COLLISION_ROTATION_KICK;
         } else if (!iDragged && !jDragged) {
           nextXs[i] -= overlap / 2;
           nextXs[j] += overlap / 2;
