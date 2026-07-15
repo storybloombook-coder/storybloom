@@ -109,8 +109,12 @@ const WALL_WIDTH = 6;
 // a lightweight rotational spring-damper, same shape as the horizontal
 // physics, with the drag supplying "torque" instead of a driving force.
 const ROTATION_MAX = 22; // degrees, clamp WHILE BEING DRAGGED
-const ROTATION_STIFFNESS = 140; // pulls rotation back toward its current target
-const ROTATION_DAMPING = 12;
+// Lower stiffness than the original 140 — the fall-onto-side topple reached
+// FALL_ROTATION_DEG far too fast/abruptly; less stiffness means a slower,
+// more gradual approach to whatever the current target is (also softens the
+// gentle lean and drag-torque rotation a little, which is fine).
+const ROTATION_STIFFNESS = 70;
+const ROTATION_DAMPING = 14;
 // Scales (how far off-center you grabbed) * (how fast it's being shoved)
 // into a torque. Sign is a first pass, not yet confirmed on hardware — if a
 // book tips the wrong way for where it was grabbed, flip this to negative.
@@ -380,11 +384,27 @@ function Spine({
     const isMe = draggingIndex.value === index;
     const liftY = liftYs.value[index] ?? 0;
     const lifted = Math.abs(liftY) > LIFT_THRESHOLD;
+    const rotation = rotations.value[index] ?? 0;
+    // A rectangle toppling over pivots on whichever bottom corner is still
+    // touching the shelf — not its own center. Rotating purely around
+    // center (the default) made a falling book visibly lift off/"float"
+    // above the shelf line as the angle grew, since the center itself
+    // doesn't move but the bottom edge swings up and away from it. Blend
+    // the pivot from center (gentle leans look natural rotating in place)
+    // toward the bottom corner in the fall direction as rotation approaches
+    // a full topple, so the grounded corner stays anchored to the shelf.
+    const pivotFrac = Math.min(1, Math.abs(rotation) / FALL_ROTATION_DEG);
+    const pivotX = Math.sign(rotation) * (spineWidth / 2) * pivotFrac;
+    const pivotY = (SPINE_VISIBLE_HEIGHT / 2) * pivotFrac;
     return {
       transform: [
         { translateX: xs.value[index] ?? index * slot },
         { translateY: liftY + bounceY.value },
-        { rotate: `${rotations.value[index] ?? 0}deg` },
+        { translateX: pivotX },
+        { translateY: pivotY },
+        { rotate: `${rotation}deg` },
+        { translateX: -pivotX },
+        { translateY: -pivotY },
         { scale: lifted ? 1.08 : 1 },
       ],
       zIndex: isMe ? 10 : 1,
