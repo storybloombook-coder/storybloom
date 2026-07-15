@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import ConfirmDeleteModal from '../../components/ConfirmDeleteModal';
 import DraggablePageCard, { PAGE_LIST_GAP } from '../../components/DraggablePageCard';
 import PhotoEditor from '../../components/PhotoEditor';
 import SwipeableRow from '../../components/SwipeableRow';
@@ -72,6 +73,7 @@ export default function BookDetailScreen() {
   const [titleDraft, setTitleDraft] = useState('');
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [readyPopupOpen, setReadyPopupOpen] = useState(false);
+  const [pendingDeletePage, setPendingDeletePage] = useState<Page | null>(null);
 
   async function saveTitle() {
     if (!book) return;
@@ -289,10 +291,8 @@ export default function BookDetailScreen() {
     });
   }
 
-  async function handleDeletePage(index: number) {
-    const page = pages[index];
-    if (!page) return;
-    const remaining = pages.filter((_, i) => i !== index);
+  async function handleDeletePage(page: Page) {
+    const remaining = pages.filter((p) => p.id !== page.id);
     setPages(remaining);
     await deletePage(page.id);
     if (page.imagePath) {
@@ -306,6 +306,13 @@ export default function BookDetailScreen() {
     // Renumber the remaining pages to close the gap.
     await reorderPages(remaining.map((p) => p.id));
     await load();
+  }
+
+  async function performDeletePage() {
+    const page = pendingDeletePage;
+    if (!page) return;
+    setPendingDeletePage(null);
+    await handleDeletePage(page);
   }
 
   if (loading) {
@@ -387,7 +394,7 @@ export default function BookDetailScreen() {
           const cues = cuesByPage.get(item.id) ?? [];
           const activeCueCount = cues.filter((c) => c.reviewState !== 'removed').length;
           return (
-            <SwipeableRow key={item.id} onDelete={() => handleDeletePage(index)}>
+            <SwipeableRow key={item.id} onDelete={() => setPendingDeletePage(item)}>
               <DraggablePageCard
                 index={index}
                 draggingIndex={draggingIndex}
@@ -585,6 +592,14 @@ export default function BookDetailScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <ConfirmDeleteModal
+        visible={pendingDeletePage !== null}
+        title={`Delete page ${pendingDeletePage?.pageNumber}?`}
+        message="This page and its sounds will be permanently removed."
+        onConfirm={performDeletePage}
+        onCancel={() => setPendingDeletePage(null)}
+      />
     </SafeAreaView>
   );
 }

@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Bookshelf from '../components/Bookshelf';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 import SwipeableRow from '../components/SwipeableRow';
 import TactileButton from '../components/TactileButton';
 import {
@@ -365,35 +366,13 @@ export default function LibraryScreen() {
         </Pressable>
       </Modal>
 
-      <Modal
+      <ConfirmDeleteModal
         visible={pendingDelete !== null}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPendingDelete(null)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setPendingDelete(null)}>
-          <Pressable style={StyleSheet.flatten([styles.sheet, { backgroundColor: sheetBackground }])}>
-            <Text style={styles.deleteEmoji}>🗑️</Text>
-            <Text style={StyleSheet.flatten([styles.sheetTitle, { color: textColor }])}>
-              Delete "{pendingDelete?.title}"?
-            </Text>
-            <Text style={StyleSheet.flatten([styles.deleteMessage, { color: subColor }])}>
-              This book and its {pendingDelete?.pageCount} page{pendingDelete?.pageCount === 1 ? '' : 's'} will be
-              permanently removed.
-            </Text>
-            <View style={styles.sheetButtonWrap}>
-              <TactileButton style={StyleSheet.flatten([styles.button, styles.deleteButton])} onPress={performDelete}>
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#ff453a' }])}>Delete</Text>
-              </TactileButton>
-            </View>
-            <View style={styles.sheetButtonWrap}>
-              <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: badgeBackground }])} onPress={() => setPendingDelete(null)}>
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>Cancel</Text>
-              </TactileButton>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        title={`Delete "${pendingDelete?.title}"?`}
+        message={`This book and its ${pendingDelete?.pageCount ?? 0} page${pendingDelete?.pageCount === 1 ? '' : 's'} will be permanently removed.`}
+        onConfirm={performDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -500,11 +479,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
-  },
-  deleteButton: {
-    backgroundColor: 'rgba(255,69,58,0.15)',
-    borderWidth: 2,
-    borderColor: '#ff453a',
   },
   buttonLabel: {
     fontSize: 17,
