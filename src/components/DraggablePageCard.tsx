@@ -5,8 +5,9 @@
 // grid — so position math tracks each card's real measured height instead of
 // a constant cell size.
 //
-// Dragging past a fixed trash-bin zone (bottom-center of the screen, see
-// book/[id].tsx) deletes the page instead of reordering it.
+// Reordering only — deletion is a separate swipe-left-to-reveal-a-bin
+// gesture (SwipeableRow.tsx), the same one the library screen uses for
+// books, not a drag-onto-a-fixed-bin-target like this used to be.
 
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
@@ -23,13 +24,6 @@ import Animated, {
 
 export const PAGE_LIST_GAP = 12;
 
-export interface BinBounds {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-}
-
 function triggerDragHaptic() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 }
@@ -39,10 +33,7 @@ export default function DraggablePageCard({
   draggingIndex,
   targetIndex,
   itemHeights,
-  binHover,
-  binBounds,
   onReorder,
-  onDelete,
   onMeasured,
   children,
 }: {
@@ -52,11 +43,7 @@ export default function DraggablePageCard({
   targetIndex: SharedValue<number>;
   /** One measured height per page, kept in sync via onMeasured. */
   itemHeights: SharedValue<number[]>;
-  /** 0/1 — whichever card is being dragged writes this; the trash bin reads it. */
-  binHover: SharedValue<number>;
-  binBounds: BinBounds;
   onReorder: (from: number, to: number) => void;
-  onDelete: (index: number) => void;
   onMeasured: (index: number, height: number) => void;
   children: ReactNode;
 }) {
@@ -79,11 +66,6 @@ export default function DraggablePageCard({
     return Math.max(0, heights.length - 1);
   }
 
-  function overBin(absX: number, absY: number) {
-    'worklet';
-    return absX >= binBounds.left && absX <= binBounds.right && absY >= binBounds.top && absY <= binBounds.bottom;
-  }
-
   const panGesture = Gesture.Pan()
     .activateAfterLongPress(350)
     .onStart(() => {
@@ -95,19 +77,14 @@ export default function DraggablePageCard({
     .onUpdate((e) => {
       translateY.value = e.translationY;
       targetIndex.value = computeTargetIndex(e.translationY);
-      binHover.value = overBin(e.absoluteX, e.absoluteY) ? 1 : 0;
     })
-    .onEnd((e) => {
-      const hovering = overBin(e.absoluteX, e.absoluteY);
-      const target = computeTargetIndex(e.translationY);
+    .onEnd(() => {
+      const target = computeTargetIndex(translateY.value);
       translateY.value = withTiming(0);
       dragging.value = 0;
       draggingIndex.value = -1;
       targetIndex.value = -1;
-      binHover.value = 0;
-      if (hovering) {
-        runOnJS(onDelete)(index);
-      } else if (target !== index) {
+      if (target !== index) {
         runOnJS(onReorder)(index, target);
       }
     });

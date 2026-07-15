@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   Modal,
   Pressable,
   ScrollView,
@@ -16,15 +15,11 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  type SharedValue,
-} from 'react-native-reanimated';
+import { useSharedValue } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DraggablePageCard, { PAGE_LIST_GAP } from '../../components/DraggablePageCard';
 import PhotoEditor from '../../components/PhotoEditor';
+import SwipeableRow from '../../components/SwipeableRow';
 import TactileButton from '../../components/TactileButton';
 import { SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
 import {
@@ -58,40 +53,6 @@ const STATUS: Record<Book['prepStatus'], { label: string; color: string }> = {
   failed: { label: 'Prep failed', color: '#ff453a' },
 };
 
-// Fixed bottom-center trash-bin zone, "popped in" only while dragging a page.
-// Computed once from the window size — the bin's own style below must match.
-const BIN_SIZE = 72;
-const BIN_BOTTOM_OFFSET = 32;
-const BIN_HIT_PADDING = 28; // generous extra margin so it's easy to hit
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
-const BIN_BOUNDS = {
-  left: (SCREEN_W - BIN_SIZE) / 2 - BIN_HIT_PADDING,
-  right: (SCREEN_W + BIN_SIZE) / 2 + BIN_HIT_PADDING,
-  top: SCREEN_H - BIN_BOTTOM_OFFSET - BIN_SIZE - BIN_HIT_PADDING,
-  bottom: SCREEN_H - BIN_BOTTOM_OFFSET + BIN_HIT_PADDING,
-};
-
-function TrashBin({
-  draggingIndex,
-  binHover,
-}: {
-  draggingIndex: SharedValue<number>;
-  binHover: SharedValue<number>;
-}) {
-  const style = useAnimatedStyle(() => {
-    const active = draggingIndex.value !== -1;
-    return {
-      opacity: withTiming(active ? 1 : 0, { duration: 150 }),
-      transform: [{ scale: withTiming(active ? (binHover.value ? 1.2 : 1) : 0.6, { duration: 150 }) }],
-    };
-  });
-  return (
-    <Animated.View pointerEvents="none" style={[styles.trashBin, style]}>
-      <Text style={styles.trashBinIcon}>🗑️</Text>
-    </Animated.View>
-  );
-}
-
 export default function BookDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const bookId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -123,7 +84,6 @@ export default function BookDetailScreen() {
 
   const draggingIndex = useSharedValue(-1);
   const targetIndex = useSharedValue(-1);
-  const binHover = useSharedValue(0);
   const itemHeights = useSharedValue<number[]>([]);
 
   // Adding more pages to this already-saved book: multi-select library picks
@@ -418,7 +378,7 @@ export default function BookDetailScreen() {
           </Text>
           {pages.length > 1 && (
             <Text style={[styles.reorderHint, { color: subColor }]}>
-              Long-press a page to reorder it, or drag it to the bin below to delete.
+              Long-press a page to reorder it, or swipe it left to delete.
             </Text>
           )}
         </View>
@@ -427,52 +387,50 @@ export default function BookDetailScreen() {
           const cues = cuesByPage.get(item.id) ?? [];
           const activeCueCount = cues.filter((c) => c.reviewState !== 'removed').length;
           return (
-            <DraggablePageCard
-              key={item.id}
-              index={index}
-              draggingIndex={draggingIndex}
-              targetIndex={targetIndex}
-              itemHeights={itemHeights}
-              binHover={binHover}
-              binBounds={BIN_BOUNDS}
-              onReorder={handleReorder}
-              onDelete={handleDeletePage}
-              onMeasured={onMeasured}
-            >
-              <Pressable
-                onPress={() => router.push({ pathname: '/page/[id]', params: { id: item.id } })}
-                style={({ pressed }) => [styles.pageCard, { backgroundColor: cardBackground, opacity: pressed ? 0.7 : 1 }]}
+            <SwipeableRow key={item.id} onDelete={() => handleDeletePage(index)}>
+              <DraggablePageCard
+                index={index}
+                draggingIndex={draggingIndex}
+                targetIndex={targetIndex}
+                itemHeights={itemHeights}
+                onReorder={handleReorder}
+                onMeasured={onMeasured}
               >
-                <View style={styles.pageTop}>
-                  {item.imagePath ? (
-                    <Image source={{ uri: item.imagePath }} style={styles.thumb} contentFit="cover" transition={120} />
-                  ) : (
-                    <View style={[styles.thumb, styles.thumbEmpty, { backgroundColor: chipBackground }]}>
-                      <Text style={{ fontSize: 20 }}>📝</Text>
+                <Pressable
+                  onPress={() => router.push({ pathname: '/page/[id]', params: { id: item.id } })}
+                  style={({ pressed }) => [styles.pageCard, { backgroundColor: cardBackground, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <View style={styles.pageTop}>
+                    {item.imagePath ? (
+                      <Image source={{ uri: item.imagePath }} style={styles.thumb} contentFit="cover" transition={120} />
+                    ) : (
+                      <View style={[styles.thumb, styles.thumbEmpty, { backgroundColor: chipBackground }]}>
+                        <Text style={{ fontSize: 20 }}>📝</Text>
+                      </View>
+                    )}
+                    <View style={styles.pageInfo}>
+                      <Text style={[styles.pageNo, { color: textColor }]}>
+                        Page {item.pageNumber}
+                      </Text>
+                      <Text style={[styles.pageMeta, { color: subColor }]}>{item.pageType.replace(/_/g, ' ')}</Text>
+                      <View style={styles.chipRow}>
+                        <SoundsChip count={activeCueCount} />
+                        <AmbientChip active={!!item.ambientSoundId} />
+                      </View>
                     </View>
-                  )}
-                  <View style={styles.pageInfo}>
-                    <Text style={[styles.pageNo, { color: textColor }]}>
-                      Page {item.pageNumber}
-                    </Text>
-                    <Text style={[styles.pageMeta, { color: subColor }]}>{item.pageType.replace(/_/g, ' ')}</Text>
-                    <View style={styles.chipRow}>
-                      <SoundsChip count={activeCueCount} />
-                      <AmbientChip active={!!item.ambientSoundId} />
-                    </View>
+                    <Text style={[styles.chevron, { color: subColor }]}>›</Text>
                   </View>
-                  <Text style={[styles.chevron, { color: subColor }]}>›</Text>
-                </View>
 
-                {item.ocrText ? (
-                  <Text style={[styles.ocr, { color: textColor }]} numberOfLines={3} ellipsizeMode="tail">
-                    {item.ocrText}
-                  </Text>
-                ) : (
-                  <Text style={[styles.ocrEmpty, { color: subColor }]}>No text recognized on this page.</Text>
-                )}
-              </Pressable>
-            </DraggablePageCard>
+                  {item.ocrText ? (
+                    <Text style={[styles.ocr, { color: textColor }]} numberOfLines={3} ellipsizeMode="tail">
+                      {item.ocrText}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.ocrEmpty, { color: subColor }]}>No text recognized on this page.</Text>
+                  )}
+                </Pressable>
+              </DraggablePageCard>
+            </SwipeableRow>
           );
         })}
 
@@ -493,8 +451,6 @@ export default function BookDetailScreen() {
           </View>
         </View>
       </ScrollView>
-
-      <TrashBin draggingIndex={draggingIndex} binHover={binHover} />
 
       {/* Pre-flight gate + the primary "Read" action, pinned bottom (thumb). */}
       <View style={[styles.readBar, { backgroundColor, borderTopColor: chipBackground }]}>
@@ -717,21 +673,6 @@ const styles = StyleSheet.create({
 
   processingOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
   processingCard: { borderRadius: 16, padding: 28, alignItems: 'center', gap: 14, minWidth: 240 },
-
-  trashBin: {
-    position: 'absolute',
-    bottom: BIN_BOTTOM_OFFSET,
-    left: (SCREEN_W - BIN_SIZE) / 2,
-    width: BIN_SIZE,
-    height: BIN_SIZE,
-    borderRadius: BIN_SIZE / 2,
-    backgroundColor: 'rgba(255,69,58,0.15)',
-    borderWidth: 2,
-    borderColor: '#ff453a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  trashBinIcon: { fontSize: 30 },
 
   renameCard: { width: '86%', borderRadius: 16, padding: 20, gap: 14 },
   readyPopupCard: { width: '86%', borderRadius: 16, padding: 20, gap: 14, alignItems: 'center' },

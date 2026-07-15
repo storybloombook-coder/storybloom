@@ -68,6 +68,7 @@ import Animated, {
   useAnimatedStyle,
   useFrameCallback,
   useSharedValue,
+  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
@@ -211,6 +212,16 @@ const LIFT_THRESHOLD = 20;
 // confirm on a real device and adjust further if it still falls short.
 const LIFT_MIN = -220;
 const LIFT_MAX = 24; // a little downward give too
+// Raising LIFT_MIN alone wasn't enough — the shelf sits inside a scrollable
+// list (library.tsx's FlatList), and a ScrollView clips its own content at
+// its own top edge: with the list scrolled to the top (the normal resting
+// position), a spine translated up by LIFT_MIN pixels moves ABOVE y=0 of the
+// scrollable content and gets hard-clipped there, well short of LIFT_MIN's
+// full range — this is the "clear border ~half book upper the standing
+// book" the raw translateY increase didn't fix. The real fix is reserving
+// actual space above the shelf for the lift to move into (see `headroom`
+// below), not just allowing a bigger (but still-clipped) translateY.
+const LIFT_HEADROOM = 220; // matches |LIFT_MIN| so the full range fits unclipped
 // Releasing a lifted spine used to withSpring(0) it back down — but that
 // spring was gated behind `isMe` in the style, which flips false the instant
 // the drag ends, so the animation was invisible and it just snapped to the
@@ -493,6 +504,7 @@ function Spine({
 function ShelfPage({
   books,
   containerWidth,
+  headroom,
   onOpen,
   onReorder,
 }: {
@@ -500,6 +512,12 @@ function ShelfPage({
   books: BookSummary[];
   /** Full shelf width available (spines never shrink to fit; see SPINE_WIDTH). */
   containerWidth: number;
+  /** Owned by the outer Bookshelf, which renders a spacer above the shelf
+   *  sized from this value — see the LIFT_HEADROOM note above the constants.
+   *  This component only ever writes into it (spring-integrated in the frame
+   *  loop below, toward LIFT_HEADROOM while any spine is genuinely lifted,
+   *  back to 0 once none are). */
+  headroom: SharedValue<number>;
   onOpen: (book: BookSummary) => void;
   /** Called with the new left-to-right book ids (this page only) after a drag settles. */
   onReorder: (bookIds: string[]) => void;
@@ -537,6 +555,10 @@ function ShelfPage({
   // continuous brush across the shelf, not once per frame it's under the
   // finger.
   const swipedIndices = useSharedValue<number[]>([]);
+  // 0/1 — last-known "is any spine genuinely lifted" state, so the headroom
+  // withTiming below only fires ONCE per transition, not every frame — see
+  // the headroom prop doc and the LIFT_HEADROOM note above the constants.
+  const headroomV = useSharedValue(0);
 
   // xs/vxs/order/rotations/rotationVs are all indexed by POSITION in the
   // `books` array, but the parent re-sorts that array (by shelfPosition)
@@ -864,6 +886,28 @@ function ShelfPage({
       nextXs[i] += nextVxs[i] * dt;
     }
 
+    // Expand/retract the reserved headroom above the shelf (see the
+    // LIFT_HEADROOM note above the constants) the MOMENT any spine crosses
+    // into/out of "genuinely lifted" — a one-time transition, not a
+    // continuous per-frame write, driven by withTiming so it always finishes
+    // even if this loop later early-returns (settles) before the animation
+    // itself is done; same lesson as the delete-swipe reveal fix (a
+    // manually-integrated value can freeze mid-transition if nothing keeps
+    // nudging it, withTiming can't).
+    let anyLifted = draggingIndex.value >= 0 && Math.abs(nextLiftYs[draggingIndex.value]) > LIFT_THRESHOLD;
+    if (!anyLifted) {
+      for (let i = 0; i < len; i++) {
+        if (Math.abs(nextLiftYs[i]) > LIFT_THRESHOLD) {
+          anyLifted = true;
+          break;
+        }
+      }
+    }
+    if ((anyLifted ? 1 : 0) !== headroomV.value) {
+      headroomV.value = anyLifted ? 1 : 0;
+      headroom.value = withTiming(anyLifted ? LIFT_HEADROOM : 0, { duration: anyLifted ? 180 : 260 });
+    }
+
     // A leaning/toppling book's effective footprint isn't just its upright
     // spineWidth — as it rotates (around its grounded corner, see the style)
     // its top edge sweeps sideways in the fall direction, like a falling
@@ -1103,16 +1147,25 @@ export default function Bookshelf({
     setContainerWidth(e.nativeEvent.layout.width);
   }
 
+  // Reserved space above the shelf, expanded/retracted by ShelfPage's frame
+  // loop while a spine is genuinely lifted — see the LIFT_HEADROOM note above
+  // the constants. Owned here (not inside ShelfPage) so it survives a page
+  // switch, which remounts ShelfPage via its `key`.
+  const headroom = useSharedValue(0);
+  const spacerStyle = useAnimatedStyle(() => ({ height: headroom.value }));
+
   if (books.length === 0) return null;
 
   return (
     <View style={styles.wrap} onLayout={onLayout}>
+      <Animated.View style={spacerStyle} />
       <Text style={styles.label}>Bookshelf</Text>
       {containerWidth > 0 && (
         <ShelfPage
           key={currentShelf}
           books={pageBooks}
           containerWidth={containerWidth}
+          headroom={headroom}
           onOpen={onOpen}
           onReorder={handlePageReorder}
         />
