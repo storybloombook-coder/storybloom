@@ -153,6 +153,14 @@ const COLLISION_ROTATION_KICK = 1.0;
 //      sliding books across the shelf (see the `gravity` computation below),
 //      not just leaning/toppling them in place.
 const TILT_LEAN_DEG_PER_UNIT = 11; // degrees of lean per unit of tiltX — calmer baseline
+// Temporarily disabled — flip back to true to re-enable. While off, tilt
+// only ever produces the gentle lean below (capped at MAX_LEAN_DEG), never
+// a full topple or actual sliding across the shelf.
+const FALL_ENABLED = false;
+const SLIDE_ENABLED = false;
+// Hard cap on the ambient lean angle while FALL_ENABLED is off — "just a
+// little tilt," not a progression toward toppling.
+const MAX_LEAN_DEG = 7;
 const FALL_TILT_THRESHOLD = 0.148; // sin(8.5°) — average book's topple angle
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
 const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coefficient
@@ -662,8 +670,10 @@ export default function Bookshelf({
     // rather than paying it 60x/sec for no visible effect.
     // Sliding is gated behind SLIDE_TILT_THRESHOLD specifically (~20°) — a
     // lesser tilt only leans/topples books in place (see the rotation
-    // target below), it never translates them across the shelf.
-    const rawGravity = Math.abs(tiltX.value) > SLIDE_TILT_THRESHOLD ? tiltX.value * GRAVITY_STRENGTH : 0;
+    // target below), it never translates them across the shelf. Also
+    // temporarily disabled outright via SLIDE_ENABLED (see its declaration).
+    const rawGravity =
+      SLIDE_ENABLED && Math.abs(tiltX.value) > SLIDE_TILT_THRESHOLD ? tiltX.value * GRAVITY_STRENGTH : 0;
     // Friction: a book won't creep at all unless gravity's pull exceeds it,
     // and even while sliding, friction keeps opposing the motion (Coulomb
     // friction, not just velocity damping) — without this ANY tilt above the
@@ -776,8 +786,12 @@ export default function Bookshelf({
           Math.max(-FALL_ROTATION_DEG, cornerHangDeg * CORNER_HANG_STRENGTH + tiltLean)
         );
       } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
-        restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
-        if (Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
+        // FALL_ENABLED off: just the gentle lean, hard-capped at
+        // MAX_LEAN_DEG — no progression toward a full topple at all.
+        restTarget = FALL_ENABLED
+          ? tiltX.value * TILT_LEAN_DEG_PER_UNIT
+          : Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
+        if (FALL_ENABLED && Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
           // Past the fall threshold a book topples fully onto its side —
           // UNLESS it's pinned against a wall on the low side, in which case
           // the wall is rigid and holds it upright instead of being what
