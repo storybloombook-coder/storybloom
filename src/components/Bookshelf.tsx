@@ -210,7 +210,7 @@ const LIFT_MAX = 24; // a little downward give too
 // everything else: real gravity pulls a released spine down, it lands with
 // its velocity zeroed at the shelf line, and it's visible the whole time
 // because nothing gates it on which spine is currently being dragged.
-const LIFT_GRAVITY = 1000; // was 1400 — heavier books fall a bit less abruptly
+const LIFT_GRAVITY = 1500; // 1.5x faster fall — 1000 felt too slow/floaty on release
 
 // Tilt the phone and the shelf's own "gravity" tips with it — books slide
 // toward the low side and pile against the wall, same collision system as a
