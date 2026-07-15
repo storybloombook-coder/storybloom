@@ -109,12 +109,24 @@ export default function DraggablePageCard({
     })
     .onEnd(() => {
       const target = computeTargetIndex(translateY.value);
-      translateY.value = withTiming(0);
       dragging.value = 0;
       draggingIndex.value = -1;
       targetIndex.value = -1;
       if (target !== index) {
+        // A real reorder — this card is about to move to a new position in
+        // the list, which layout={LinearTransition} (below) will already
+        // animate smoothly on its own. Animating translateY back to 0 AT THE
+        // SAME TIME stacked a SECOND transition on top of that one (they're
+        // separate transform sources that compose), which is what made the
+        // drop read as a hard, high-amplitude "bounce" instead of one clean
+        // settle. Zero it instantly and let LinearTransition own the motion.
+        translateY.value = 0;
         runOnJS(onReorder)(index, target);
+      } else {
+        // No reorder — dropped back in the same slot, so there's no layout
+        // change for LinearTransition to animate. This IS the only motion,
+        // so it needs its own smooth return.
+        translateY.value = withTiming(0);
       }
     });
 
