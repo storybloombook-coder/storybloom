@@ -7,9 +7,10 @@
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  LinearTransition,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
@@ -114,7 +115,13 @@ export default function SwipeableRow({
   };
 
   return (
-    <View
+    // layout={LinearTransition} lives HERE (not on the child card) because
+    // this is the element React actually repositions when a caller's list
+    // reorders by key (e.g. book/[id].tsx's drag-to-reorder page list) — a
+    // layout animation on a child whose own position within this row never
+    // changes is inert and just leaves the real reorder to snap instantly.
+    <Animated.View
+      layout={LinearTransition}
       style={styles.swipeWrap}
       onLayout={(e) => {
         const w = e.nativeEvent.layout.width;
@@ -140,7 +147,7 @@ export default function SwipeableRow({
           {open && <Pressable style={StyleSheet.absoluteFill} onPress={close} />}
         </Animated.View>
       </GestureDetector>
-    </View>
+    </Animated.View>
   );
 }
 

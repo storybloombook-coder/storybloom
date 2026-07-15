@@ -14,7 +14,6 @@ import type { ReactNode } from 'react';
 import { StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  LinearTransition,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
@@ -116,7 +115,6 @@ export default function DraggablePageCard({
 
   return (
     <Animated.View
-      layout={LinearTransition}
       style={[styles.wrapper, animatedStyle]}
       onLayout={(e) => onMeasured(index, e.nativeEvent.layout.height)}
     >
