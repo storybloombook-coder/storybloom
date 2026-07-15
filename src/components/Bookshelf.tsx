@@ -786,23 +786,25 @@ export default function Bookshelf({
           Math.max(-FALL_ROTATION_DEG, cornerHangDeg * CORNER_HANG_STRENGTH + tiltLean)
         );
       } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
-        // FALL_ENABLED off: just the gentle lean, hard-capped at
-        // MAX_LEAN_DEG — no progression toward a full topple at all.
-        restTarget = FALL_ENABLED
-          ? tiltX.value * TILT_LEAN_DEG_PER_UNIT
-          : Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
-        if (FALL_ENABLED && Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
-          // Past the fall threshold a book topples fully onto its side —
-          // UNLESS it's pinned against a wall on the low side, in which case
-          // the wall is rigid and holds it upright instead of being what
-          // tips it over. Only the wall it's actually leaning INTO braces
-          // it; the far wall is irrelevant.
-          const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
-          const atRightWall = nextXs[i] >= maxX - 0.5;
-          const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
-          if (!bracedByWall) {
+        // A wall is rigid — a book resting against the wall it would be
+        // leaning INTO can't tilt that way at all, gentle lean or full
+        // topple alike (the far wall, if any, is irrelevant). Checked
+        // first and unconditionally, not just when FALL_ENABLED.
+        const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
+        const atRightWall = nextXs[i] >= maxX - 0.5;
+        const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
+        if (bracedByWall) {
+          restTarget = 0;
+        } else if (FALL_ENABLED) {
+          restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
+          // Past the fall threshold a book topples fully onto its side.
+          if (Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
             restTarget = Math.sign(tiltX.value) * FALL_ROTATION_DEG;
           }
+        } else {
+          // FALL_ENABLED off: just the gentle lean, hard-capped at
+          // MAX_LEAN_DEG — no progression toward a full topple at all.
+          restTarget = Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
         }
       }
       const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
@@ -854,14 +856,21 @@ export default function Bookshelf({
     // its top edge sweeps sideways in the fall direction, like a falling
     // rod, reaching into a neighbor's space even though its base x-position
     // hasn't moved. Approximate the extra reach on whichever side it's
-    // currently leaning/falling toward as height*sin(angle), so collisions
-    // actually happen as it swings over instead of only ever colliding via
-    // its plain upright bounding box.
+    // currently leaning/falling toward as height*sin(angle) — but scaled by
+    // the SAME pivotFrac the render style uses (how far into a full topple
+    // the current rotation already is), not the raw sin() alone. Height is
+    // much bigger than width for these thin spines, so an un-scaled sin()
+    // made even a gentle ~7° ambient lean add ~15px of reach — since every
+    // spine leans the same direction under one tilt, that pushed the WHOLE
+    // shelf apart just from leaning, with no real topple involved. Scaling
+    // by pivotFrac makes a small lean's reach negligible while still giving
+    // a real topple (pivotFrac -> 1) the full sweep for genuine collisions.
     const rightReach: number[] = [];
     const leftReach: number[] = [];
     for (let i = 0; i < len; i++) {
+      const pivotFrac = Math.min(1, Math.abs(nextRotations[i]) / FALL_ROTATION_DEG);
       const rad = (Math.abs(nextRotations[i]) * Math.PI) / 180;
-      const sweep = Math.sin(rad) * SPINE_VISIBLE_HEIGHT;
+      const sweep = Math.sin(rad) * SPINE_VISIBLE_HEIGHT * pivotFrac;
       rightReach.push(spineWidth / 2 + (nextRotations[i] > 0 ? sweep : 0));
       leftReach.push(spineWidth / 2 + (nextRotations[i] < 0 ? sweep : 0));
     }
