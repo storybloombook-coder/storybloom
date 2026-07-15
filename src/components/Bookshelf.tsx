@@ -102,6 +102,10 @@ const SPINE_VISIBLE_HEIGHT = SHELF_HEIGHT - 8;
 // glitchy on real hardware, insetting the range avoids the overlap
 // altogether.
 const WALL_WIDTH = 6;
+// Scrollbar thumb never shrinks below this, however many books are on a
+// full shelf — otherwise it'd become too small to grab accurately.
+const SCROLLBAR_THUMB_MIN_WIDTH = 28;
+const SCROLLBAR_TRACK_HEIGHT = 14;
 
 // Grab-point-dependent tilt: picking a spine up off-center from its own
 // midpoint (like a real book grabbed near one end) makes it rotate as it's
@@ -487,11 +491,67 @@ export default function Bookshelf({
   const [containerWidth, setContainerWidth] = useState(0);
   const n = books.length;
 
+  // Shrink spines to fit first (down to MIN_SPINE_WIDTH); once even that
+  // doesn't fit everyone, stop shrinking and let the content genuinely
+  // exceed the viewport — that's what makes the shelf scrollable (see
+  // contentWidth/shelfScrollX below) instead of overflowing uncontrolled.
   const spineWidth = useMemo(() => {
     if (containerWidth === 0 || n === 0) return MAX_SPINE_WIDTH;
     const fit = (containerWidth - (n - 1) * SPINE_GAP) / n;
     return Math.max(MIN_SPINE_WIDTH, Math.min(MAX_SPINE_WIDTH, Math.floor(fit)));
   }, [containerWidth, n]);
+
+  // The actual width the shelf's contents need — physics (xs, collision,
+  // drag bounds) all operate in this CONTENT space, never the viewport.
+  // Only ever larger than containerWidth once spines are already at
+  // MIN_SPINE_WIDTH and still don't all fit.
+  const contentWidth = useMemo(() => {
+    if (n === 0) return containerWidth;
+    const needed = n * spineWidth + (n - 1) * SPINE_GAP + 2 * WALL_WIDTH;
+    return Math.max(containerWidth, needed);
+  }, [n, spineWidth, containerWidth]);
+  const needsScroll = contentWidth > containerWidth;
+
+  // How far the shelf's own "camera" has scrolled — driven only by the
+  // slider below (see ShelfScrollbar), never by a drag-to-pan gesture on
+  // the shelf itself, so it can't conflict with the per-spine drag or the
+  // whole-shelf quick-swipe gesture. Applied as a single transform on the
+  // shelf content; every book's own xs/vxs/etc. stay in content-space,
+  // completely unaware scrolling exists.
+  const shelfScrollX = useSharedValue(0);
+  useEffect(() => {
+    const maxScroll = Math.max(0, contentWidth - containerWidth);
+    if (shelfScrollX.value > maxScroll) shelfScrollX.value = maxScroll;
+  }, [contentWidth, containerWidth, shelfScrollX]);
+  const scrollStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -shelfScrollX.value }],
+  }));
+
+  // Scrollbar geometry — plain JS numbers (not shared values), recomputed
+  // every render like spineWidth/contentWidth above; the gesture below reads
+  // them from its render-time closure, same pattern as shelfSwipeGesture.
+  const maxScrollPx = Math.max(0, contentWidth - containerWidth);
+  const thumbWidthPx = containerWidth > 0
+    ? Math.max(SCROLLBAR_THUMB_MIN_WIDTH, (containerWidth / contentWidth) * containerWidth)
+    : SCROLLBAR_THUMB_MIN_WIDTH;
+  const maxThumbTravelPx = Math.max(0, containerWidth - thumbWidthPx);
+
+  const scrollThumbStyle = useAnimatedStyle(() => {
+    const frac = maxScrollPx > 0 ? shelfScrollX.value / maxScrollPx : 0;
+    return { transform: [{ translateX: frac * maxThumbTravelPx }] };
+  });
+
+  const scrollDragStartX = useSharedValue(0);
+  const scrollbarGesture = Gesture.Pan()
+    .onStart(() => {
+      scrollDragStartX.value = shelfScrollX.value;
+    })
+    .onUpdate((e) => {
+      if (maxThumbTravelPx <= 0) return;
+      const deltaContent = (e.translationX / maxThumbTravelPx) * maxScrollPx;
+      const next = scrollDragStartX.value + deltaContent;
+      shelfScrollX.value = Math.min(Math.max(next, 0), maxScrollPx);
+    });
 
   // books arrives pre-sorted by shelf position, so initial rank == array
   // index — these seed values already match, no snap-into-place on mount.
@@ -577,8 +637,8 @@ export default function Bookshelf({
   // Shared-value writes must happen in an effect, not during render (Reanimated
   // strict mode warns/misbehaves otherwise).
   useEffect(() => {
-    widthShared.value = containerWidth;
-  }, [containerWidth, widthShared]);
+    widthShared.value = contentWidth;
+  }, [contentWidth, widthShared]);
 
   const lastMagnitude = useRef(1);
   const lastShakeAt = useRef(0);
@@ -973,40 +1033,53 @@ export default function Bookshelf({
   return (
     <View style={styles.wrap} onLayout={onLayout}>
       <Text style={styles.label}>⭐ Bookshelf</Text>
-      <GestureDetector gesture={shelfSwipeGesture}>
-        <View style={[styles.shelfArea, { height: SHELF_HEIGHT }]}>
-          {/* Solid bookend walls at the shelf's own physical boundary — the
-              same edges the physics already pins spines against, just made
-              visible instead of an invisible wall. Rendered behind the
-              spines (default z-index), so a pinned book naturally covers it. */}
-          <View style={[styles.shelfWall, styles.shelfWallLeft]} />
-          <View style={[styles.shelfWall, styles.shelfWallRight]} />
-          {containerWidth > 0 &&
-            books.map((book, index) => (
-              <Spine
-                key={book.id}
-                book={book}
-                index={index}
-                spineWidth={spineWidth}
-                containerWidth={containerWidth}
-                xs={xs}
-                order={order}
-                draggingIndex={draggingIndex}
-                lastDragX={lastDragX}
-                liftYs={liftYs}
-                lastDragLiftY={lastDragLiftY}
-                bounceY={bounceY}
-                rotations={rotations}
-                grabOffsetFrac={grabOffsetFrac}
-                grabOffsetXPx={grabOffsetXPx}
-                grabOffsetYPx={grabOffsetYPx}
-                shelfSwipeGesture={shelfSwipeGesture}
-                onOpen={onOpen}
-                onReordered={handleReordered}
-              />
-            ))}
+      {/* Fixed-width viewport that clips the (possibly wider) shelf content —
+          scrolling is just a translateX on the content below, driven only by
+          the scrollbar thumb, never a pan-to-scroll on the shelf itself, so it
+          can't conflict with the per-spine drag or the whole-shelf swipe. */}
+      <View style={[styles.shelfViewport, { height: SHELF_HEIGHT }]}>
+        <GestureDetector gesture={shelfSwipeGesture}>
+          <Animated.View style={[styles.shelfArea, { height: SHELF_HEIGHT, width: contentWidth }, scrollStyle]}>
+            {/* Solid bookend walls at the shelf's own physical boundary — the
+                same edges the physics already pins spines against, just made
+                visible instead of an invisible wall. Rendered behind the
+                spines (default z-index), so a pinned book naturally covers it. */}
+            <View style={[styles.shelfWall, styles.shelfWallLeft]} />
+            <View style={[styles.shelfWall, styles.shelfWallRight]} />
+            {containerWidth > 0 &&
+              books.map((book, index) => (
+                <Spine
+                  key={book.id}
+                  book={book}
+                  index={index}
+                  spineWidth={spineWidth}
+                  containerWidth={contentWidth}
+                  xs={xs}
+                  order={order}
+                  draggingIndex={draggingIndex}
+                  lastDragX={lastDragX}
+                  liftYs={liftYs}
+                  lastDragLiftY={lastDragLiftY}
+                  bounceY={bounceY}
+                  rotations={rotations}
+                  grabOffsetFrac={grabOffsetFrac}
+                  grabOffsetXPx={grabOffsetXPx}
+                  grabOffsetYPx={grabOffsetYPx}
+                  shelfSwipeGesture={shelfSwipeGesture}
+                  onOpen={onOpen}
+                  onReordered={handleReordered}
+                />
+              ))}
+          </Animated.View>
+        </GestureDetector>
+      </View>
+      {needsScroll && containerWidth > 0 && (
+        <View style={[styles.scrollTrack, { width: containerWidth }]}>
+          <GestureDetector gesture={scrollbarGesture}>
+            <Animated.View style={[styles.scrollThumb, { width: thumbWidthPx }, scrollThumbStyle]} />
+          </GestureDetector>
         </View>
-      </GestureDetector>
+      )}
       <View style={styles.shelfLip} />
     </View>
   );
@@ -1015,7 +1088,21 @@ export default function Bookshelf({
 const styles = StyleSheet.create({
   wrap: { marginBottom: 18 },
   label: { fontSize: 13, fontWeight: '700', marginBottom: 6, marginLeft: 2, opacity: 0.6 },
+  shelfViewport: { position: 'relative', overflow: 'hidden' },
   shelfArea: { position: 'relative' },
+  scrollTrack: {
+    height: SCROLLBAR_TRACK_HEIGHT,
+    marginTop: 6,
+    borderRadius: SCROLLBAR_TRACK_HEIGHT / 2,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    justifyContent: 'center',
+  },
+  scrollThumb: {
+    position: 'absolute',
+    height: SCROLLBAR_TRACK_HEIGHT,
+    borderRadius: SCROLLBAR_TRACK_HEIGHT / 2,
+    backgroundColor: '#8a5a34',
+  },
   shelfWall: {
     position: 'absolute',
     top: 0,

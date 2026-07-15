@@ -11,8 +11,7 @@
 // part CLAUDE.md warns about — expect to retune ALIGN_LOOKAHEAD and watch for
 // missed/duplicate fires on real books.
 //
-// The first read-through also doubles as verification — reaching the end offers
-// "Looks good ✓", which marks the book reviewStatus = 'approved'.
+// Reaching the end offers "Read again" or "Done" — no separate approval step.
 
 import { createAudioPlayer, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
@@ -24,7 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../../components/TactileButton';
 import { playFull, playLooping, playRange } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
-import { getBook, getCuesForBook, getPagesForBook, updateBookReviewStatus } from '../../lib/db';
+import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
 import { cueAtRange, tokenize } from '../../lib/reader/text';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import { NEXT_PAGE_PHRASES, type SpeechLang } from '../../lib/speech/types';
@@ -106,7 +105,6 @@ export default function ReaderScreen() {
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState(0);
   const [finished, setFinished] = useState(false);
-  const [approved, setApproved] = useState(false);
   // Which token is mid-press / mid-play, for a quick visual pop on tap.
   const [firingToken, setFiringToken] = useState<number | null>(null);
   const [micStatus, setMicStatus] = useState<MicStatus>('idle');
@@ -392,13 +390,6 @@ export default function ReaderScreen() {
     if (index > 0) setIndex((i) => i - 1);
   }
 
-  async function markApproved() {
-    if (!book) return;
-    await updateBookReviewStatus(book.id, 'approved');
-    setApproved(true);
-    router.back();
-  }
-
   if (loading) {
     return (
       <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
@@ -430,13 +421,6 @@ export default function ReaderScreen() {
           {book?.title ? `You finished “${book.title}.”` : 'You finished the book.'}
         </Text>
         <View style={styles.endActions}>
-          <TactileButton
-            style={styles.endPrimary}
-            onPress={markApproved}
-            disabled={approved}
-          >
-            <Text style={styles.endPrimaryLabel}>✓  Looks good</Text>
-          </TactileButton>
           <TactileButton
             style={[styles.secondaryBtn, { backgroundColor: cardBackground }]}
             onPress={() => {
@@ -666,15 +650,6 @@ const styles = StyleSheet.create({
   endTitle: { fontSize: 30, fontWeight: '800' },
   endSub: { fontSize: 15, textAlign: 'center', marginTop: 8, marginBottom: 28 },
   endActions: { alignSelf: 'stretch', gap: 12 },
-  endPrimary: {
-    backgroundColor: 'rgba(47,179,68,0.15)',
-    borderWidth: 2,
-    borderColor: '#2fb344',
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  endPrimaryLabel: { color: '#2fb344', fontSize: 17, fontWeight: '800' },
   secondaryBtn: { borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
   secondaryLabel: { fontSize: 16, fontWeight: '700' },
 });
