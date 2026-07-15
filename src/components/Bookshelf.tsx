@@ -11,7 +11,11 @@
 // overlaps gets shoved — an actual velocity kick, not a teleport — and
 // settles back with its own momentum. Dragging one spine through the row
 // continuously re-ranks the order, so neighbors slide out of the way to open
-// a gap, matching a real "push books along a shelf" gesture.
+// a gap, matching a real "push books along a shelf" gesture. The MOMENT that
+// live-reordered target rank changes, the two spines now adjacent to the gap
+// get a one-time outward kick + a small wiggle + a haptic tick — a preview
+// of where it'll land, not just a reaction once you actually drop it in
+// (see GAP_NUDGE_KICK/GAP_WIGGLE_KICK).
 //
 // Interaction: LONG-PRESS a spine to pick it up and drag; a quick tap opens
 // the book (same activateAfterLongPress + nested Pressable pattern already
@@ -108,7 +112,7 @@ const TILT_LEAN_DEG_PER_UNIT = 16; // degrees of lean per unit of tiltX
 // Past this tilt, a spine that's already pinned against a wall (nowhere left
 // to slide) stops merely leaning and topples fully onto its side instead —
 // same spring, just retargeted to a much steeper angle.
-const FALL_TILT_THRESHOLD = 0.5;
+const FALL_TILT_THRESHOLD = 0.4;
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
 
 // Physics tuning — soft enough to feel weighty, damped enough not to jitter.
@@ -119,6 +123,17 @@ const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued f
 const DAMPING = 14; // velocity drag
 const BUMP = 3; // extra velocity kick imparted on collision
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
+
+// Make-room reaction: while dragging a spine (especially while lifted,
+// hovering to insert it into a gap), the moment its live-reordered target
+// rank changes, the two spines that are now its immediate neighbors get a
+// one-time outward velocity kick (part apart to open the gap) plus a small
+// rotational wiggle — a preview that "this is where it'll land" instead of
+// only reacting once you actually drop it in. A one-time KICK, not a
+// restoring force, so it doesn't reintroduce the "drawn toward a slot"
+// behavior that was deliberately removed elsewhere.
+const GAP_NUDGE_KICK = 90; // outward velocity kick, same order as collision BUMP
+const GAP_WIGGLE_KICK = 70; // small rotational velocity kick, degrees/sec
 
 // Lift-out-of-the-shelf tuning. Past LIFT_THRESHOLD the dragged spine is
 // "in the air" — it stops colliding with neighbors (so it can hover freely
@@ -156,7 +171,7 @@ const TILT_DEADZONE = 0.12;
 // while sliding, friction (not just velocity damping) constantly opposes the
 // motion. Modeled as a Coulomb-friction force that's subtracted from gravity's
 // pull — below this magnitude gravity can't move anything at all.
-const FRICTION = 350;
+const FRICTION = 480;
 
 // Shake-to-mix: a sudden jolt in total acceleration (not just tilt) shuffles
 // the whole shelf, same physics as everything else — a randomized order plus
@@ -206,6 +221,10 @@ function hapticStart() {
 
 function hapticDrop() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+}
+
+function hapticGap() {
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 }
 
 function Spine({
@@ -385,6 +404,12 @@ export default function Bookshelf({
   const rotations = useSharedValue<number[]>(books.map(() => 0));
   const rotationVs = useSharedValue<number[]>(books.map(() => 0));
   const grabOffsetFrac = useSharedValue(0);
+  // Tracks which two books were most recently the dragged spine's immediate
+  // neighbors (-1 = none), so the frame loop can detect the MOMENT that
+  // changes and fire a one-time make-room kick + haptic, instead of
+  // reapplying it continuously every frame.
+  const gapLeft = useSharedValue(-1);
+  const gapRight = useSharedValue(-1);
 
   // xs/vxs/order/rotations/rotationVs are all indexed by POSITION in the
   // `books` array, but the parent re-sorts that array (by shelfPosition)
@@ -587,6 +612,32 @@ export default function Bookshelf({
     // lowered back toward the shelf line, where it lands with a real bump.
     const draggedLifted = draggingIndex.value >= 0 && Math.abs(liftYs.value[draggingIndex.value]) > LIFT_THRESHOLD;
 
+    // Make-room preview: the moment the dragged spine's live-reordered target
+    // rank puts it into a NEW gap, kick that gap's two neighbors apart (plus
+    // a small wiggle) and buzz once — a one-time reaction to the CHANGE, not
+    // a continuous force, so it doesn't linger into a restoring spring.
+    if (draggingIndex.value >= 0) {
+      const rank = order.value.indexOf(draggingIndex.value);
+      const newLeft = rank > 0 ? order.value[rank - 1] : -1;
+      const newRight = rank < order.value.length - 1 ? order.value[rank + 1] : -1;
+      if (newLeft !== gapLeft.value || newRight !== gapRight.value) {
+        gapLeft.value = newLeft;
+        gapRight.value = newRight;
+        if (newLeft >= 0) {
+          nextVxs[newLeft] -= GAP_NUDGE_KICK;
+          nextRotationVs[newLeft] -= GAP_WIGGLE_KICK;
+        }
+        if (newRight >= 0) {
+          nextVxs[newRight] += GAP_NUDGE_KICK;
+          nextRotationVs[newRight] += GAP_WIGGLE_KICK;
+        }
+        runOnJS(hapticGap)();
+      }
+    } else if (gapLeft.value !== -1 || gapRight.value !== -1) {
+      gapLeft.value = -1;
+      gapRight.value = -1;
+    }
+
     for (let i = 0; i < len; i++) {
       // Rotation always integrates, dragged spine or not — torque only while
       // it's the one being dragged. When not dragged, the spring's TARGET
@@ -714,6 +765,12 @@ export default function Bookshelf({
     <View style={styles.wrap} onLayout={onLayout}>
       <Text style={styles.label}>⭐ Bookshelf</Text>
       <View style={[styles.shelfArea, { height: SHELF_HEIGHT }]}>
+        {/* Solid bookend walls at the shelf's own physical boundary — the
+            same edges the physics already pins spines against, just made
+            visible instead of an invisible wall. Rendered behind the
+            spines (default z-index), so a pinned book naturally covers it. */}
+        <View style={[styles.shelfWall, styles.shelfWallLeft]} />
+        <View style={[styles.shelfWall, styles.shelfWallRight]} />
         {containerWidth > 0 &&
           books.map((book, index) => (
             <Spine
@@ -745,6 +802,20 @@ const styles = StyleSheet.create({
   wrap: { marginBottom: 18 },
   label: { fontSize: 13, fontWeight: '700', marginBottom: 6, marginLeft: 2, opacity: 0.6 },
   shelfArea: { position: 'relative' },
+  shelfWall: {
+    position: 'absolute',
+    top: 0,
+    bottom: 8, // matches `spine`'s own bottom inset — sits on the same shelf line
+    width: 6,
+    backgroundColor: '#6b4423',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  shelfWallLeft: { left: 0, borderTopLeftRadius: 3, borderBottomLeftRadius: 3 },
+  shelfWallRight: { right: 0, borderTopRightRadius: 3, borderBottomRightRadius: 3 },
   spine: {
     position: 'absolute',
     top: 0,
