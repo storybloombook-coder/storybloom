@@ -28,11 +28,18 @@
 // "gravity" tilts with it — past a deadzone AND past static friction (real
 // shelves have friction; see FRICTION below), books slide toward the low
 // side and pile against the wall through the same collision system as a
-// drag. Shake the phone hard enough (a sudden jolt in total acceleration)
-// and the whole shelf mixes itself up — randomized order, each spine kicked
-// outward so they tumble into place rather than silently snapping. A fast
-// vertical phone movement also gives the whole shelf a physically-real
-// vertical hop, driven directly by the sensed jerk — see BOUNCE_* below.
+// drag. Every spine also visibly LEANS in proportion to the current tilt,
+// even before anything actually slides, so you can see gravity's direction
+// on the shelf itself — and a spine that's pinned against a wall (nowhere
+// left to slide) with the tilt still getting steeper topples fully onto its
+// side instead of just leaning (see TILT_LEAN_DEG_PER_UNIT/FALL_* below;
+// same rotational spring-damper as the grab-point tilt, just aimed at a
+// tilt-driven target instead of level). Shake the phone hard enough (a
+// sudden jolt in total acceleration) and the whole shelf mixes itself up —
+// randomized order, each spine kicked outward so they tumble into place
+// rather than silently snapping. A fast vertical phone movement also gives
+// the whole shelf a physically-real vertical hop, driven directly by the
+// sensed jerk — see BOUNCE_* below.
 // NEEDS A DEV-CLIENT BUILD WITH expo-sensors LINKED — a static `import` of it
 // crashes the WHOLE APP at launch on a build that doesn't have it (the
 // package touches a native module eagerly at import time), so it's required
@@ -81,13 +88,24 @@ const SPINE_VISIBLE_HEIGHT = SHELF_HEIGHT - 8;
 // shoved around, pivoting harder the farther from center you grabbed it —
 // a lightweight rotational spring-damper, same shape as the horizontal
 // physics, with the drag supplying "torque" instead of a driving force.
-const ROTATION_MAX = 22; // degrees, clamp
-const ROTATION_STIFFNESS = 140; // pulls rotation back toward level
+const ROTATION_MAX = 22; // degrees, clamp WHILE BEING DRAGGED
+const ROTATION_STIFFNESS = 140; // pulls rotation back toward its current target
 const ROTATION_DAMPING = 12;
 // Scales (how far off-center you grabbed) * (how fast it's being shoved)
 // into a torque. Sign is a first pass, not yet confirmed on hardware — if a
 // book tips the wrong way for where it was grabbed, flip this to negative.
 const ROTATION_TORQUE = 0.16;
+
+// Ambient tilt lean: even without touching a book, every spine visibly
+// tilts a little as the phone tilts — the same rotation spring-damper above,
+// just aimed at a target that tracks tiltX instead of always being level, so
+// you can SEE gravity's direction on the shelf even before anything slides.
+const TILT_LEAN_DEG_PER_UNIT = 16; // degrees of lean per unit of tiltX
+// Past this tilt, a spine that's already pinned against a wall (nowhere left
+// to slide) stops merely leaning and topples fully onto its side instead —
+// same spring, just retargeted to a much steeper angle.
+const FALL_TILT_THRESHOLD = 0.5;
+const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
 
 // Physics tuning — soft enough to feel weighty, damped enough not to jitter.
 // No home-slot spring — books never get pulled toward a tidy packed
@@ -491,7 +509,12 @@ export default function Bookshelf({
         : Math.abs(rawGravity) <= FRICTION
           ? 0
           : rawGravity - Math.sign(rawGravity) * FRICTION;
-    if (draggingIndex.value === -1 && gravity === 0) {
+    // Note: gravity can be 0 here even with a real tilt, if friction is
+    // canceling it out (see above) — but a tilt below FRICTION strength
+    // should still visibly lean the books, so also bail out of the early
+    // skip whenever there's ANY tilt past the deadzone, not just when it's
+    // strong enough to actually slide something.
+    if (draggingIndex.value === -1 && gravity === 0 && Math.abs(tiltX.value) <= TILT_DEADZONE) {
       let settled = true;
       for (let i = 0; i < len; i++) {
         if (
@@ -525,19 +548,34 @@ export default function Bookshelf({
 
     for (let i = 0; i < len; i++) {
       // Rotation always integrates, dragged spine or not — torque only while
-      // it's the one being dragged, otherwise it's just spring-damped back
-      // toward level (this is what makes it settle back down after release,
-      // not snap to level instantly).
-      const torque = i === draggingIndex.value ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
-      const rotSpring = -nextRotations[i] * ROTATION_STIFFNESS;
+      // it's the one being dragged. When not dragged, the spring's TARGET
+      // isn't always level: it tracks the phone's tilt (ambient lean), and
+      // if this spine is pinned against a wall with nowhere left to slide
+      // and the tilt gets steep enough, the target becomes a full topple —
+      // same spring, just aimed somewhere other than 0. This is also what
+      // makes a released spine settle back down rather than snap to level.
+      const isDragged = i === draggingIndex.value;
+      let restTarget = 0;
+      if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
+        restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
+        const atLeftWall = nextXs[i] <= 0.5;
+        const atRightWall = nextXs[i] >= maxX - 0.5;
+        const pinned = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
+        if (pinned && Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
+          restTarget = Math.sign(tiltX.value) * FALL_ROTATION_DEG;
+        }
+      }
+      const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
+      const rotSpring = -(nextRotations[i] - restTarget) * ROTATION_STIFFNESS;
       const rotDamping = -nextRotationVs[i] * ROTATION_DAMPING;
       nextRotationVs[i] += (rotSpring + rotDamping + torque) * dt;
-      nextRotations[i] = Math.min(
-        ROTATION_MAX,
-        Math.max(-ROTATION_MAX, nextRotations[i] + nextRotationVs[i] * dt)
-      );
+      // Dragging keeps the tighter clamp (a shove shouldn't spin a book past
+      // a believable hand-tilt); ambient lean/fall gets the wider one so a
+      // pinned spine can actually topple onto its side.
+      const clampMax = isDragged ? ROTATION_MAX : FALL_ROTATION_DEG;
+      nextRotations[i] = Math.min(clampMax, Math.max(-clampMax, nextRotations[i] + nextRotationVs[i] * dt));
 
-      if (i === draggingIndex.value) {
+      if (isDragged) {
         // Kinematic: position already set by the gesture.
         nextVxs[i] = draggedVel;
         continue;
