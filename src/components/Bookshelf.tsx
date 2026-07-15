@@ -61,7 +61,7 @@
 
 import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { Pressable, StyleSheet, Text, useColorScheme, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
@@ -203,8 +203,13 @@ const GAP_WIGGLE_KICK = 35; // small rotational velocity kick, degrees/sec
 // over a gap) while still live-reordering, then squeezes back in with a real
 // collision bump the moment it's lowered back below the threshold.
 const LIFT_THRESHOLD = 20;
-const LIFT_MIN = -120; // how high it can be lifted — widened 50% (was -80), books
-// were getting clipped/feeling like they vanished when dragged up near the old limit
+// How high a spine can be lifted. Widened twice now (-80 -> -120 -> -220) —
+// the goal is a book can be dragged nearly up to the "My Library" header
+// above the shelf, not just a token few pixels off the shelf line. This is
+// an estimate (the header's exact on-screen position depends on the device's
+// safe-area/status-bar height, which this component has no way to measure);
+// confirm on a real device and adjust further if it still falls short.
+const LIFT_MIN = -220;
 const LIFT_MAX = 24; // a little downward give too
 // Releasing a lifted spine used to withSpring(0) it back down — but that
 // spring was gated behind `isMe` in the style, which flips false the instant
@@ -1023,6 +1028,10 @@ function ShelfSwitcher({
   current: number;
   onSelect: (index: number) => void;
 }) {
+  // Inactive pills previously had no explicit text/background color, which
+  // defaulted to a near-black-on-near-black look in dark mode — every pill
+  // past the active one was effectively invisible ("just a black zone").
+  const isDark = useColorScheme() === 'dark';
   const indices: number[] = [];
   for (let i = 0; i < count; i++) indices.push(i);
   return (
@@ -1032,9 +1041,21 @@ function ShelfSwitcher({
           key={i}
           onPress={() => onSelect(i)}
           hitSlop={4}
-          style={[styles.shelfDot, i === current && styles.shelfDotActive]}
+          style={[
+            styles.shelfDot,
+            { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)' },
+            i === current && styles.shelfDotActive,
+          ]}
         >
-          <Text style={[styles.shelfDotText, i === current && styles.shelfDotTextActive]}>{i + 1}</Text>
+          <Text
+            style={[
+              styles.shelfDotText,
+              { color: isDark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)' },
+              i === current && styles.shelfDotTextActive,
+            ]}
+          >
+            {i + 1}
+          </Text>
         </Pressable>
       ))}
     </View>
@@ -1115,11 +1136,10 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.08)',
   },
   shelfDotActive: { backgroundColor: '#8a5a34' },
-  shelfDotText: { fontSize: 12, fontWeight: '700', opacity: 0.6 },
-  shelfDotTextActive: { color: '#fff', opacity: 1 },
+  shelfDotText: { fontSize: 12, fontWeight: '700' },
+  shelfDotTextActive: { color: '#fff' },
   shelfWall: {
     position: 'absolute',
     top: 0,

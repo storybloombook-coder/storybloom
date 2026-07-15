@@ -19,7 +19,9 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Bookshelf from '../components/Bookshelf';
@@ -82,10 +84,19 @@ function SwipeableRow({
   // -1 open / 0 closed — so we buzz once each time the slide crosses into the
   // open zone, not every frame.
   const zone = useSharedValue(0);
-  // Timestamp the finger touched down — the bin reveal stays hidden for
-  // REVEAL_DELAY_MS after this, so a light touch or the very start of a
-  // scroll doesn't flash the action before a real slide is underway.
-  const touchedAt = useSharedValue(0);
+  // 0 until REVEAL_DELAY_MS after a FRESH touch, then animates to 1 — driven
+  // by withDelay/withTiming (not a Date.now() check inside the style
+  // worklet) specifically because a style's `useAnimatedStyle` only
+  // re-evaluates when a shared value it reads actually changes. A
+  // Date.now()-based check only "expired" once something else nudged the
+  // worklet to re-run — a fast decisive swipe could finish its withSpring
+  // settle (translateX stops changing) BEFORE the delay elapsed, permanently
+  // freezing the reveal at opacity 0 with nothing left to trigger a
+  // recompute: the bin behind stayed invisible (just a bare gap showing
+  // whatever's behind the row) even though the row was fully open.
+  // withTiming ticks on its own regardless of other shared-value writes, so
+  // it always arrives and the style updates when it does.
+  const revealArmed = useSharedValue(0);
   const [revealW, setRevealW] = useState(0);
   const [open, setOpen] = useState(false);
 
@@ -106,7 +117,8 @@ function SwipeableRow({
       // reveal-delay clock for a FRESH swipe (row currently closed) — touching
       // an already-open row must not make its visible action flash away.
       if (zone.value === 0) {
-        touchedAt.value = Date.now();
+        revealArmed.value = 0;
+        revealArmed.value = withDelay(REVEAL_DELAY_MS, withTiming(1, { duration: 0 }));
       }
       runOnJS(touchTick)();
     })
@@ -138,10 +150,9 @@ function SwipeableRow({
   // would otherwise let it peek through), AND for the first REVEAL_DELAY_MS of
   // any touch — only after that does it fade in over the next few pixels of
   // an actual slide.
-  const binStyle = useAnimatedStyle(() => {
-    const delayed = Date.now() - touchedAt.value < REVEAL_DELAY_MS;
-    return { opacity: delayed ? 0 : Math.min(1, Math.max(0, -translateX.value / 8)) };
-  });
+  const binStyle = useAnimatedStyle(() => ({
+    opacity: revealArmed.value < 1 ? 0 : Math.min(1, Math.max(0, -translateX.value / 8)),
+  }));
 
   const close = () => {
     translateX.value = withSpring(0, { damping: 22, stiffness: 220 });
