@@ -206,16 +206,27 @@ npx eas-cli build --platform android --profile development   # new dev-client bu
   happened once already — see git history around commit `f02060a` if it
   resurfaces.
 - **Two independent Reanimated transforms animating the SAME visual motion
-  at once compound into a visible "bounce"**, even if neither one
-  individually overshoots. Hit this in `DraggablePageCard`: on drop,
-  `translateY` was animated back to 0 via `withTiming` at the exact same
-  moment `layout={LinearTransition}` was ALSO animating the same card's real
-  layout-position change (old slot → new slot) — two separate transform
-  sources stacking read as a hard, high-amplitude bounce. Fix: whichever one
-  of the two is about to fire (here, the layout transition, because a real
-  reorder is happening) should own 100% of the motion — snap the OTHER one
-  (`translateY`/a shifted neighbor's preview offset) to its target
-  INSTANTLY, not animated, the instant you know the real transition is about
-  to take over. Also worth knowing: bare `layout={LinearTransition}`
-  defaults to a bouncy spring — use `.duration(ms)` for a plain eased
-  settle with no overshoot at all.
+  at once either compound into a bounce OR cause a visible snap, depending
+  on how you reconcile them.** Hit this in `DraggablePageCard` on drop:
+  `translateY` (the raw drag offset) and `layout={LinearTransition}`
+  (bridging the card's old-slot-to-new-slot layout position) are two
+  entirely separate transform sources that both act on the same card at the
+  same moment. Animating BOTH independently (mismatched durations/easings)
+  compounded into a hard, high-amplitude "bounce". Zeroing `translateY`
+  INSTANTLY instead (so only LinearTransition animates) fixed the bounce but
+  traded it for a different glitch: the card visually SNAPPED BACK to its
+  old natural slot for an instant (since translateY generally isn't 0 at
+  release — the finger rarely lets go exactly at a slot boundary) before
+  LinearTransition even started. The actual fix: keep BOTH animated, but
+  give them the EXACT SAME duration + easing (`SETTLE_DURATION`/
+  `SETTLE_EASING` constants, shared between the `.onEnd()` `withTiming` call
+  and `LinearTransition.duration().easing()`) — two transforms summed
+  together, easing out at an identical rate, interpolate as ONE continuous
+  motion starting exactly at the release point and ending at the new slot,
+  with neither a bounce nor a snap. (For NEIGHBOR cards being shifted to
+  preview a gap, instant-zero on drop IS correct and needs no such
+  synchronization — their preview offset is engineered to already equal
+  their final resting spot, so it cancels LinearTransition's own delta
+  identically at every point in the curve, not just at the end.) Also worth
+  knowing: bare `layout={LinearTransition}` defaults to a bouncy spring —
+  `.duration(ms)` switches it to a plain eased timing with no overshoot.
