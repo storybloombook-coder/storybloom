@@ -30,7 +30,6 @@ import {
   getAllPages,
   listBookSummaries,
   setBookFavorite,
-  updateBookReviewStatus,
   updateShelfOrder,
   type BookSummary,
 } from '../lib/db';
@@ -47,12 +46,6 @@ const STATUS: Record<Book['prepStatus'], { label: string; color: string }> = {
   processing: { label: 'Prepping…', color: '#e8a33d' },
   ready: { label: 'Ready', color: '#2fb344' },
   failed: { label: 'Prep failed', color: '#ff453a' },
-};
-
-const REVIEW_LABEL: Record<Book['reviewStatus'], string> = {
-  unreviewed: 'Not reviewed',
-  in_progress: 'Review started',
-  approved: 'Approved',
 };
 
 function formatDate(ms: number): string {
@@ -72,28 +65,25 @@ const REVEAL_FRACTION = 0.2;
  *  start appearing — avoids a flash on a light touch or a scroll's first ms. */
 const REVEAL_DELAY_MS = 140;
 
-/** A library row you swipe to reveal an action: LEFT reveals a delete bin
- *  (right side), RIGHT reveals a "mark approved" ✓ (left side). It slides ~20%
- *  and holds; tapping the revealed action runs it, tapping the held-open card
- *  snaps it closed. Vertical list scrolling is preserved (the pan only claims
+/** A library row you swipe left to reveal a delete bin. It slides ~20% and
+ *  holds; tapping the revealed bin deletes, tapping the held-open card snaps
+ *  it closed. Vertical list scrolling is preserved (the pan only claims
  *  horizontal drags). */
 function SwipeableRow({
   onDelete,
-  onApprove,
   children,
 }: {
   onDelete: () => void;
-  onApprove: () => void;
   children: React.ReactNode;
 }) {
   const translateX = useSharedValue(0);
   const startX = useSharedValue(0);
   const width = useSharedValue(0);
-  // -1 left-open / 0 closed / 1 right-open — so we buzz once each time the
-  // slide crosses into a new zone, not every frame.
+  // -1 open / 0 closed — so we buzz once each time the slide crosses into the
+  // open zone, not every frame.
   const zone = useSharedValue(0);
-  // Timestamp the finger touched down — the bin/approve reveal stays hidden
-  // for REVEAL_DELAY_MS after this, so a light touch or the very start of a
+  // Timestamp the finger touched down — the bin reveal stays hidden for
+  // REVEAL_DELAY_MS after this, so a light touch or the very start of a
   // scroll doesn't flash the action before a real slide is underway.
   const touchedAt = useSharedValue(0);
   const [revealW, setRevealW] = useState(0);
@@ -126,10 +116,10 @@ function SwipeableRow({
     .onUpdate((e) => {
       const reveal = width.value * REVEAL_FRACTION;
       let next = startX.value + e.translationX;
-      if (next > reveal) next = reveal;
+      if (next > 0) next = 0;
       if (next < -reveal) next = -reveal;
       translateX.value = next;
-      const z = next <= -reveal / 2 ? -1 : next >= reveal / 2 ? 1 : 0;
+      const z = next <= -reveal / 2 ? -1 : 0;
       if (z !== zone.value) {
         zone.value = z;
         runOnJS(tick)();
@@ -137,26 +127,20 @@ function SwipeableRow({
     })
     .onEnd(() => {
       const reveal = width.value * REVEAL_FRACTION;
-      let target = 0;
-      if (translateX.value <= -reveal / 2) target = -reveal;
-      else if (translateX.value >= reveal / 2) target = reveal;
-      zone.value = target === 0 ? 0 : target < 0 ? -1 : 1;
+      const target = translateX.value <= -reveal / 2 ? -reveal : 0;
+      zone.value = target === 0 ? 0 : -1;
       translateX.value = withSpring(target, { damping: 22, stiffness: 220 });
       runOnJS(setOpenJS)(target !== 0);
     });
 
   const cardStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }] }));
-  // Keep each action hidden at rest (the card dims to 0.7 opacity on press,
-  // which would otherwise let it peek through), AND for the first
-  // REVEAL_DELAY_MS of any touch — only after that does it fade in over the
-  // next few pixels of an actual slide in that direction.
+  // Keep the bin hidden at rest (the card dims to 0.7 opacity on press, which
+  // would otherwise let it peek through), AND for the first REVEAL_DELAY_MS of
+  // any touch — only after that does it fade in over the next few pixels of
+  // an actual slide.
   const binStyle = useAnimatedStyle(() => {
     const delayed = Date.now() - touchedAt.value < REVEAL_DELAY_MS;
     return { opacity: delayed ? 0 : Math.min(1, Math.max(0, -translateX.value / 8)) };
-  });
-  const approveStyle = useAnimatedStyle(() => {
-    const delayed = Date.now() - touchedAt.value < REVEAL_DELAY_MS;
-    return { opacity: delayed ? 0 : Math.min(1, Math.max(0, translateX.value / 8)) };
   });
 
   const close = () => {
@@ -174,18 +158,6 @@ function SwipeableRow({
         setRevealW(w * REVEAL_FRACTION);
       }}
     >
-      <Animated.View style={[styles.approveBehind, { width: revealW }, approveStyle]}>
-        <Pressable
-          style={styles.actionFill}
-          hitSlop={4}
-          onPress={() => {
-            close();
-            onApprove();
-          }}
-        >
-          <Text style={styles.approveIcon}>✓</Text>
-        </Pressable>
-      </Animated.View>
       <Animated.View style={[styles.binBehind, { width: revealW }, binStyle]}>
         <Pressable
           style={styles.actionFill}
@@ -316,18 +288,6 @@ export default function LibraryScreen() {
     }
   }
 
-  async function approveBook(book: BookSummary) {
-    if (book.reviewStatus === 'approved') return; // already approved — no-op
-    const prevStatus = book.reviewStatus;
-    setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, reviewStatus: 'approved' } : b)));
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    try {
-      await updateBookReviewStatus(book.id, 'approved');
-    } catch {
-      setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, reviewStatus: prevStatus } : b)));
-    }
-  }
-
   const Badge = ({ label }: { label: string }) => (
     <View style={StyleSheet.flatten([styles.badge, { backgroundColor: badgeBackground }])}>
       <Text style={StyleSheet.flatten([styles.badgeText, { color: subColor }])}>{label}</Text>
@@ -418,7 +378,7 @@ export default function LibraryScreen() {
             const canRead = (readiness?.storyPageCount ?? 0) > 0;
             const missingCount = readiness?.warnings.length ?? 0;
             return (
-              <SwipeableRow onDelete={() => confirmDelete(item)} onApprove={() => approveBook(item)}>
+              <SwipeableRow onDelete={() => confirmDelete(item)}>
               <Pressable
                 onPress={() => openBook(item)}
                 style={({ pressed }) => [
@@ -455,7 +415,6 @@ export default function LibraryScreen() {
                       label={item.source === 'pdf' ? 'PDF' : item.source === 'dictation' ? '🎙️ Dictated' : 'Photos'}
                     />
                     {item.hasDialogue && <Badge label="Dialogue" />}
-                    <Badge label={REVIEW_LABEL[item.reviewStatus]} />
                     {missingCount > 0 && (
                       <Pressable
                         onPress={() => setMissingFor({ title: item.title, warnings: readiness!.warnings })}
@@ -589,24 +548,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  approveBehind: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(47,179,68,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   actionFill: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
   binIcon: { fontSize: 24 },
-  approveIcon: { fontSize: 26, fontWeight: '800', color: '#2fb344' },
   card: { flexDirection: 'row', borderRadius: 14, padding: 12, gap: 12 },
   cover: { width: 60, height: 80, borderRadius: 8 },
   coverEmpty: { alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, gap: 4, justifyContent: 'center', marginRight: 44 },
   title: { fontSize: 17, fontWeight: '600' },
-  starButton: { position: 'absolute', top: 8, right: 8, padding: 4 },
+  starButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   starIcon: { fontSize: 24 },
   playButton: {
     position: 'absolute',
@@ -621,7 +578,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  playIcon: { color: '#2fb344', fontSize: 15, marginLeft: 2 },
+  // "▶" renders with visible whitespace on its right in the system font, so a
+  // dead-center layout looks off-center to the eye — nudge it right to
+  // visually balance instead of geometrically center.
+  playIcon: { color: '#2fb344', fontSize: 15, marginLeft: 3 },
   warnChip: { backgroundColor: 'rgba(232,163,61,0.18)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   warnChipText: { color: '#e8a33d', fontSize: 11, fontWeight: '700' },
   emptyStar: { fontSize: 46, color: '#f5b301', opacity: 0.6 },

@@ -123,14 +123,6 @@ export async function setBookPrepStatus(
   ]);
 }
 
-export async function updateBookReviewStatus(
-  bookId: string,
-  reviewStatus: ReviewStatus
-): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync('UPDATE books SET review_status = ? WHERE id = ?', [reviewStatus, bookId]);
-}
-
 export async function createPage(params: {
   bookId: string;
   pageNumber: number;

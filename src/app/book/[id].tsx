@@ -110,6 +110,7 @@ export default function BookDetailScreen() {
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [warningsOpen, setWarningsOpen] = useState(false);
+  const [readyPopupOpen, setReadyPopupOpen] = useState(false);
 
   async function saveTitle() {
     if (!book) return;
@@ -519,8 +520,10 @@ export default function BookDetailScreen() {
         <View style={styles.readBarRow}>
           <Pressable
             style={styles.readStatus}
-            disabled={readiness.warnings.length === 0}
-            onPress={() => setWarningsOpen((v) => !v)}
+            onPress={() => {
+              if (readiness.ready) setReadyPopupOpen(true);
+              else setWarningsOpen((v) => !v);
+            }}
           >
             {readiness.ready ? (
               <>
@@ -592,6 +595,37 @@ export default function BookDetailScreen() {
                 <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Save</Text>
               </TactileButton>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={readyPopupOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReadyPopupOpen(false)}
+      >
+        <Pressable style={styles.processingOverlay} onPress={() => setReadyPopupOpen(false)}>
+          <Pressable style={[styles.readyPopupCard, { backgroundColor: cardBackground }]}>
+            <Text style={styles.readyPopupEmoji}>✅</Text>
+            <Text style={[styles.renameTitle, { color: textColor }]}>Ready to read</Text>
+            <View style={styles.readyPopupChecks}>
+              <Text style={[styles.readyPopupCheck, { color: subColor }]}>
+                ✓ {readiness.storyPageCount} story page{readiness.storyPageCount === 1 ? '' : 's'} with recognized text
+              </Text>
+              <Text style={[styles.readyPopupCheck, { color: subColor }]}>
+                ✓ {readiness.soundCount} keyword/character sound{readiness.soundCount === 1 ? '' : 's'} matched
+              </Text>
+              <Text style={[styles.readyPopupCheck, { color: subColor }]}>
+                ✓ {readiness.ambientPageCount} page{readiness.ambientPageCount === 1 ? '' : 's'} with an ambient bed
+              </Text>
+            </View>
+            <TactileButton
+              style={[styles.renameBtn, { backgroundColor: '#208AEF', alignSelf: 'stretch', alignItems: 'center' }]}
+              onPress={() => setReadyPopupOpen(false)}
+            >
+              <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Got it</Text>
+            </TactileButton>
           </Pressable>
         </Pressable>
       </Modal>
@@ -700,6 +734,10 @@ const styles = StyleSheet.create({
   trashBinIcon: { fontSize: 30 },
 
   renameCard: { width: '86%', borderRadius: 16, padding: 20, gap: 14 },
+  readyPopupCard: { width: '86%', borderRadius: 16, padding: 20, gap: 14, alignItems: 'center' },
+  readyPopupEmoji: { fontSize: 34 },
+  readyPopupChecks: { alignSelf: 'stretch', gap: 6 },
+  readyPopupCheck: { fontSize: 14 },
   renameTitle: { fontSize: 17, fontWeight: '700' },
   renameInput: { borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, fontSize: 17 },
   renameActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
