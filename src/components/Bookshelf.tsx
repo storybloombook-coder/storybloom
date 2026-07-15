@@ -135,18 +135,27 @@ const COLLISION_ROTATION_KICK = 2.2;
 // just aimed at a target that tracks tiltX instead of always being level, so
 // you can SEE gravity's direction on the shelf even before anything falls or
 // slides. Three deliberately separate stages as tilt increases (tiltX is
-// roughly sin(tilt angle) in g's):
-//   1. Past TILT_DEADZONE (~7°)         — just the proportional lean, above.
-//   2. Past FALL_TILT_THRESHOLD (~15°)  — topples fully onto its side, UNLESS
+// roughly sin(tilt angle) in g's). The two thresholds below are derived from
+// real physics, not just feel:
+//   - TOPPLE angle: a rigid block standing on edge tips over once its center
+//     of mass passes beyond its base — tan(θ) = thickness / height. Typical
+//     books: paperback (~2cm / 20cm) ≈ 5.7°, hardcover novel (~3.5cm / 24cm)
+//     ≈ 8.3°, thick hardcover (~5cm / 26cm) ≈ 10.9°. Averaging these gives
+//     ~8.5° for an "average" book.
+//   - SLIDE angle: an object on an incline slides once tan(θ) exceeds the
+//     static friction coefficient. Paper/cloth book covers on a wood or
+//     laminate shelf are typically μ ≈ 0.35, giving arctan(0.35) ≈ 19.3°.
+//   1. Past TILT_DEADZONE (~7°)          — just the proportional lean, above.
+//   2. Past FALL_TILT_THRESHOLD (~8.5°)  — topples fully onto its side, UNLESS
 //      it's pinned against a wall — a rigid wall holds a book upright rather
 //      than being what tips it over (see the "pinned" check at its use site).
-//   3. Past SLIDE_TILT_THRESHOLD (~20°) — gravity ALSO starts actually
+//   3. Past SLIDE_TILT_THRESHOLD (~19°)  — gravity ALSO starts actually
 //      sliding books across the shelf (see the `gravity` computation below),
 //      not just leaning/toppling them in place.
 const TILT_LEAN_DEG_PER_UNIT = 16; // degrees of lean per unit of tiltX
-const FALL_TILT_THRESHOLD = 0.26; // ~15°
+const FALL_TILT_THRESHOLD = 0.148; // sin(8.5°) — average book's topple angle
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
-const SLIDE_TILT_THRESHOLD = 0.34; // ~20° — sliding across the shelf gated to here
+const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coefficient
 
 // Physics tuning — soft enough to feel weighty, damped enough not to jitter.
 // No home-slot spring — books never get pulled toward a tidy packed
@@ -819,6 +828,23 @@ export default function Bookshelf({
       nextXs[i] += nextVxs[i] * dt;
     }
 
+    // A leaning/toppling book's effective footprint isn't just its upright
+    // spineWidth — as it rotates (around its grounded corner, see the style)
+    // its top edge sweeps sideways in the fall direction, like a falling
+    // rod, reaching into a neighbor's space even though its base x-position
+    // hasn't moved. Approximate the extra reach on whichever side it's
+    // currently leaning/falling toward as height*sin(angle), so collisions
+    // actually happen as it swings over instead of only ever colliding via
+    // its plain upright bounding box.
+    const rightReach: number[] = [];
+    const leftReach: number[] = [];
+    for (let i = 0; i < len; i++) {
+      const rad = (Math.abs(nextRotations[i]) * Math.PI) / 180;
+      const sweep = Math.sin(rad) * SPINE_VISIBLE_HEIGHT;
+      rightReach.push(spineWidth / 2 + (nextRotations[i] > 0 ? sweep : 0));
+      leftReach.push(spineWidth / 2 + (nextRotations[i] < 0 ? sweep : 0));
+    }
+
     // Pairwise collision — a couple of relaxation passes keeps adjacent
     // overlaps stable instead of jittering. The kick scales with the dragged
     // spine's actual speed (plus a floor from sheer overlap) so a fast shove
@@ -832,7 +858,11 @@ export default function Bookshelf({
       for (let k = 0; k < len - 1; k++) {
         const i = sortedByX[k];
         const j = sortedByX[k + 1];
-        const overlap = nextXs[i] + spineWidth - nextXs[j];
+        // Same shape as the old `nextXs[i] + spineWidth - nextXs[j]` when
+        // neither is rotated (rightReach/leftReach both reduce to
+        // spineWidth/2) — but grows when either is leaning/toppling toward
+        // the other.
+        const overlap = nextXs[i] - nextXs[j] + rightReach[i] + leftReach[j];
         if (overlap <= 0) continue;
         const iDragged = i === draggingIndex.value;
         const jDragged = j === draggingIndex.value;
