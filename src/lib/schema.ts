@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -88,6 +88,22 @@ CREATE INDEX IF NOT EXISTS idx_cues_page    ON cues  (page_id);
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
+);
+
+-- A parent's named, reusable recorded sounds (independent of any one cue), so a
+-- recording can be found and re-applied to other words/pages later. The file
+-- itself lives at file_uri under documents/recordings/; the trim/fade envelope
+-- travels with it so re-using it plays back the same way.
+CREATE TABLE IF NOT EXISTS recordings (
+  id           TEXT PRIMARY KEY NOT NULL,
+  name         TEXT NOT NULL,
+  file_uri     TEXT NOT NULL,
+  duration_ms  INTEGER,
+  start_ms     INTEGER,
+  end_ms       INTEGER,
+  fade_in_ms   INTEGER,
+  fade_out_ms  INTEGER,
+  created_at   INTEGER NOT NULL
 );
 `;
 

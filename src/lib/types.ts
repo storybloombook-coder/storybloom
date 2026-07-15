@@ -48,6 +48,21 @@ export interface Book {
   shelfPosition: number | null;
 }
 
+/** A parent's named, reusable recorded sound — browsable in the sound picker
+ *  and re-applicable to any word/page, independent of the cue it was first made
+ *  for. `fileUri` is a permanent file under documents/recordings/. */
+export interface Recording {
+  id: string;
+  name: string;
+  fileUri: string;
+  durationMs: number | null;
+  startMs: number | null;
+  endMs: number | null;
+  fadeInMs: number | null;
+  fadeOutMs: number | null;
+  createdAt: number;
+}
+
 export interface Page {
   id: string;
   bookId: string;

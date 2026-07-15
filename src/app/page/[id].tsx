@@ -42,14 +42,17 @@ import {
   TRIGGER_VOCAB,
   type TriggerEntry,
 } from '../../lib/ai/soundLibrary';
-import { playFull, playRange } from '../../lib/audio/playRange';
+import { playFull, playRange, playRangeLooping } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import {
+  applyAmbientToAllPages,
   createCue,
+  createRecording,
   getBook,
   getCuesForPage,
   getPage,
+  listRecordings,
   setCueReviewState,
   updateCueCharRange,
   updateCueSoundId,
@@ -59,7 +62,7 @@ import {
 } from '../../lib/db';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import type { SpeechLang } from '../../lib/speech/types';
-import type { Cue, Page } from '../../lib/types';
+import type { Cue, Page, Recording } from '../../lib/types';
 import { createVisionProvider } from '../../lib/vision';
 
 type WorkingImage = { uri: string; width: number; height: number };
@@ -160,6 +163,7 @@ export default function PageEditorScreen() {
 
   const [page, setPage] = useState<Page | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
+  const [recordings, setRecordings] = useState<Recording[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -201,6 +205,8 @@ export default function PageEditorScreen() {
   const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null);
   const [recordedUri, setRecordedUri] = useState<string | null>(null);
   const [savingRecording, setSavingRecording] = useState(false);
+  // Optional name so a recording can be found + reused later (My recordings).
+  const [recordingName, setRecordingName] = useState('');
   // Trim + fade editor for the just-captured recording, all in seconds.
   // Defaults: full clip, 1s fades on (clamped to half the trimmed length).
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -257,6 +263,7 @@ export default function PageEditorScreen() {
   // this there'd be no way to stop it.
   const [ambientPlaying, setAmbientPlaying] = useState(false);
   const ambientPreviewStopRef = useRef<(() => void) | null>(null);
+  const recordingPreviewStopRef = useRef<(() => void) | null>(null);
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
 
   useEffect(() => {
@@ -273,9 +280,10 @@ export default function PageEditorScreen() {
 
   const reload = useCallback(async () => {
     if (!pageId) return;
-    const [p, cs] = await Promise.all([getPage(pageId), getCuesForPage(pageId)]);
+    const [p, cs, recs] = await Promise.all([getPage(pageId), getCuesForPage(pageId), listRecordings()]);
     setPage(p);
     setCues(cs);
+    setRecordings(recs);
     setLoading(false);
   }, [pageId]);
 
@@ -538,6 +546,25 @@ export default function PageEditorScreen() {
     await reload();
   }
 
+  async function applyAmbientToAll() {
+    if (!page?.ambientSoundId) return;
+    stopAmbientPreview();
+    await applyAmbientToAllPages(page.bookId, {
+      soundId: page.ambientSoundId,
+      startMs: page.ambientStartMs ?? null,
+      endMs: page.ambientEndMs ?? null,
+      fadeInMs: page.ambientFadeInMs ?? null,
+      fadeOutMs: page.ambientFadeOutMs ?? null,
+    });
+    setAmbientDetailOpen(false);
+    await reload();
+    setInfoModal({
+      emoji: '🎵',
+      title: 'Applied to every page',
+      message: 'This ambient now plays on every page of the book.',
+    });
+  }
+
   function stopAmbientPreview() {
     ambientPreviewStopRef.current?.();
     ambientPreviewStopRef.current = null;
@@ -612,16 +639,13 @@ export default function PageEditorScreen() {
     playerRef.current = player;
     setAmbientPlaying(true);
     if (page.ambientEndMs != null) {
-      // Custom recording with a trim window — play that range once.
-      ambientPreviewStopRef.current = playRange(player, {
+      // Custom recording with a trim window — LOOP the range until stopped, so
+      // the preview matches how it actually plays in the reader.
+      ambientPreviewStopRef.current = playRangeLooping(player, {
         startSec: (page.ambientStartMs ?? 0) / 1000,
         endSec: page.ambientEndMs / 1000,
-        fadeInSec: (page.ambientFadeInMs ?? 0) / 1000,
-        fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000,
-        onEnd: () => {
-          ambientPreviewStopRef.current = null;
-          setAmbientPlaying(false);
-        },
+        fadeInSec: (page.ambientFadeInMs ?? 0) / 1000 || 0.6,
+        fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000 || 0.5,
       });
     } else {
       // Ambient beds loop until stopped (via the button, or closing the sheet).
@@ -684,8 +708,19 @@ export default function PageEditorScreen() {
     pollForDuration();
   }
 
+  function stopRecordingPreview() {
+    recordingPreviewStopRef.current?.();
+    recordingPreviewStopRef.current = null;
+    setPreviewPlayhead(null);
+  }
+
   function playRecordingPreview() {
     if (!recordedUri) return;
+    // Tapping the button while it's playing pauses/stops it (▶ becomes ⏸).
+    if (previewPlayhead !== null) {
+      stopRecordingPreview();
+      return;
+    }
     try {
       playerRef.current?.remove();
     } catch {}
@@ -693,13 +728,16 @@ export default function PageEditorScreen() {
     playerRef.current = player;
     const rangeSec = Math.max(0.001, trimEnd - trimStart);
     setPreviewPlayhead(0);
-    playRange(player, {
+    recordingPreviewStopRef.current = playRange(player, {
       startSec: trimStart,
       endSec: trimEnd,
       fadeInSec: fadeIn,
       fadeOutSec: fadeOut,
       onTick: (t) => setPreviewPlayhead(Math.max(0, Math.min(1, (t - trimStart) / rangeSec))),
-      onEnd: () => setPreviewPlayhead(null),
+      onEnd: () => {
+        recordingPreviewStopRef.current = null;
+        setPreviewPlayhead(null);
+      },
     });
   }
 
@@ -707,6 +745,7 @@ export default function PageEditorScreen() {
     if (recorderState.isRecording) recorder.stop().catch(() => {});
     setRecordTarget(null);
     setRecordedUri(null);
+    setRecordingName('');
     setPreviewPlayhead(null);
   }
 
@@ -751,8 +790,21 @@ export default function PageEditorScreen() {
         await setCueReviewState(created.id, 'confirmed');
       }
 
+      // Also file it in the reusable "My recordings" library so it can be found
+      // and re-applied to other words/pages later.
+      await createRecording({
+        name: recordingName.trim() || `Recording ${new Date().toLocaleDateString()}`,
+        fileUri: dest.uri,
+        durationMs: Math.round(recordingDuration * 1000),
+        startMs,
+        endMs,
+        fadeInMs,
+        fadeOutMs,
+      });
+
       setRecordTarget(null);
       setRecordedUri(null);
+      setRecordingName('');
       await reload();
     } catch (e: any) {
       setInfoModal({ emoji: '⚠️', title: 'Could not save recording', message: e?.message ?? String(e) });
@@ -784,6 +836,42 @@ export default function PageEditorScreen() {
         emotion: null,
       });
       // The parent added it deliberately — treat as confirmed, not proposed.
+      await setCueReviewState(created.id, 'confirmed');
+    }
+    setPicker(null);
+    await reload();
+  }
+
+  /** Apply a saved recording (its file + trim/fade envelope) to the picker's
+   *  target — the "reuse a recording" path. */
+  async function chooseRecording(rec: Recording) {
+    if (!picker || !page) return;
+    stopPreview();
+    const soundId = `${CUSTOM_PREFIX}${rec.fileUri}`;
+    const env = { startMs: rec.startMs, endMs: rec.endMs, fadeInMs: rec.fadeInMs, fadeOutMs: rec.fadeOutMs };
+    if (picker.mode === 'ambient') {
+      await updatePageAmbient(page.id, { soundId, ...env });
+    } else if (picker.mode === 'change') {
+      await updateCueSoundTrim(picker.cue.id, { soundId, ...env });
+      if (picker.cue.reviewState === 'removed') await setCueReviewState(picker.cue.id, 'confirmed');
+    } else {
+      const word = picker.token.text.toLowerCase();
+      const created = await createCue({
+        pageId: page.id,
+        type: 'keyword',
+        triggerText: word,
+        contextPhrase: null,
+        charStart: picker.token.start,
+        charEnd: picker.token.end,
+        soundId,
+        characterName: null,
+        intensity: null,
+        emotion: null,
+        soundStartMs: rec.startMs,
+        soundEndMs: rec.endMs,
+        fadeInMs: rec.fadeInMs,
+        fadeOutMs: rec.fadeOutMs,
+      });
       await setCueReviewState(created.id, 'confirmed');
     }
     setPicker(null);
@@ -931,6 +1019,26 @@ export default function PageEditorScreen() {
       </View>
     );
   };
+
+  // A saved recording row — preview it, or tap the name to reuse it here.
+  const renderRecordingRow = (rec: Recording) => {
+    const cid = `${CUSTOM_PREFIX}${rec.fileUri}`;
+    const previewing = previewingId === cid;
+    return (
+      <View key={rec.id} style={styles.soundRow}>
+        <Pressable hitSlop={8} style={styles.soundPreviewBtn} onPress={() => togglePreview(cid)}>
+          <Text style={styles.soundPreviewIcon}>{previewing ? '⏹' : '▶️'}</Text>
+        </Pressable>
+        <Pressable style={styles.soundRowLabel} onPress={() => chooseRecording(rec)}>
+          <Text style={[styles.soundId, { color: textColor }]}>🎤 {rec.name}</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
+  const visibleRecordings = pickerSearch.trim()
+    ? recordings.filter((r) => r.name.toLowerCase().includes(pickerSearch.trim().toLowerCase()))
+    : recordings;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor }]}>
@@ -1282,6 +1390,13 @@ export default function PageEditorScreen() {
                     </TactileButton>
                   </View>
                 </View>
+                <TactileButton
+                  style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground, width: '100%', flexDirection: 'row', gap: 8 }]}
+                  onPress={applyAmbientToAll}
+                >
+                  <Text style={styles.wordGridIcon}>📖</Text>
+                  <Text style={[styles.wordGridLabel, { color: textColor }]}>Apply to all pages</Text>
+                </TactileButton>
               </>
             ) : (
               <View style={styles.wordGridRow}>
@@ -1359,9 +1474,13 @@ export default function PageEditorScreen() {
                   <View style={styles.waveformSideCol}>
                     <TactileButton style={styles.waveformSideButton} onPress={playRecordingPreview}>
                       {/* The ▶ glyph's visual mass sits left of its own box in most fonts — nudge right to look centered. */}
-                      <Text style={[styles.waveformSideButtonIcon, { color: '#fff', marginLeft: 2 }]}>▶</Text>
+                      <Text style={[styles.waveformSideButtonIcon, { color: '#fff', marginLeft: previewPlayhead !== null ? 0 : 2 }]}>
+                        {previewPlayhead !== null ? '⏸' : '▶'}
+                      </Text>
                     </TactileButton>
-                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>play</Text>
+                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>
+                      {previewPlayhead !== null ? 'stop' : 'play'}
+                    </Text>
                   </View>
 
                   <View style={[styles.waveform, { flex: 1 }]} onLayout={onWaveformLayout}>
@@ -1430,6 +1549,15 @@ export default function PageEditorScreen() {
                     <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade out (1s)</Text>
                   </TactileButton>
                 </View>
+
+                <TextInput
+                  value={recordingName}
+                  onChangeText={setRecordingName}
+                  placeholder="Name this sound (optional) — find it later"
+                  placeholderTextColor={subColor}
+                  style={[styles.pickerSearchInput, { color: textColor, backgroundColor: cardBackground, marginBottom: 10 }]}
+                  returnKeyType="done"
+                />
 
                 <View style={styles.bottomActionsRow}>
                   <View style={styles.toolBtnWrap}>
@@ -1591,6 +1719,12 @@ export default function PageEditorScreen() {
               autoCorrect={false}
             />
             <ScrollView style={{ maxHeight: 360 }}>
+              {visibleRecordings.length > 0 && (
+                <>
+                  <Text style={[styles.pickerSectionLabel, { color: subColor }]}>My recordings</Text>
+                  {visibleRecordings.map(renderRecordingRow)}
+                </>
+              )}
               {pickerSuggested.length > 0 && (
                 <Text style={[styles.pickerSectionLabel, { color: subColor }]}>Suggested</Text>
               )}
@@ -1614,7 +1748,7 @@ export default function PageEditorScreen() {
                       </View>
                     );
                   })}
-              {pickerSearched.length === 0 && (
+              {pickerSearched.length === 0 && visibleRecordings.length === 0 && (
                 <Text style={[styles.pickerEmpty, { color: subColor }]}>No sounds match “{pickerSearch}”.</Text>
               )}
             </ScrollView>

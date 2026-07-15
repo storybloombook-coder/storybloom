@@ -8,6 +8,7 @@ import type {
   Book,
   Page,
   Cue,
+  Recording,
   BookSource,
   BookLanguage,
   PrepStatus,
@@ -516,6 +517,84 @@ export async function updatePageAmbient(
   );
 }
 
+/** Apply one ambient (same sound + trim/fade envelope) to EVERY page of a book
+ *  — the "add ambient to all pages" action. Non-story pages never play back, so
+ *  setting it on them is harmless; targeting all pages keeps it predictable. */
+export async function applyAmbientToAllPages(
+  bookId: string,
+  ambient: { soundId: string; startMs: number | null; endMs: number | null; fadeInMs: number | null; fadeOutMs: number | null }
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE pages SET ambient_sound_id = ?, ambient_start_ms = ?, ambient_end_ms = ?, ambient_fade_in_ms = ?, ambient_fade_out_ms = ?
+     WHERE book_id = ?`,
+    [ambient.soundId, ambient.startMs, ambient.endMs, ambient.fadeInMs, ambient.fadeOutMs, bookId]
+  );
+}
+
+// ---- Named recording library --------------------------------------------
+
+type RecordingRow = {
+  id: string;
+  name: string;
+  file_uri: string;
+  duration_ms: number | null;
+  start_ms: number | null;
+  end_ms: number | null;
+  fade_in_ms: number | null;
+  fade_out_ms: number | null;
+  created_at: number;
+};
+
+function rowToRecording(r: RecordingRow): Recording {
+  return {
+    id: r.id,
+    name: r.name,
+    fileUri: r.file_uri,
+    durationMs: r.duration_ms,
+    startMs: r.start_ms,
+    endMs: r.end_ms,
+    fadeInMs: r.fade_in_ms,
+    fadeOutMs: r.fade_out_ms,
+    createdAt: r.created_at,
+  };
+}
+
+export async function createRecording(params: {
+  name: string;
+  fileUri: string;
+  durationMs: number | null;
+  startMs: number | null;
+  endMs: number | null;
+  fadeInMs: number | null;
+  fadeOutMs: number | null;
+}): Promise<Recording> {
+  const db = await getDatabase();
+  const rec: Recording = { id: generateId(), createdAt: Date.now(), ...params };
+  await db.runAsync(
+    `INSERT INTO recordings (id, name, file_uri, duration_ms, start_ms, end_ms, fade_in_ms, fade_out_ms, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [rec.id, rec.name, rec.fileUri, rec.durationMs, rec.startMs, rec.endMs, rec.fadeInMs, rec.fadeOutMs, rec.createdAt]
+  );
+  return rec;
+}
+
+export async function listRecordings(): Promise<Recording[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<RecordingRow>('SELECT * FROM recordings ORDER BY created_at DESC');
+  return rows.map(rowToRecording);
+}
+
+export async function renameRecording(id: string, name: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE recordings SET name = ? WHERE id = ?', [name, id]);
+}
+
+export async function deleteRecording(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM recordings WHERE id = ?', [id]);
+}
+
 export async function updateCueSoundId(cueId: string, soundId: string | null): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE cues SET sound_id = ? WHERE id = ?', [soundId, cueId]);
@@ -525,7 +604,7 @@ export async function updateCueSoundId(cueId: string, soundId: string | null): P
  *  a parent's recording (library sounds just pass null for all four). */
 export async function updateCueSoundTrim(
   cueId: string,
-  params: { soundId: string; startMs: number; endMs: number; fadeInMs: number; fadeOutMs: number }
+  params: { soundId: string; startMs: number | null; endMs: number | null; fadeInMs: number | null; fadeOutMs: number | null }
 ): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(

@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../../components/TactileButton';
-import { playFull, playLooping, playRange } from '../../lib/audio/playRange';
+import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
 import { cueAtRange, tokenize } from '../../lib/reader/text';
@@ -195,12 +195,13 @@ export default function ReaderScreen() {
       const player = createAudioPlayer(source);
       ambientPlayerRef.current = player;
       if (page.ambientEndMs != null) {
-        // A parent's custom recording with a trim window — play that range once.
-        ambientStopRef.current = playRange(player, {
+        // A parent's custom recording with a trim window — LOOP that range until
+        // the page changes (ambient beds should never fall silent mid-page).
+        ambientStopRef.current = playRangeLooping(player, {
           startSec: (page.ambientStartMs ?? 0) / 1000,
           endSec: page.ambientEndMs / 1000,
-          fadeInSec: (page.ambientFadeInMs ?? 0) / 1000,
-          fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000,
+          fadeInSec: (page.ambientFadeInMs ?? 0) / 1000 || 0.6,
+          fadeOutSec: (page.ambientFadeOutMs ?? 0) / 1000 || 0.5,
         });
       } else {
         ambientStopRef.current = playLooping(player, { fadeInSec: 0.6, fadeOutSec: 0.5 });

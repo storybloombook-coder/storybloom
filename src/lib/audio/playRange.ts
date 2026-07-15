@@ -63,6 +63,54 @@ export function playRange(
   };
 }
 
+/** Loops [startSec, endSec) until stopped — for a trimmed custom AMBIENT
+ *  recording that must run continuously until the page changes (the sibling of
+ *  playLooping, which loops a whole clip). Fades in once at the start; the
+ *  returned stop() fades out then pauses so a page turn doesn't cut it off with
+ *  a click. The loop seam is a seekTo back to startSec when currentTime passes
+ *  endSec — fine for an ambient bed. */
+export function playRangeLooping(
+  player: Player,
+  opts: { startSec: number; endSec: number; fadeInSec: number; fadeOutSec: number; onTick?: (t: number) => void }
+): () => void {
+  const { startSec, endSec, fadeInSec, fadeOutSec, onTick } = opts;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+  const t0 = Date.now();
+  player.volume = fadeInSec > 0 ? 0 : 1;
+  player.seekTo(startSec).then(() => {
+    if (stopped) return;
+    player.play();
+    timer = setInterval(() => {
+      const t = player.currentTime;
+      if (t >= endSec) player.seekTo(startSec).catch(() => {});
+      onTick?.(t);
+      // Fade in once over the first fadeInSec, then hold at full.
+      player.volume = fadeInSec > 0 ? Math.min(1, (Date.now() - t0) / 1000 / fadeInSec) : 1;
+    }, 50);
+  });
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearInterval(timer);
+    if (fadeOutSec <= 0) {
+      try { player.pause(); } catch {}
+      return;
+    }
+    const from = player.volume;
+    const s = Date.now();
+    const out = setInterval(() => {
+      const el = (Date.now() - s) / 1000;
+      try { player.volume = Math.max(0, from * (1 - el / fadeOutSec)); } catch {}
+      if (el >= fadeOutSec) {
+        clearInterval(out);
+        try { player.pause(); } catch {}
+      }
+    }, 40);
+  };
+}
+
 /** Default fades applied to a one-shot LIBRARY sound so it never starts or ends
  *  on an abrupt click. Short, and clamped to the clip length in playFull so a
  *  tiny effect isn't swallowed by its own fade. */
