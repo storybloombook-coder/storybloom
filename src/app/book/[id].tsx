@@ -394,15 +394,16 @@ export default function BookDetailScreen() {
           const cues = cuesByPage.get(item.id) ?? [];
           const activeCueCount = cues.filter((c) => c.reviewState !== 'removed').length;
           return (
-            <SwipeableRow key={item.id} onDelete={() => setPendingDeletePage(item)}>
-              <DraggablePageCard
-                index={index}
-                draggingIndex={draggingIndex}
-                targetIndex={targetIndex}
-                itemHeights={itemHeights}
-                onReorder={handleReorder}
-                onMeasured={onMeasured}
-              >
+            <DraggablePageCard
+              key={item.id}
+              index={index}
+              draggingIndex={draggingIndex}
+              targetIndex={targetIndex}
+              itemHeights={itemHeights}
+              onReorder={handleReorder}
+              onMeasured={onMeasured}
+            >
+              <SwipeableRow onDelete={() => setPendingDeletePage(item)}>
                 <Pressable
                   onPress={() => router.push({ pathname: '/page/[id]', params: { id: item.id } })}
                   style={({ pressed }) => [styles.pageCard, { backgroundColor: cardBackground, opacity: pressed ? 0.7 : 1 }]}
@@ -436,8 +437,8 @@ export default function BookDetailScreen() {
                     <Text style={[styles.ocrEmpty, { color: subColor }]}>No text recognized on this page.</Text>
                   )}
                 </Pressable>
-              </DraggablePageCard>
-            </SwipeableRow>
+              </SwipeableRow>
+            </DraggablePageCard>
           );
         })}
 

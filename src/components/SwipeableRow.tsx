@@ -115,11 +115,14 @@ export default function SwipeableRow({
   };
 
   return (
-    // layout={LinearTransition} lives HERE (not on the child card) because
-    // this is the element React actually repositions when a caller's list
-    // reorders by key (e.g. book/[id].tsx's drag-to-reorder page list) — a
-    // layout animation on a child whose own position within this row never
-    // changes is inert and just leaves the real reorder to snap instantly.
+    // layout={LinearTransition} only matters when THIS component is the
+    // top-level, key-reordered list item (e.g. the library screen's book
+    // list, where a delete removes a row and the rest should settle smoothly
+    // rather than snap). When nested inside something else that owns the
+    // actual reordering (e.g. DraggablePageCard, which wraps this for the
+    // book-detail page list — see its own layout={LinearTransition}), this
+    // one is inert, since this component's own position within ITS parent
+    // never changes — harmless, just doesn't do anything there.
     <Animated.View
       layout={LinearTransition}
       style={styles.swipeWrap}

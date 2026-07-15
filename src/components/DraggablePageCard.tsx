@@ -6,14 +6,23 @@
 // a constant cell size.
 //
 // Reordering only — deletion is a separate swipe-left-to-reveal-a-bin
-// gesture (SwipeableRow.tsx), the same one the library screen uses for
-// books, not a drag-onto-a-fixed-bin-target like this used to be.
+// gesture (SwipeableRow.tsx, the same one the library screen uses for
+// books), not a drag-onto-a-fixed-bin-target like this used to be. This
+// component MUST be the outer wrapper and SwipeableRow nested INSIDE it
+// (i.e. <DraggablePageCard><SwipeableRow>{content}</SwipeableRow></...>),
+// never the other way — this is the element that actually gets dragged
+// across/over its neighbors (zIndex while dragging, translateY-based
+// "make room" shifts on its neighbors, layout={LinearTransition} on
+// reorder-settle). SwipeableRow's own `overflow: hidden` would clip any of
+// that the instant it moved beyond its own row's bounds if it were the
+// outer element — that exact regression happened once already.
 
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
 import { StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  LinearTransition,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
@@ -115,6 +124,7 @@ export default function DraggablePageCard({
 
   return (
     <Animated.View
+      layout={LinearTransition}
       style={[styles.wrapper, animatedStyle]}
       onLayout={(e) => onMeasured(index, e.nativeEvent.layout.height)}
     >
