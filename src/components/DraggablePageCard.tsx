@@ -31,6 +31,13 @@ import Animated, {
 } from 'react-native-reanimated';
 
 export const PAGE_LIST_GAP = 12;
+// A hovering finger is never perfectly still — a few px of natural tremor
+// right at a slot boundary would otherwise flip the target index back and
+// forth every frame, making neighbors visibly jitter up/down instead of
+// holding a single clean "make room" shift. Sticking to whichever slot is
+// ALREADY the target until the center moves decisively past it (by this
+// margin, on either edge) absorbs that tremor.
+const REORDER_HYSTERESIS = 10;
 
 function triggerDragHaptic() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -65,6 +72,20 @@ export default function DraggablePageCard({
     for (let i = 0; i < index; i++) cumulative += (heights[i] ?? 0) + PAGE_LIST_GAP;
     const myHeight = heights[index] ?? 0;
     const myCenterY = cumulative + dy + myHeight / 2;
+
+    // Sticky: stay on whichever slot is already the target (expanded a
+    // little on both edges) as long as the center is still roughly inside
+    // it — see REORDER_HYSTERESIS above.
+    const current = targetIndex.value;
+    if (current >= 0 && current < heights.length) {
+      let currentStart = 0;
+      for (let i = 0; i < current; i++) currentStart += (heights[i] ?? 0) + PAGE_LIST_GAP;
+      const currentSlot = (heights[current] ?? 0) + PAGE_LIST_GAP;
+      if (myCenterY >= currentStart - REORDER_HYSTERESIS && myCenterY < currentStart + currentSlot + REORDER_HYSTERESIS) {
+        return current;
+      }
+    }
+
     let acc = 0;
     for (let i = 0; i < heights.length; i++) {
       const slot = (heights[i] ?? 0) + PAGE_LIST_GAP;
