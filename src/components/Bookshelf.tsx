@@ -30,7 +30,12 @@
 // everything else here (see the lift/fall note above LIFT_GRAVITY). Grabbing
 // it off-center from its own midpoint (like picking up a real book near one
 // end) makes it rotate/tilt as it's shoved, via its own small rotational
-// spring-damper — see ROTATION_* below.
+// spring-damper — see ROTATION_* below. Once it's actually LIFTED (not just
+// being shoved along the shelf), a grab point that's off-center on BOTH axes
+// (a corner) makes it hang at a natural diagonal angle instead — like a real
+// book suspended from an off-center point, rotating until its center of
+// mass ends up below the grip, further skewed by the phone's own sensed
+// tilt (see the "Diagonal corner-hang" note near ROTATION_TORQUE below).
 //
 // Tilt the PHONE (via expo-sensors' Accelerometer, not a true gyroscope, but
 // it's the axis that matters for left-right tilt) and the shelf's own
@@ -241,6 +246,8 @@ function Spine({
   bounceY,
   rotations,
   grabOffsetFrac,
+  grabOffsetXPx,
+  grabOffsetYPx,
   onOpen,
   onReordered,
 }: {
@@ -273,6 +280,10 @@ function Spine({
   /** Where on the spine (-1 top .. +1 bottom, relative to its own center)
    *  the currently-dragged spine was grabbed. Only meaningful while dragging. */
   grabOffsetFrac: SharedValue<number>;
+  /** Raw pixel offset of the grab point from the spine's own center, on each
+   *  axis — used (together) for the diagonal corner-hang while lifted. */
+  grabOffsetXPx: SharedValue<number>;
+  grabOffsetYPx: SharedValue<number>;
   onOpen: (book: BookSummary) => void;
   onReordered: (order: number[]) => void;
 }) {
@@ -293,6 +304,11 @@ function Spine({
         1,
         Math.max(-1, (e.y - SPINE_VISIBLE_HEIGHT / 2) / (SPINE_VISIBLE_HEIGHT / 2))
       );
+      // Raw (unnormalized) pixel offsets from center, on BOTH axes — the
+      // spine's real aspect ratio (narrow width, tall height) matters for a
+      // believable corner-hang angle, which normalized fractions would lose.
+      grabOffsetXPx.value = e.x - spineWidth / 2;
+      grabOffsetYPx.value = e.y - SPINE_VISIBLE_HEIGHT / 2;
       runOnJS(hapticStart)();
     })
     .onUpdate((e) => {
@@ -404,6 +420,9 @@ export default function Bookshelf({
   const rotations = useSharedValue<number[]>(books.map(() => 0));
   const rotationVs = useSharedValue<number[]>(books.map(() => 0));
   const grabOffsetFrac = useSharedValue(0);
+  // Raw pixel grab-point offsets for the diagonal corner-hang while lifted.
+  const grabOffsetXPx = useSharedValue(0);
+  const grabOffsetYPx = useSharedValue(0);
   // Tracks which two books were most recently the dragged spine's immediate
   // neighbors (-1 = none), so the frame loop can detect the MOMENT that
   // changes and fire a one-time make-room kick + haptic, instead of
@@ -647,8 +666,16 @@ export default function Bookshelf({
       // same spring, just aimed somewhere other than 0. This is also what
       // makes a released spine settle back down rather than snap to level.
       const isDragged = i === draggingIndex.value;
+      const isLifted = Math.abs(liftYs.value[i]) > LIFT_THRESHOLD;
       let restTarget = 0;
-      if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
+      if (isDragged && isLifted) {
+        // Diagonal corner-hang: rotate toward wherever the grab point implies
+        // the center of mass should hang below it, plus however much the
+        // phone's own tilt has shifted "down" sideways on screen.
+        const cornerHangDeg = Math.atan2(grabOffsetXPx.value, grabOffsetYPx.value) * (180 / Math.PI);
+        const tiltLean = Math.abs(tiltX.value) > TILT_DEADZONE ? tiltX.value * TILT_LEAN_DEG_PER_UNIT : 0;
+        restTarget = Math.min(FALL_ROTATION_DEG, Math.max(-FALL_ROTATION_DEG, cornerHangDeg + tiltLean));
+      } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
         restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
         const atLeftWall = nextXs[i] <= 0.5;
         const atRightWall = nextXs[i] >= maxX - 0.5;
@@ -661,10 +688,11 @@ export default function Bookshelf({
       const rotSpring = -(nextRotations[i] - restTarget) * ROTATION_STIFFNESS;
       const rotDamping = -nextRotationVs[i] * ROTATION_DAMPING;
       nextRotationVs[i] += (rotSpring + rotDamping + torque) * dt;
-      // Dragging keeps the tighter clamp (a shove shouldn't spin a book past
-      // a believable hand-tilt); ambient lean/fall gets the wider one so a
-      // pinned spine can actually topple onto its side.
-      const clampMax = isDragged ? ROTATION_MAX : FALL_ROTATION_DEG;
+      // Dragging while still flat on the shelf keeps the tighter clamp (a
+      // shove shouldn't spin a book past a believable hand-tilt); lifted (or
+      // ambient lean/fall) gets the wider one so a hang/topple can actually
+      // reach a believable angle.
+      const clampMax = isDragged && !isLifted ? ROTATION_MAX : FALL_ROTATION_DEG;
       nextRotations[i] = Math.min(clampMax, Math.max(-clampMax, nextRotations[i] + nextRotationVs[i] * dt));
 
       // Lift height: kinematic (already set by the gesture) while dragged —
@@ -788,6 +816,8 @@ export default function Bookshelf({
               bounceY={bounceY}
               rotations={rotations}
               grabOffsetFrac={grabOffsetFrac}
+              grabOffsetXPx={grabOffsetXPx}
+              grabOffsetYPx={grabOffsetYPx}
               onOpen={onOpen}
               onReordered={handleReordered}
             />
