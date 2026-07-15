@@ -229,6 +229,9 @@ const FRICTION = 480;
 // the whole shelf, same physics as everything else — a randomized order plus
 // an outward velocity kick per spine so they visibly tumble before settling,
 // rather than silently snapping to a new arrangement.
+// Temporarily disabled — flip back to true to re-enable, rest of the
+// mechanism is untouched.
+const SHAKE_ENABLED = false;
 const SHAKE_DELTA = 1.0; // jump in |acceleration| (g) between readings
 const SHAKE_DEBOUNCE_MS = 1200;
 const SHAKE_KICK = 220;
@@ -623,6 +626,7 @@ export default function Bookshelf({
       lastMagnitude.current = magnitude;
       const now = Date.now();
       if (
+        SHAKE_ENABLED &&
         delta > SHAKE_DELTA &&
         now - lastShakeAt.current > SHAKE_DEBOUNCE_MS &&
         draggingIndex.value === -1
