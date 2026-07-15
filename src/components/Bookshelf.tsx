@@ -18,10 +18,15 @@
 // used for page cards — see DraggablePageCard.tsx / book/[id].tsx). Dragging
 // it vertically lifts it "into the air" — past LIFT_THRESHOLD it stops
 // colliding with neighbors so it can hover freely over a gap, then lowering
-// it back squeezes it in with a real collision bump at wherever it lands.
-// Grabbing it off-center from its own midpoint (like picking up a real book
-// near one end) makes it rotate/tilt as it's shoved, via its own small
-// rotational spring-damper — see ROTATION_* below.
+// it back (while still holding it) squeezes it in with a real collision bump
+// at wherever it lands. Letting go while it's still lifted doesn't snap it
+// back to the shelf line — real gravity (LIFT_GRAVITY) takes over and it
+// actually FALLS the rest of the way down, landing with its fall velocity
+// zeroed at the shelf surface, same physics-in-the-frame-loop approach as
+// everything else here (see the lift/fall note above LIFT_GRAVITY). Grabbing
+// it off-center from its own midpoint (like picking up a real book near one
+// end) makes it rotate/tilt as it's shoved, via its own small rotational
+// spring-damper — see ROTATION_* below.
 //
 // Tilt the PHONE (via expo-sensors' Accelerometer, not a true gyroscope, but
 // it's the axis that matters for left-right tilt) and the shelf's own
@@ -54,7 +59,6 @@ import Animated, {
   useAnimatedStyle,
   useFrameCallback,
   useSharedValue,
-  withSpring,
   type SharedValue,
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
@@ -123,6 +127,15 @@ const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 const LIFT_THRESHOLD = 20;
 const LIFT_MIN = -80; // how high it can be lifted
 const LIFT_MAX = 24; // a little downward give too
+// Releasing a lifted spine used to withSpring(0) it back down — but that
+// spring was gated behind `isMe` in the style, which flips false the instant
+// the drag ends, so the animation was invisible and it just snapped to the
+// shelf line instantly ("stuck to the shelf" instead of falling). Lift is
+// now a per-spine value physically integrated in the frame loop like
+// everything else: real gravity pulls a released spine down, it lands with
+// its velocity zeroed at the shelf line, and it's visible the whole time
+// because nothing gates it on which spine is currently being dragged.
+const LIFT_GRAVITY = 1400;
 
 // Tilt the phone and the shelf's own "gravity" tips with it — books slide
 // toward the low side and pile against the wall, same collision system as a
@@ -204,7 +217,8 @@ function Spine({
   order,
   draggingIndex,
   lastDragX,
-  dragLiftY,
+  liftYs,
+  lastDragLiftY,
   bounceY,
   rotations,
   grabOffsetFrac,
@@ -222,9 +236,15 @@ function Spine({
    *  frame loop finite-difference a real velocity, so letting go mid-shove
    *  keeps that momentum instead of snapping straight to the spring. */
   lastDragX: SharedValue<number>;
-  /** How far the actively-dragged spine has been lifted off the shelf line
-   *  (negative = up). Only meaningful while draggingIndex === this index. */
-  dragLiftY: SharedValue<number>;
+  /** Per-spine height off the shelf line (negative = up). Kinematic (set
+   *  directly by the gesture) while this spine is being dragged; a real
+   *  gravity-driven fall in the frame loop the rest of the time — see
+   *  LIFT_GRAVITY above. */
+  liftYs: SharedValue<number[]>;
+  /** Vertical counterpart to lastDragX — lets the frame loop finite-difference
+   *  a real vertical velocity so a fast release carries its momentum into
+   *  the fall instead of starting the drop from a dead stop. */
+  lastDragLiftY: SharedValue<number>;
   /** Whole-shelf vertical hop offset from a fast phone movement — applies to
    *  every spine equally, on top of any individual drag-lift. */
   bounceY: SharedValue<number>;
@@ -248,7 +268,8 @@ function Spine({
       startX.value = xs.value[index];
       lastDragX.value = xs.value[index];
       draggingIndex.value = index;
-      dragLiftY.value = 0;
+      liftYs.value[index] = 0;
+      lastDragLiftY.value = 0;
       grabOffsetFrac.value = Math.min(
         1,
         Math.max(-1, (e.y - SPINE_VISIBLE_HEIGHT / 2) / (SPINE_VISIBLE_HEIGHT / 2))
@@ -260,23 +281,27 @@ function Spine({
       nx = Math.min(Math.max(nx, 0), containerWidth - spineWidth);
       xs.value[index] = nx;
       order.value = reorderForDrag(order.value, index, nx, slot);
-      dragLiftY.value = Math.min(LIFT_MAX, Math.max(LIFT_MIN, e.translationY));
+      liftYs.value[index] = Math.min(LIFT_MAX, Math.max(LIFT_MIN, e.translationY));
     })
     .onEnd(() => {
-      const wasLifted = Math.abs(dragLiftY.value) > LIFT_THRESHOLD;
+      const wasLifted = Math.abs(liftYs.value[index]) > LIFT_THRESHOLD;
       draggingIndex.value = -1;
-      dragLiftY.value = withSpring(0, { damping: 14, stiffness: 200 });
+      // No withSpring — leave it to the frame loop's real gravity fall (see
+      // LIFT_GRAVITY). Its current velocity (finite-differenced there from
+      // lastDragLiftY) carries over, so a fast downward release already
+      // falls with momentum instead of starting from rest.
       runOnJS(persist)(order.value);
       if (wasLifted) runOnJS(hapticDrop)();
     });
 
   const style = useAnimatedStyle(() => {
     const isMe = draggingIndex.value === index;
-    const lifted = isMe && Math.abs(dragLiftY.value) > LIFT_THRESHOLD;
+    const liftY = liftYs.value[index] ?? 0;
+    const lifted = Math.abs(liftY) > LIFT_THRESHOLD;
     return {
       transform: [
         { translateX: xs.value[index] ?? index * slot },
-        { translateY: (isMe ? dragLiftY.value : 0) + bounceY.value },
+        { translateY: liftY + bounceY.value },
         { rotate: `${rotations.value[index] ?? 0}deg` },
         { scale: lifted ? 1.08 : 1 },
       ],
@@ -350,7 +375,10 @@ export default function Bookshelf({
   const order = useSharedValue<number[]>(books.map((_, i) => i));
   const draggingIndex = useSharedValue(-1);
   const lastDragX = useSharedValue(0);
-  const dragLiftY = useSharedValue(0);
+  // Per-spine lift height — see the LIFT_GRAVITY note above the constants.
+  const liftYs = useSharedValue<number[]>(books.map(() => 0));
+  const liftVYs = useSharedValue<number[]>(books.map(() => 0));
+  const lastDragLiftY = useSharedValue(0);
   const widthShared = useSharedValue(containerWidth);
   const tiltX = useSharedValue(0);
   // Grab-point-dependent tilt while dragging — see the constants above.
@@ -392,6 +420,8 @@ export default function Bookshelf({
     vxs.value = permute(vxs.value);
     rotations.value = permute(rotations.value);
     rotationVs.value = permute(rotationVs.value);
+    liftYs.value = permute(liftYs.value);
+    liftVYs.value = permute(liftVYs.value);
     // `order` holds RANKS as old-index values — remap those values (not just
     // their positions) through the same old->new lookup.
     order.value = order.value.map((oldIndex) => {
@@ -399,7 +429,7 @@ export default function Bookshelf({
       const newIndex = newIds.indexOf(id);
       return newIndex >= 0 ? newIndex : oldIndex;
     });
-  }, [books, xs, vxs, order, rotations, rotationVs]);
+  }, [books, xs, vxs, order, rotations, rotationVs, liftYs, liftVYs]);
   // Whole-shelf vertical hop from a fast phone movement — see the jerk/bounce
   // note above the constants and the frame loop below.
   const jerkY = useSharedValue(0);
@@ -520,7 +550,9 @@ export default function Bookshelf({
         if (
           Math.abs(vxs.value[i]) > 0.5 ||
           Math.abs(rotations.value[i]) > 0.2 ||
-          Math.abs(rotationVs.value[i]) > 0.5
+          Math.abs(rotationVs.value[i]) > 0.5 ||
+          Math.abs(liftYs.value[i]) > 0.5 ||
+          Math.abs(liftVYs.value[i]) > 0.5
         ) {
           settled = false;
           break;
@@ -532,6 +564,8 @@ export default function Bookshelf({
     const nextVxs = vxs.value.slice();
     const nextRotations = rotations.value.slice();
     const nextRotationVs = rotationVs.value.slice();
+    const nextLiftYs = liftYs.value.slice();
+    const nextLiftVYs = liftVYs.value.slice();
     const maxX = Math.max(0, widthShared.value - spineWidth);
 
     // Velocity of whichever spine is being dragged, finite-differenced against
@@ -542,9 +576,16 @@ export default function Bookshelf({
         ? (xs.value[draggingIndex.value] - lastDragX.value) / dt
         : 0;
     if (draggingIndex.value >= 0) lastDragX.value = xs.value[draggingIndex.value];
+    // Same finite-differencing for the vertical lift, so a fast release
+    // carries its momentum into the fall instead of starting from rest.
+    const draggedLiftVel =
+      draggingIndex.value >= 0 && dt > 0
+        ? (liftYs.value[draggingIndex.value] - lastDragLiftY.value) / dt
+        : 0;
+    if (draggingIndex.value >= 0) lastDragLiftY.value = liftYs.value[draggingIndex.value];
     // Lifted "into the air" — floats free of horizontal collision until it's
     // lowered back toward the shelf line, where it lands with a real bump.
-    const draggedLifted = draggingIndex.value >= 0 && Math.abs(dragLiftY.value) > LIFT_THRESHOLD;
+    const draggedLifted = draggingIndex.value >= 0 && Math.abs(liftYs.value[draggingIndex.value]) > LIFT_THRESHOLD;
 
     for (let i = 0; i < len; i++) {
       // Rotation always integrates, dragged spine or not — torque only while
@@ -574,6 +615,24 @@ export default function Bookshelf({
       // pinned spine can actually topple onto its side.
       const clampMax = isDragged ? ROTATION_MAX : FALL_ROTATION_DEG;
       nextRotations[i] = Math.min(clampMax, Math.max(-clampMax, nextRotations[i] + nextRotationVs[i] * dt));
+
+      // Lift height: kinematic (already set by the gesture) while dragged —
+      // just track its velocity so a release carries momentum. Otherwise
+      // real gravity pulls it down until it lands flush at the shelf line.
+      if (isDragged) {
+        nextLiftVYs[i] = draggedLiftVel;
+      } else {
+        const liftDamping = -nextLiftVYs[i] * DAMPING;
+        nextLiftVYs[i] += (liftDamping + LIFT_GRAVITY) * dt;
+        nextLiftYs[i] += nextLiftVYs[i] * dt;
+        if (nextLiftYs[i] > 0) {
+          nextLiftYs[i] = 0;
+          nextLiftVYs[i] = 0;
+        } else if (nextLiftYs[i] < LIFT_MIN) {
+          nextLiftYs[i] = LIFT_MIN;
+          if (nextLiftVYs[i] < 0) nextLiftVYs[i] = 0;
+        }
+      }
 
       if (isDragged) {
         // Kinematic: position already set by the gesture.
@@ -637,6 +696,8 @@ export default function Bookshelf({
     vxs.value = nextVxs;
     rotations.value = nextRotations;
     rotationVs.value = nextRotationVs;
+    liftYs.value = nextLiftYs;
+    liftVYs.value = nextLiftVYs;
   });
 
   function handleReordered(ord: number[]) {
@@ -665,7 +726,8 @@ export default function Bookshelf({
               order={order}
               draggingIndex={draggingIndex}
               lastDragX={lastDragX}
-              dragLiftY={dragLiftY}
+              liftYs={liftYs}
+              lastDragLiftY={lastDragLiftY}
               bounceY={bounceY}
               rotations={rotations}
               grabOffsetFrac={grabOffsetFrac}
