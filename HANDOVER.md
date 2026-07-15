@@ -26,15 +26,25 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
   **Confirmed working on real EN + RU camera photos** — English needed the
   "Re-scan area" crop tool to cut illustration-text noise; that's the fix,
   not a Tesseract quality problem.
-- **Library** — rich cards (cover, counts, status, badges), **favorites ⭐**,
-  a **▶ Play button** (bottom-right, soft-tint) that jumps straight into the
-  Reader, an inline **"⚠️ N" readiness chip** that opens a "what's missing"
-  sheet deep-linking to the page that needs fixing, **swipe left → delete
-  bin** / **swipe right → mark approved** (both with a haptic tick at the
-  open threshold), pull-to-refresh.
+- **Library** — rich cards (cover, counts, status, badges), **favorites ⭐**
+  (star centered over the ▶ Play button, both fixed 36x36), a **▶ Play
+  button** (bottom-right, soft-tint) that jumps straight into the Reader, an
+  inline **"⚠️ N" readiness chip** that opens a "what's missing" sheet
+  deep-linking to the page that needs fixing, **swipe left → delete bin**
+  (haptic tick at the open threshold), pull-to-refresh. A physical
+  **Bookshelf** of favorited books sits above the list — tilt-gravity, a
+  drag-to-reorder physics system, and (once more books are favorited than fit
+  the screen) a scrollbar below the shelf to pan through them. The manual
+  approval workflow (unreviewed/in_progress/approved, swipe-right-to-approve)
+  was removed — the readiness gate already signals whether a book plays back
+  well, so approval was a redundant second step. The `review_status`
+  column/type are still in the schema (no migration) but nothing reads or
+  writes them anymore.
 - **Book detail** — per-page inspector, tap the title to rename, drag-reorder
   / delete pages, add pages, and a pinned **readiness gate + ▶ Read** bar
   (green "Ready" or amber "N things to check" with an expandable checklist).
+  Tapping "Ready" now opens a popup summarizing what was checked (story pages,
+  matched sounds, ambient pages) instead of doing nothing.
 - **Page editor** — tap a word to attach/remove a sound; correct OCR text
   (keyboard no longer covers the input); "Re-scan area" (crop → re-OCR just
   that region); record/trim/fade custom sounds per word; **ambient
@@ -45,10 +55,10 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
   every row** so you can hear a sound before assigning it.
 - **Reader (`/read/[id]`)** — the payoff screen. Ambient bed **fades in and
   loops automatically** per page; **tap a highlighted word to fire its
-  sound**; Next/Back page turns; end screen offers Looks good (→
-  `reviewStatus = 'approved'`), Read again, or Done. This is the exact seam
-  Vosk speech alignment will hook into later (fire the same cue from speech
-  instead of a tap — no reader UI change needed).
+  sound**; Next/Back page turns; end screen offers Read again or Done (the
+  earlier "Looks good" approval action is gone, see Library note above). This
+  is the exact seam Vosk speech alignment will hook into later (fire the same
+  cue from speech instead of a tap — no reader UI change needed).
 - **Sound library** — 115 effects + 18 ambient, all real CC0 audio from
   Freesound, **loudness-normalized** (effects −16 LUFS, ambient −23 LUFS so
   beds sit under effects) and **all playing with a short fade in/out**
