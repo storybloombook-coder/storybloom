@@ -22,6 +22,7 @@ import type { ReactNode } from 'react';
 import { StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   LinearTransition,
   runOnJS,
   useAnimatedStyle,
@@ -38,6 +39,11 @@ export const PAGE_LIST_GAP = 12;
 // ALREADY the target until the center moves decisively past it (by this
 // margin, on either edge) absorbs that tremor.
 const REORDER_HYSTERESIS = 10;
+// Shared by this card's own translateY-reset AND layout={LinearTransition}
+// below — see the settle-continuity note at the .onEnd() reorder branch for
+// why they need to match exactly.
+const SETTLE_DURATION = 220;
+const SETTLE_EASING = Easing.out(Easing.cubic);
 
 function triggerDragHaptic() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -113,20 +119,31 @@ export default function DraggablePageCard({
       draggingIndex.value = -1;
       targetIndex.value = -1;
       if (target !== index) {
-        // A real reorder — this card is about to move to a new position in
-        // the list, which layout={LinearTransition} (below) will already
-        // animate smoothly on its own. Animating translateY back to 0 AT THE
-        // SAME TIME stacked a SECOND transition on top of that one (they're
-        // separate transform sources that compose), which is what made the
-        // drop read as a hard, high-amplitude "bounce" instead of one clean
-        // settle. Zero it instantly and let LinearTransition own the motion.
-        translateY.value = 0;
+        // A real reorder — this card is about to move to a new NATURAL slot,
+        // which layout={LinearTransition} bridges by animating the gap
+        // between the OLD slot's position and the NEW one (nothing to do
+        // with translateY — it's a completely separate transform). Right
+        // now, translateY still holds the raw drag offset, i.e. the card is
+        // sitting exactly where the finger let go, which is generally NOT
+        // the old natural slot. If translateY snapped to 0 here, the card
+        // would visually jump BACK to its old natural slot for an instant
+        // before LinearTransition even started — a release that didn't
+        // continue smoothly from where it was let go.
+        // Instead, animate translateY down to 0 over the EXACT SAME
+        // duration/easing as LinearTransition below. Two transforms summed
+        // together, both easing out at the same rate, interpolate as ONE
+        // continuous motion: at any moment the total offset is (gap between
+        // old and new slot) + (remaining drag offset), which starts at
+        // "wherever the finger released it" and glides straight to the new
+        // slot — no snap, no separate "switch" animation.
+        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING });
         runOnJS(onReorder)(index, target);
       } else {
         // No reorder — dropped back in the same slot, so there's no layout
-        // change for LinearTransition to animate. This IS the only motion,
-        // so it needs its own smooth return.
-        translateY.value = withTiming(0);
+        // change to align with. This IS the only motion, so it just needs
+        // its own smooth return (timing doesn't need to match anything else
+        // here, but reusing the same constants keeps the feel consistent).
+        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING });
       }
     });
 
@@ -172,9 +189,13 @@ export default function DraggablePageCard({
     <Animated.View
       // Bare LinearTransition defaults to a spring with noticeable overshoot
       // ("bounce") — too much for a card settling into its dropped slot.
-      // .duration() makes it a plain eased timing instead: no overshoot at
-      // all, just a gentle, soft settle.
-      layout={LinearTransition.duration(220)}
+      // .duration()/.easing() make it a plain eased timing instead — and
+      // MUST exactly match SETTLE_DURATION/SETTLE_EASING used for translateY
+      // above, so the two separate transforms (this one bridging old-slot to
+      // new-slot, translateY unwinding the raw drag offset) interpolate
+      // together as one continuous motion instead of two independently-timed
+      // ones that don't line up (which is what read as a hard bounce).
+      layout={LinearTransition.duration(SETTLE_DURATION).easing(SETTLE_EASING)}
       style={[styles.wrapper, animatedStyle]}
       onLayout={(e) => onMeasured(index, e.nativeEvent.layout.height)}
     >
