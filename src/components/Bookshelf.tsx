@@ -109,12 +109,12 @@ const WALL_WIDTH = 6;
 // a lightweight rotational spring-damper, same shape as the horizontal
 // physics, with the drag supplying "torque" instead of a driving force.
 const ROTATION_MAX = 22; // degrees, clamp WHILE BEING DRAGGED
-// Lower stiffness than the original 140 — the fall-onto-side topple reached
-// FALL_ROTATION_DEG far too fast/abruptly; less stiffness means a slower,
-// more gradual approach to whatever the current target is (also softens the
-// gentle lean and drag-torque rotation a little, which is fine).
-const ROTATION_STIFFNESS = 70;
-const ROTATION_DAMPING = 14;
+// Cut hard again from 70/14 — even that still read as "way too crazy and
+// fast" on real hardware. Real books settle calmly, not snappily; lower
+// stiffness + more damping means a slower, heavier-feeling approach to
+// whatever the current target is (gentle lean, drag-torque, or a topple).
+const ROTATION_STIFFNESS = 32;
+const ROTATION_DAMPING = 20;
 // Scales (how far off-center you grabbed) * (how fast it's being shoved)
 // into a torque. Sign is a first pass, not yet confirmed on hardware — if a
 // book tips the wrong way for where it was grabbed, flip this to negative.
@@ -128,7 +128,7 @@ const CORNER_HANG_STRENGTH = 0.12;
 // when it hits another book — scaled by the grab point (same lever-arm
 // idea as ROTATION_TORQUE) and how deep the impact is. First pass, not yet
 // confirmed on hardware.
-const COLLISION_ROTATION_KICK = 2.2;
+const COLLISION_ROTATION_KICK = 1.0;
 
 // Ambient tilt lean: even without touching a book, every spine visibly
 // tilts a little as the phone tilts — the same rotation spring-damper above,
@@ -152,7 +152,7 @@ const COLLISION_ROTATION_KICK = 2.2;
 //   3. Past SLIDE_TILT_THRESHOLD (~19°)  — gravity ALSO starts actually
 //      sliding books across the shelf (see the `gravity` computation below),
 //      not just leaning/toppling them in place.
-const TILT_LEAN_DEG_PER_UNIT = 16; // degrees of lean per unit of tiltX
+const TILT_LEAN_DEG_PER_UNIT = 11; // degrees of lean per unit of tiltX — calmer baseline
 const FALL_TILT_THRESHOLD = 0.148; // sin(8.5°) — average book's topple angle
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
 const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coefficient
@@ -162,8 +162,8 @@ const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coef
 // position or toward each other; they only move via drag, tilt-gravity, a
 // shake, or a collision, and just stay wherever that leaves them (falling
 // horizontally and stacking unevenly is the intended, physical look).
-const DAMPING = 14; // velocity drag
-const BUMP = 3; // extra velocity kick imparted on collision
+const DAMPING = 22; // velocity drag — heavier/calmer settling than the original 14
+const BUMP = 1.6; // extra velocity kick imparted on collision — gentler than the original 3
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 
 // Quick swipe across the shelf (distinct from the long-press-to-drag
@@ -184,8 +184,8 @@ const SWIPE_WIGGLE = 100; // rotational velocity kick, degrees/sec
 // only reacting once you actually drop it in. A one-time KICK, not a
 // restoring force, so it doesn't reintroduce the "drawn toward a slot"
 // behavior that was deliberately removed elsewhere.
-const GAP_NUDGE_KICK = 90; // outward velocity kick, same order as collision BUMP
-const GAP_WIGGLE_KICK = 70; // small rotational velocity kick, degrees/sec
+const GAP_NUDGE_KICK = 50; // outward velocity kick, same order as collision BUMP
+const GAP_WIGGLE_KICK = 35; // small rotational velocity kick, degrees/sec
 
 // Lift-out-of-the-shelf tuning. Past LIFT_THRESHOLD the dragged spine is
 // "in the air" — it stops colliding with neighbors (so it can hover freely
@@ -202,16 +202,17 @@ const LIFT_MAX = 24; // a little downward give too
 // everything else: real gravity pulls a released spine down, it lands with
 // its velocity zeroed at the shelf line, and it's visible the whole time
 // because nothing gates it on which spine is currently being dragged.
-const LIFT_GRAVITY = 1400;
+const LIFT_GRAVITY = 1000; // was 1400 — heavier books fall a bit less abruptly
 
 // Tilt the phone and the shelf's own "gravity" tips with it — books slide
 // toward the low side and pile against the wall, same collision system as a
 // drag. Accelerometer x is ~0 held level, ~±1g at a full 90° side-tilt.
 // Terminal velocity is gravity/DAMPING now that the home-slot spring is off
-// while tilting (see the frame loop) — at the old 260 that worked out to
-// under ~20px/s even at a firm tilt, reading as "barely moving." Raised ~7x
-// so a moderate tilt visibly slides a spine within roughly a second.
-const GRAVITY_STRENGTH = 1800;
+// while tilting (see the frame loop). Cut back down from 1800 — combined
+// with the higher DAMPING above, 1800 read as "way too crazy and fast" on
+// real hardware; 900 gives a calmer, heavier slide once SLIDE_TILT_THRESHOLD
+// is crossed instead of a sudden lurch.
+const GRAVITY_STRENGTH = 900;
 const TILT_UPDATE_MS = 80;
 // Below this, treat the phone as "held level" — a real phone is essentially
 // never perfectly flat, and without a deadzone that ambient tilt would keep
@@ -222,8 +223,10 @@ const TILT_DEADZONE = 0.12;
 // non-zero, it needs enough tilt to overcome static friction first, and even
 // while sliding, friction (not just velocity damping) constantly opposes the
 // motion. Modeled as a Coulomb-friction force that's subtracted from gravity's
-// pull — below this magnitude gravity can't move anything at all.
-const FRICTION = 480;
+// pull — below this magnitude gravity can't move anything at all. Kept at the
+// same μ≈0.35 (paper/cloth-on-wood) ratio to GRAVITY_STRENGTH as before, just
+// rescaled down with it: 0.35 * 900 ≈ 315.
+const FRICTION = 315;
 
 // Shake-to-mix: a sudden jolt in total acceleration (not just tilt) shuffles
 // the whole shelf, same physics as everything else — a randomized order plus
@@ -241,8 +244,8 @@ const SHAKE_KICK = 220;
 // canned bounce animation), then a tiny mass-spring-damper settles it back
 // down, same principle as the horizontal physics elsewhere in this file.
 const BOUNCE_STIFFNESS = 260; // spring pulling the shelf back to rest height
-const BOUNCE_DAMPING = 18;
-const BOUNCE_STRENGTH = 900; // scales sensed vertical jerk into a hop force
+const BOUNCE_DAMPING = 22; // heavier/calmer settle than the original 18
+const BOUNCE_STRENGTH = 650; // was 900 — gentler hop, part of the general "heavier" pass
 const BOUNCE_MAX = 26; // clamp how far the shelf visually hops, px
 // Low-pass filter rate for estimating "steady" vertical accelerometer reading
 // (i.e. however the phone is currently being held) so only the SUDDEN
