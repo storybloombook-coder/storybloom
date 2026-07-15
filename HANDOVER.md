@@ -46,12 +46,15 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
   was a redundant second step. The `review_status` column/type are still in
   the schema (no migration) but nothing reads or writes them anymore.
 - **Book detail** — per-page inspector, tap the title to rename, drag-reorder
-  pages (long-press), **swipe a page left → delete bin** (same
+  pages (long-press: neighbors visibly slide apart to preview the gap, a
+  gentle no-bounce settle on drop), **swipe a page left → delete bin** (same
   confirm-delete pattern as the library, replacing the old drag-onto-a-
   fixed-bin gesture), add pages, and a pinned **readiness gate + ▶ Read** bar
   (green "Ready" or amber "N things to check" with an expandable checklist).
   Tapping "Ready" now opens a popup summarizing what was checked (story pages,
   matched sounds, ambient pages) instead of doing nothing.
+  `DraggablePageCard`/`SwipeableRow` nesting is order-sensitive — see the
+  gotcha below if touching either.
 - **Page editor** — tap a word to attach/remove a sound; correct OCR text
   (keyboard no longer covers the input); "Re-scan area" (crop → re-OCR just
   that region); record/trim/fade custom sounds per word; **ambient
@@ -190,3 +193,29 @@ npx eas-cli build --platform android --profile development   # new dev-client bu
   top-level enough dependency in npx's resolution — use
   `node node_modules/typescript/bin/tsc --noEmit` if you see a "This is not
   the tsc command you are looking for" message.
+- **`DraggablePageCard` must be the OUTER wrapper, `SwipeableRow` nested
+  INSIDE it** (`<DraggablePageCard><SwipeableRow>{content}</SwipeableRow>
+  </DraggablePageCard>`) — never the other way. `SwipeableRow`'s own
+  `overflow: 'hidden'` clips anything that moves beyond its own row's
+  bounds; if it's the outer element, a dragged page (which needs to visually
+  translate OVER neighboring rows) and the neighbors it displaces (which
+  shift by roughly one row's height to "make room") both get clipped the
+  instant they move past their own row, and the dragged card's `zIndex`
+  stops actually elevating it above other rows (it only elevates it among
+  its own children once nested one level too deep). This exact regression
+  happened once already — see git history around commit `f02060a` if it
+  resurfaces.
+- **Two independent Reanimated transforms animating the SAME visual motion
+  at once compound into a visible "bounce"**, even if neither one
+  individually overshoots. Hit this in `DraggablePageCard`: on drop,
+  `translateY` was animated back to 0 via `withTiming` at the exact same
+  moment `layout={LinearTransition}` was ALSO animating the same card's real
+  layout-position change (old slot → new slot) — two separate transform
+  sources stacking read as a hard, high-amplitude bounce. Fix: whichever one
+  of the two is about to fire (here, the layout transition, because a real
+  reorder is happening) should own 100% of the motion — snap the OTHER one
+  (`translateY`/a shifted neighbor's preview offset) to its target
+  INSTANTLY, not animated, the instant you know the real transition is about
+  to take over. Also worth knowing: bare `layout={LinearTransition}`
+  defaults to a bouncy spring — use `.duration(ms)` for a plain eased
+  settle with no overshoot at all.
