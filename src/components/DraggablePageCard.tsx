@@ -124,7 +124,11 @@ export default function DraggablePageCard({
 
   return (
     <Animated.View
-      layout={LinearTransition}
+      // Bare LinearTransition defaults to a spring with noticeable overshoot
+      // ("bounce") — too much for a card settling into its dropped slot.
+      // .duration() makes it a plain eased timing instead: no overshoot at
+      // all, just a gentle, soft settle.
+      layout={LinearTransition.duration(220)}
       style={[styles.wrapper, animatedStyle]}
       onLayout={(e) => onMeasured(index, e.nativeEvent.layout.height)}
     >

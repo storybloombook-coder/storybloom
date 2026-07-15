@@ -124,7 +124,9 @@ export default function SwipeableRow({
     // one is inert, since this component's own position within ITS parent
     // never changes — harmless, just doesn't do anything there.
     <Animated.View
-      layout={LinearTransition}
+      // .duration() (not bare LinearTransition, which defaults to a
+      // bouncy spring) for a gentle, soft settle with no overshoot.
+      layout={LinearTransition.duration(220)}
       style={styles.swipeWrap}
       onLayout={(e) => {
         const w = e.nativeEvent.layout.width;
