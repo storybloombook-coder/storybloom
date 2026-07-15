@@ -111,6 +111,10 @@ export default function ReaderScreen() {
   const [firingToken, setFiringToken] = useState<number | null>(null);
   const [micStatus, setMicStatus] = useState<MicStatus>('idle');
   const [micError, setMicError] = useState<string | null>(null);
+  // Mirrors readCursorRef into React state so the read-so-far highlight can
+  // re-render as speech alignment advances — the ref alone is enough for the
+  // alignment logic itself (cue firing), but nothing re-renders off a ref.
+  const [readCursor, setReadCursor] = useState(0);
 
   const ambientPlayerRef = useRef<Player | null>(null);
   const ambientStopRef = useRef<(() => void) | null>(null);
@@ -227,6 +231,7 @@ export default function ReaderScreen() {
     cuesRef.current = page ? cuesByPage.get(page.id) ?? [] : [];
     readCursorRef.current = 0;
     firedCueIdsRef.current = new Set();
+    setReadCursor(0);
   }, [index, storyPages, cuesByPage]);
 
   useEffect(() => {
@@ -267,6 +272,9 @@ export default function ReaderScreen() {
         }
         readCursorRef.current = newCursor;
       }
+      // One state update per recognized result (not per word) — enough to
+      // re-render the read-so-far highlight without spamming setState.
+      setReadCursor(readCursorRef.current);
     };
   });
 
@@ -488,10 +496,23 @@ export default function ReaderScreen() {
           {page.ocrText.trim() ? (
             <Text style={[styles.flow, { color: textColor }]}>
               {tokens.map((t, i) => {
+                // Karaoke-style read-so-far highlight — driven by the same
+                // speech-alignment cursor that fires cues, so it tracks
+                // exactly as far as recognized speech has actually reached.
+                const isRead = !t.isSpace && t.end <= readCursor;
                 if (t.isSpace) return <Text key={i}>{t.text}</Text>;
                 const cue = cueAtRange(cues, t.start, t.end);
                 const active = cue && cue.reviewState !== 'removed' && !!cue.soundId;
-                if (!active) return <Text key={i}>{t.text}</Text>;
+                if (!active) {
+                  return (
+                    <Text
+                      key={i}
+                      style={isRead ? [styles.readWord, { color: textColor }] : { color: textColor }}
+                    >
+                      {t.text}
+                    </Text>
+                  );
+                }
                 const firing = firingToken === i;
                 return (
                   <Text
@@ -500,7 +521,14 @@ export default function ReaderScreen() {
                     style={[
                       styles.cueWord,
                       {
-                        backgroundColor: firing ? 'rgba(32,138,239,0.6)' : 'rgba(32,138,239,0.28)',
+                        // Already-spoken cue words get a touch more opacity —
+                        // same blue, just a bit bolder — so the highlight
+                        // still reads consistently across cue and plain text.
+                        backgroundColor: firing
+                          ? 'rgba(32,138,239,0.6)'
+                          : isRead
+                            ? 'rgba(32,138,239,0.4)'
+                            : 'rgba(32,138,239,0.28)',
                         color: textColor,
                       },
                     ]}
@@ -598,6 +626,8 @@ const styles = StyleSheet.create({
   textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
   flow: { fontSize: 22, lineHeight: 36 },
   cueWord: { borderRadius: 5, overflow: 'hidden' },
+  // The karaoke-style "already spoken" highlight for plain (non-cue) words.
+  readWord: { backgroundColor: 'rgba(255,213,79,0.35)', borderRadius: 3 },
   noText: { fontSize: 16, fontStyle: 'italic', textAlign: 'center', marginTop: 30 },
   hint: { fontSize: 13, textAlign: 'center', fontStyle: 'italic' },
 

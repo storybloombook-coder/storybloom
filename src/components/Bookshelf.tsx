@@ -339,6 +339,49 @@ export default function Bookshelf({
   const rotations = useSharedValue<number[]>(books.map(() => 0));
   const rotationVs = useSharedValue<number[]>(books.map(() => 0));
   const grabOffsetFrac = useSharedValue(0);
+
+  // xs/vxs/order/rotations/rotationVs are all indexed by POSITION in the
+  // `books` array, but the parent re-sorts that array (by shelfPosition)
+  // every time a reorder is persisted — so a book's array position can
+  // change on the very next render after its own drag ends. Without this,
+  // whichever book ends up at a given position inherits the ANIMATED STATE
+  // (x, velocity, rotation) that used to belong to whoever was there before,
+  // which looks like two books' spines instantly swapping places/tilt the
+  // moment a reorder saves. Remap every per-book array from old position to
+  // new position whenever the id SEQUENCE changes (but the SET doesn't —
+  // a changed set already remounts the whole component via the parent's key).
+  const prevIds = useRef<string[]>(books.map((b) => b.id));
+  useEffect(() => {
+    const newIds = books.map((b) => b.id);
+    const oldIds = prevIds.current;
+    prevIds.current = newIds;
+    if (newIds.length !== oldIds.length) return; // set changed — remount handles it
+    let reordered = false;
+    for (let i = 0; i < newIds.length; i++) {
+      if (newIds[i] !== oldIds[i]) {
+        reordered = true;
+        break;
+      }
+    }
+    if (!reordered) return;
+    const oldIndexOf = new Map(oldIds.map((id, i) => [id, i]));
+    const permute = (arr: number[]) =>
+      newIds.map((id) => {
+        const oldIndex = oldIndexOf.get(id);
+        return oldIndex !== undefined ? arr[oldIndex] : 0;
+      });
+    xs.value = permute(xs.value);
+    vxs.value = permute(vxs.value);
+    rotations.value = permute(rotations.value);
+    rotationVs.value = permute(rotationVs.value);
+    // `order` holds RANKS as old-index values — remap those values (not just
+    // their positions) through the same old->new lookup.
+    order.value = order.value.map((oldIndex) => {
+      const id = oldIds[oldIndex];
+      const newIndex = newIds.indexOf(id);
+      return newIndex >= 0 ? newIndex : oldIndex;
+    });
+  }, [books, xs, vxs, order, rotations, rotationVs]);
   // Whole-shelf vertical hop from a fast phone movement — see the jerk/bounce
   // note above the constants and the frame loop below.
   const jerkY = useSharedValue(0);
@@ -628,6 +671,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     width: SHELF_HEIGHT - 24,
     textAlign: 'center',
+    // The fixed `height` given inline (so adjustsFontSizeToFit has a real box
+    // to shrink into) means Android would otherwise top-align short text
+    // instead of centering it in that box — this is what actually centers a
+    // title that fits on one line.
+    textAlignVertical: 'center',
   },
   spineBand: {
     position: 'absolute',
