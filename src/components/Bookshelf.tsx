@@ -80,7 +80,11 @@ const LIFT_MAX = 24; // a little downward give too
 // Tilt the phone and the shelf's own "gravity" tips with it — books slide
 // toward the low side and pile against the wall, same collision system as a
 // drag. Accelerometer x is ~0 held level, ~±1g at a full 90° side-tilt.
-const GRAVITY_STRENGTH = 260;
+// Terminal velocity is gravity/DAMPING now that the home-slot spring is off
+// while tilting (see the frame loop) — at the old 260 that worked out to
+// under ~20px/s even at a firm tilt, reading as "barely moving." Raised ~7x
+// so a moderate tilt visibly slides a spine within roughly a second.
+const GRAVITY_STRENGTH = 1800;
 const TILT_UPDATE_MS = 80;
 // Below this, treat the phone as "held level" — a real phone is essentially
 // never perfectly flat, and without a deadzone that ambient tilt would keep
