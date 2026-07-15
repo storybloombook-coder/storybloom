@@ -145,9 +145,22 @@ export default function DraggablePageCard({
       else if (to < from && index < from && index >= to) shiftY = draggedHeight;
     }
 
+    // While a drag is in progress, animate the live "make room" preview
+    // shift smoothly. The MOMENT it ends (from === -1), any card that WAS
+    // previewed-shifted is exactly one whose REAL layout position is about
+    // to change from the reorder (see onReorder above) — the same set of
+    // indices in both cases. layout={LinearTransition} on the list item
+    // already animates that real position change; also animating this
+    // preview transform back to 0 at the same time stacked a second
+    // transition on top of it, which read as a hard bounce on every
+    // neighbor the drag had displaced — same root cause as the dragged
+    // card's own bounce, just not yet fixed for its neighbors. Snap
+    // instantly here and let LinearTransition own the settle alone.
+    const shiftStyle = from === -1 ? shiftY : withTiming(shiftY);
+
     return {
       transform: [
-        { translateY: isMe ? translateY.value : withTiming(shiftY) },
+        { translateY: isMe ? translateY.value : shiftStyle },
         { scale: withTiming(dragging.value ? 1.03 : 1) },
       ],
       zIndex: dragging.value ? 100 : 0,
