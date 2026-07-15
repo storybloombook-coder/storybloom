@@ -33,8 +33,10 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
   deep-linking to the page that needs fixing, **swipe left → delete bin**
   (haptic tick at the open threshold), pull-to-refresh. A physical
   **Bookshelf** of favorited books sits above the list — tilt-gravity, a
-  drag-to-reorder physics system, and (once more books are favorited than fit
-  the screen) a scrollbar below the shelf to pan through them. The manual
+  drag-to-reorder physics system, spines at a fixed size (never shrink/scroll
+  to cram more in); once more books are favorited than fit one shelf, the
+  rest spill onto additional numbered shelves switched via a selector below
+  (1, 2, 3…). The manual
   approval workflow (unreviewed/in_progress/approved, swipe-right-to-approve)
   was removed — the readiness gate already signals whether a book plays back
   well, so approval was a redundant second step. The `review_status`
