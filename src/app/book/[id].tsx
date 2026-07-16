@@ -2,11 +2,13 @@ import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -36,6 +38,8 @@ import {
   updatePagePrepResult,
 } from '../../lib/db';
 import { checkReadiness, warningLabel } from '../../lib/reader/readiness';
+import { createVoskRecognizer } from '../../lib/speech/vosk';
+import type { SpeechLang } from '../../lib/speech/types';
 import type { Book, Cue, Page } from '../../lib/types';
 import { createVisionProvider } from '../../lib/vision';
 
@@ -99,6 +103,17 @@ export default function BookDetailScreen() {
   const [addingPages, setAddingPages] = useState(false);
   const [addProgress, setAddProgress] = useState('');
 
+  // Adding a page by voice instead of a photo — same Vosk dictation used by
+  // create-story.tsx, just appending ONE page to this already-existing book
+  // instead of building a whole new one.
+  const [dictateOpen, setDictateOpen] = useState(false);
+  const [dictateDraft, setDictateDraft] = useState('');
+  const [dictateStatus, setDictateStatus] = useState<'idle' | 'loading' | 'listening'>('idle');
+  const [dictateFinal, setDictateFinal] = useState('');
+  const [dictatePartial, setDictatePartial] = useState('');
+  const [savingDictatedPage, setSavingDictatedPage] = useState(false);
+  const dictateRecognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
+
   const load = useCallback(async () => {
     if (!bookId) return;
     const [b, ps, cs] = await Promise.all([
@@ -117,6 +132,12 @@ export default function BookDetailScreen() {
     setCuesByPage(grouped);
     setLoading(false);
   }, [bookId]);
+
+  useEffect(() => {
+    return () => {
+      dictateRecognizerRef.current?.unload().catch(() => {});
+    };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -272,6 +293,75 @@ export default function BookDetailScreen() {
     } finally {
       setAddingPages(false);
       setAddProgress('');
+    }
+  }
+
+  function openDictate() {
+    setDictateDraft('');
+    setDictateFinal('');
+    setDictatePartial('');
+    setDictateStatus('idle');
+    setDictateOpen(true);
+  }
+
+  async function closeDictate() {
+    if (dictateStatus === 'listening') await dictateRecognizerRef.current?.stop().catch(() => {});
+    await dictateRecognizerRef.current?.unload().catch(() => {});
+    dictateRecognizerRef.current = null;
+    setDictateOpen(false);
+  }
+
+  async function startPageDictation() {
+    if (!book) return;
+    setDictateStatus('loading');
+    try {
+      if (!dictateRecognizerRef.current) dictateRecognizerRef.current = createVoskRecognizer();
+      const lang = book.language as SpeechLang;
+      await dictateRecognizerRef.current.load(lang);
+      await dictateRecognizerRef.current.start({
+        lang,
+        onPartial: setDictatePartial,
+        onResult: (text) => {
+          setDictateFinal((prev) => (prev ? `${prev} ${text}` : text));
+          setDictatePartial('');
+        },
+      });
+      setDictateStatus('listening');
+    } catch (e: any) {
+      setDictateStatus('idle');
+      Alert.alert('Dictation unavailable', e?.message ?? String(e));
+    }
+  }
+
+  async function stopPageDictation() {
+    try {
+      await dictateRecognizerRef.current?.stop();
+    } catch {}
+    setDictateStatus('idle');
+    const text = [dictateFinal, dictatePartial].filter(Boolean).join(' ').trim();
+    if (text) setDictateDraft((prev) => (prev ? `${prev} ${text}` : text));
+    setDictateFinal('');
+    setDictatePartial('');
+  }
+
+  async function saveDictatedPage() {
+    const text = dictateDraft.trim();
+    if (!text || !book) return;
+    setSavingDictatedPage(true);
+    try {
+      const pageRow = await createPage({ bookId: book.id, pageNumber: pages.length + 1, imagePath: '' });
+      await updatePagePrepResult(pageRow.id, {
+        pageType: 'story',
+        ocrText: text,
+        backgroundScene: null,
+        ambientSoundId: null,
+      });
+      await closeDictate();
+      await load();
+    } catch (e: any) {
+      Alert.alert('Could not save page', e?.message ?? String(e));
+    } finally {
+      setSavingDictatedPage(false);
     }
   }
 
@@ -442,6 +532,12 @@ export default function BookDetailScreen() {
           );
         })}
 
+        <View style={styles.addPagesDivider}>
+          <View style={[styles.addPagesDividerLine, { backgroundColor: chipBackground }]} />
+          <Text style={[styles.addPagesDividerLabel, { color: subColor }]}>Add more pages</Text>
+          <View style={[styles.addPagesDividerLine, { backgroundColor: chipBackground }]} />
+        </View>
+
         <View style={styles.squareButtonRow}>
           <View style={styles.squareButtonWrap}>
             <TactileButton style={[styles.squareButton, { backgroundColor: cardBackground }]} onPress={pickFromLibrary}>
@@ -458,6 +554,14 @@ export default function BookDetailScreen() {
             </TactileButton>
           </View>
         </View>
+
+        <TactileButton
+          style={[styles.dictatePageButton, { backgroundColor: cardBackground }]}
+          onPress={openDictate}
+        >
+          <Text style={styles.dictatePageEmoji}>🎙️</Text>
+          <Text style={[styles.dictatePageLabel, { color: textColor }]}>Dictate a page</Text>
+        </TactileButton>
       </ScrollView>
 
       {/* Pre-flight gate + the primary "Read" action, pinned bottom (thumb). */}
@@ -561,6 +665,69 @@ export default function BookDetailScreen() {
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      <Modal visible={dictateOpen} transparent animationType="slide" onRequestClose={closeDictate}>
+        <KeyboardAvoidingView style={styles.dictateOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={[styles.dictateSheet, { backgroundColor: cardBackground }]}>
+            <Text style={[styles.renameTitle, { color: textColor }]}>
+              Dictate page {pages.length + 1}
+            </Text>
+            <TextInput
+              value={dictateDraft}
+              onChangeText={setDictateDraft}
+              multiline
+              placeholder="Tap 'Start dictating' and read this page aloud, or type it yourself…"
+              placeholderTextColor={subColor}
+              style={[styles.dictateInput, { color: textColor, backgroundColor: chipBackground }]}
+            />
+
+            {dictateStatus === 'listening' && (dictateFinal || dictatePartial) ? (
+              <View style={[styles.dictateTranscript, { backgroundColor: chipBackground }]}>
+                <Text style={{ color: textColor, fontSize: 14, lineHeight: 20 }}>
+                  {dictateFinal}
+                  {dictatePartial ? (
+                    <Text style={{ color: subColor }}>{dictateFinal ? ' ' : ''}{dictatePartial}</Text>
+                  ) : null}
+                </Text>
+              </View>
+            ) : null}
+
+            {dictateStatus === 'listening' ? (
+              <TactileButton
+                style={[styles.dictateActionButton, { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' }]}
+                onPress={stopPageDictation}
+              >
+                <Text style={[styles.dictateActionLabel, { color: '#ff453a' }]}>Stop dictating</Text>
+              </TactileButton>
+            ) : (
+              <TactileButton
+                style={[styles.dictateActionButton, { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' }]}
+                onPress={startPageDictation}
+                disabled={dictateStatus === 'loading'}
+              >
+                <Text style={[styles.dictateActionLabel, { color: '#ff453a' }]}>
+                  {dictateStatus === 'loading' ? 'Loading model…' : 'Start dictating'}
+                </Text>
+              </TactileButton>
+            )}
+
+            <View style={styles.renameActions}>
+              <TactileButton style={[styles.renameBtn, { backgroundColor: chipBackground }]} onPress={closeDictate}>
+                <Text style={[styles.renameBtnLabel, { color: subColor }]}>Cancel</Text>
+              </TactileButton>
+              <TactileButton
+                style={[styles.renameBtn, { backgroundColor: '#208AEF' }]}
+                onPress={saveDictatedPage}
+                disabled={!dictateDraft.trim() || savingDictatedPage}
+              >
+                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>
+                  {savingDictatedPage ? 'Saving…' : 'Save page'}
+                </Text>
+              </TactileButton>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -672,6 +839,9 @@ const styles = StyleSheet.create({
   ambientChip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   ambientDot: { width: 7, height: 7, borderRadius: 3.5 },
 
+  addPagesDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, marginBottom: 4 },
+  addPagesDividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
+  addPagesDividerLabel: { fontSize: 12, fontWeight: '600' },
   squareButtonRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
   squareButtonWrap: { flex: 1 },
   squareButton: {
@@ -684,6 +854,17 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   squareButtonEmoji: { fontSize: 34 },
+  dictatePageButton: {
+    marginTop: 12,
+    borderRadius: 16,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  dictatePageEmoji: { fontSize: 20 },
+  dictatePageLabel: { fontSize: 16, fontWeight: '600' },
   squareButtonLabel: { fontSize: 16, fontWeight: '700', textAlign: 'center' },
   squareButtonCaption: { fontSize: 12, fontWeight: '400', textAlign: 'center', textTransform: 'lowercase' },
 
@@ -700,4 +881,18 @@ const styles = StyleSheet.create({
   renameActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
   renameBtn: { borderRadius: 10, paddingVertical: 11, paddingHorizontal: 20, alignItems: 'center' },
   renameBtnLabel: { fontSize: 15, fontWeight: '600' },
+
+  dictateOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
+  dictateSheet: { width: '88%', borderRadius: 16, padding: 20, gap: 14 },
+  dictateInput: {
+    minHeight: 140,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 16,
+    lineHeight: 24,
+    textAlignVertical: 'top',
+  },
+  dictateTranscript: { borderRadius: 10, padding: 12 },
+  dictateActionButton: { borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  dictateActionLabel: { fontSize: 16, fontWeight: '600' },
 });
