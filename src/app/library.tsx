@@ -1,6 +1,6 @@
 import { Directory, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
-import { router, Stack, useFocusEffect } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   FlatList,
@@ -66,7 +66,11 @@ export default function LibraryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<BookSummary | null>(null);
   const [missingFor, setMissingFor] = useState<{ title: string; warnings: ReadinessWarning[] } | null>(null);
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // Deep-linked from the home screen's My Library star, which jumps straight
+  // into the Favorites view — only used as the INITIAL value (see useState),
+  // the in-Library header star still freely toggles it from there afterward.
+  const params = useLocalSearchParams<{ favorites?: string }>();
+  const [favoritesOnly, setFavoritesOnly] = useState(params.favorites === '1');
   const sheetBackground = isDark ? '#1c1c1e' : '#fff';
 
   const favoriteCount = books.filter((b) => b.isFavorite).length;
