@@ -417,10 +417,12 @@ export default function LibraryScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
 
-  tabRow: { flexDirection: 'row', gap: 8 },
+  tabRow: { flexDirection: 'row', gap: 8, width: '100%' },
   tabBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: 10,
     borderWidth: 1.5,
     paddingVertical: 7,
