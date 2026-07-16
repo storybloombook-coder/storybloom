@@ -196,13 +196,6 @@ export default function LibraryScreen() {
                 <Text style={[styles.tabLabel, { color: viewMode === 'books' ? '#208AEF' : subColor }]}>
                   My Library
                 </Text>
-                {viewMode === 'books' && (
-                  <Pressable hitSlop={8} onPress={() => setFavoritesOnly((v) => !v)} style={styles.tabStar}>
-                    <Text style={{ fontSize: 14, color: favoritesOnly ? '#f5b301' : subColor }}>
-                      {favoritesOnly ? '★' : '☆'}
-                    </Text>
-                  </Pressable>
-                )}
               </TactileButton>
               <TactileButton
                 style={[
@@ -275,11 +268,22 @@ export default function LibraryScreen() {
                   onReorder={handleShelfReorder}
                 />
               )}
-              <Text style={[styles.count, { color: subColor }]}>
-                {favoritesOnly
-                  ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
-                  : `${books.length} book${books.length === 1 ? '' : 's'}${favoriteCount > 0 ? ` · ${favoriteCount} ★` : ''}`}
-              </Text>
+              <View style={styles.countRow}>
+                <Text style={[styles.count, { color: subColor }]}>
+                  {favoritesOnly
+                    ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
+                    : `${books.length} book${books.length === 1 ? '' : 's'} · ${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}`}
+                </Text>
+                {/* The favorites toggle now lives here (not the header) —
+                    always tappable, even at 0 favorites, so there's still a
+                    way to discover/switch to the Favorites view. Same 36x36
+                    tap target and 24pt star as the per-book star button. */}
+                <TactileButton onPress={() => setFavoritesOnly((v) => !v)} style={styles.countStarBtn}>
+                  <Text style={[styles.countStarIcon, { color: favoritesOnly ? '#f5b301' : subColor }]}>
+                    {favoritesOnly ? '★' : '☆'}
+                  </Text>
+                </TactileButton>
+              </View>
             </>
           }
           renderItem={({ item }) => {
@@ -430,7 +434,6 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tabLabel: { fontSize: 13, fontWeight: '600' },
-  tabStar: { padding: 2, marginLeft: -2 },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
   emptyTitle: { fontSize: 20, fontWeight: '700' },
@@ -439,7 +442,22 @@ const styles = StyleSheet.create({
   ctaLabel: { color: '#208AEF', fontSize: 16, fontWeight: '600' },
 
   list: { padding: 16, gap: 12 },
-  count: { fontSize: 13, fontWeight: '600', marginBottom: 4, marginLeft: 2 },
+  countRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+    marginLeft: 2,
+  },
+  count: { fontSize: 13, fontWeight: '600' },
+  countStarBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countStarIcon: { fontSize: 24 },
 
   card: { flexDirection: 'row', borderRadius: 14, padding: 12, gap: 12 },
   cover: { width: 60, height: 80, borderRadius: 8 },
