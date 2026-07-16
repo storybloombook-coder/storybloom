@@ -1,11 +1,10 @@
-// recordings.tsx — every saved "My recordings" clip in one place. The same
-// list already shows inline in the sound picker (page/[id].tsx) while
-// assigning a sound to a word/ambient, but that's buried mid-flow — this is
-// a direct way to just browse, preview, rename, or delete them, reached from
-// the Library screen's header.
+// RecordingsList.tsx — every saved "My recordings" clip in one place: browse,
+// preview, rename, delete. Embedded as one of the Library screen's two tabs
+// (My Library / My Recordings) — not its own route, since recordings don't
+// have a separate identity outside the library they're reused across.
 
 import { createAudioPlayer } from 'expo-audio';
-import { Stack, router, useFocusEffect } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,10 +17,9 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
-import SwipeableRow from '../components/SwipeableRow';
-import TactileButton from '../components/TactileButton';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
+import SwipeableRow from './SwipeableRow';
+import TactileButton from './TactileButton';
 import { playFull } from '../lib/audio/playRange';
 import { deleteRecording, listRecordings, renameRecording } from '../lib/db';
 import type { Recording } from '../lib/types';
@@ -37,11 +35,10 @@ function originText(rec: Recording): string | null {
     .join(' · ');
 }
 
-export default function RecordingsScreen() {
+export default function RecordingsList() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
-  const backgroundColor = isDark ? '#000' : '#fff';
   const cardBackground = isDark ? '#1c1c1e' : '#f4f4f6';
   const chipBackground = isDark ? '#2c2c2e' : '#e6e6ea';
 
@@ -62,8 +59,8 @@ export default function RecordingsScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-      // Leaving the screen (or coming back to a changed list) shouldn't
-      // leave a preview playing behind the scenes.
+      // Leaving the tab (or coming back to a changed list) shouldn't leave a
+      // preview playing behind the scenes.
       return () => stopPreview();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [load])
@@ -123,19 +120,7 @@ export default function RecordingsScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          title: 'My Recordings',
-          headerLeft: () => (
-            <Pressable onPress={() => router.back()} hitSlop={12} style={{ paddingHorizontal: 6 }}>
-              <Text style={{ fontSize: 22, color: subColor }}>←</Text>
-            </Pressable>
-          ),
-        }}
-      />
-
+    <View style={styles.flex}>
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#208AEF" />
@@ -214,12 +199,12 @@ export default function RecordingsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
+  flex: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 8 },
   emptyEmoji: { fontSize: 40, marginBottom: 4 },
   emptyTitle: { fontSize: 18, fontWeight: '700' },

@@ -1,6 +1,6 @@
 import { Directory, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
-import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   FlatList,
@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Bookshelf from '../components/Bookshelf';
 import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
+import RecordingsList from '../components/RecordingsList';
 import SwipeableRow from '../components/SwipeableRow';
 import TactileButton from '../components/TactileButton';
 import {
@@ -60,17 +61,21 @@ export default function LibraryScreen() {
   const backgroundColor = isDark ? '#000' : '#fff';
   const cardBackground = isDark ? '#1c1c1e' : '#f4f4f6';
   const badgeBackground = isDark ? '#2c2c2e' : '#e6e6ea';
+  // Header tab pair (My Library / My Recordings) — same outline treatment as
+  // the language-choice buttons on Create a Story, just sized for the header.
+  const tabBorderColor = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)';
 
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [readinessByBook, setReadinessByBook] = useState<Map<string, ReadinessReport>>(new Map());
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<BookSummary | null>(null);
   const [missingFor, setMissingFor] = useState<{ title: string; warnings: ReadinessWarning[] } | null>(null);
-  // Deep-linked from the home screen's My Library star, which jumps straight
-  // into the Favorites view — only used as the INITIAL value (see useState),
-  // the in-Library header star still freely toggles it from there afterward.
-  const params = useLocalSearchParams<{ favorites?: string }>();
-  const [favoritesOnly, setFavoritesOnly] = useState(params.favorites === '1');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // My Library / My Recordings — the two header tabs replace what used to be
+  // a separate /recordings route; recordings aren't a thing outside the
+  // library they're reused across, so a tab (not a whole new screen) is all
+  // the separation this needs.
+  const [viewMode, setViewMode] = useState<'books' | 'recordings'>('books');
   const sheetBackground = isDark ? '#1c1c1e' : '#fff';
 
   const favoriteCount = books.filter((b) => b.isFavorite).length;
@@ -176,27 +181,50 @@ export default function LibraryScreen() {
       <Stack.Screen
         options={{
           headerShown: true,
-          title: favoritesOnly ? 'Favorites' : 'My Library',
-          headerRight: () => (
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Pressable onPress={() => router.push('/recordings')} hitSlop={12} style={{ paddingHorizontal: 6 }}>
-                <Text style={{ fontSize: 20, color: subColor }}>🎙️</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setFavoritesOnly((v) => !v)}
-                hitSlop={12}
-                style={{ paddingHorizontal: 6 }}
+          headerTitleAlign: 'left',
+          headerTitle: () => (
+            <View style={styles.tabRow}>
+              <TactileButton
+                style={[
+                  styles.tabBtn,
+                  viewMode === 'books'
+                    ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
+                    : { borderColor: tabBorderColor },
+                ]}
+                onPress={() => setViewMode('books')}
               >
-                <Text style={{ fontSize: 22, color: favoritesOnly ? '#f5b301' : subColor }}>
-                  {favoritesOnly ? '★' : '☆'}
+                <Text style={[styles.tabLabel, { color: viewMode === 'books' ? '#208AEF' : subColor }]}>
+                  My Library
                 </Text>
-              </Pressable>
+                {viewMode === 'books' && (
+                  <Pressable hitSlop={8} onPress={() => setFavoritesOnly((v) => !v)} style={styles.tabStar}>
+                    <Text style={{ fontSize: 14, color: favoritesOnly ? '#f5b301' : subColor }}>
+                      {favoritesOnly ? '★' : '☆'}
+                    </Text>
+                  </Pressable>
+                )}
+              </TactileButton>
+              <TactileButton
+                style={[
+                  styles.tabBtn,
+                  viewMode === 'recordings'
+                    ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
+                    : { borderColor: tabBorderColor },
+                ]}
+                onPress={() => setViewMode('recordings')}
+              >
+                <Text style={[styles.tabLabel, { color: viewMode === 'recordings' ? '#208AEF' : subColor }]}>
+                  My Recordings
+                </Text>
+              </TactileButton>
             </View>
           ),
         }}
       />
 
-      {books.length === 0 ? (
+      {viewMode === 'recordings' ? (
+        <RecordingsList />
+      ) : books.length === 0 ? (
         <View style={styles.empty}>
           <Text style={[styles.emptyTitle, { color: textColor }]}>Your library is empty</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
@@ -388,6 +416,19 @@ export default function LibraryScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
+
+  tabRow: { flexDirection: 'row', gap: 8 },
+  tabBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    gap: 6,
+  },
+  tabLabel: { fontSize: 13, fontWeight: '600' },
+  tabStar: { padding: 2, marginLeft: -2 },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
   emptyTitle: { fontSize: 20, fontWeight: '700' },
