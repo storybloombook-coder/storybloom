@@ -263,9 +263,9 @@ export default function PageEditorScreen() {
   // toggle in the ambient sheet. Ambient loops with no natural end, so without
   // this there'd be no way to stop it.
   const [ambientPlaying, setAmbientPlaying] = useState(false);
-  // Momentary — flips ON only for the moment applyAmbientToAll's copy is
-  // running, not a persisted setting. See its own comment.
-  const [applyingAmbientToAll, setApplyingAmbientToAll] = useState(false);
+  // Sticks ON once applyAmbientToAll fires — not a persisted DB setting,
+  // just this switch's own visual state. See its own comment.
+  const [ambientAppliedToAll, setAmbientAppliedToAll] = useState(false);
   const ambientPreviewStopRef = useRef<(() => void) | null>(null);
   const recordingPreviewStopRef = useRef<(() => void) | null>(null);
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
@@ -552,12 +552,11 @@ export default function PageEditorScreen() {
 
   async function applyAmbientToAll() {
     if (!page?.ambientSoundId) return;
-    // Not a persistent setting — this is a one-time copy to every page, same
-    // as before. The switch just flips ON for the moment the copy is running
-    // (a physical "did something just happen" confirmation) rather than a
-    // button whose icon/label swaps; setAmbientDetailOpen(false) below closes
-    // the sheet right after, so it's never left stuck in the ON position.
-    setApplyingAmbientToAll(true);
+    // Not a persistent DB setting — this is a one-time copy to every page.
+    // But the switch itself sticks in the ON position once it's fired (no
+    // popup, no closing the sheet) as the lasting confirmation that yes,
+    // this ran.
+    setAmbientAppliedToAll(true);
     stopAmbientPreview();
     await applyAmbientToAllPages(page.bookId, {
       soundId: page.ambientSoundId,
@@ -566,14 +565,7 @@ export default function PageEditorScreen() {
       fadeInMs: page.ambientFadeInMs ?? null,
       fadeOutMs: page.ambientFadeOutMs ?? null,
     });
-    setAmbientDetailOpen(false);
     await reload();
-    setApplyingAmbientToAll(false);
-    setInfoModal({
-      emoji: '🎵',
-      title: 'Applied to every page',
-      message: 'This ambient now plays on every page of the book.',
-    });
   }
 
   function stopAmbientPreview() {
@@ -1371,7 +1363,18 @@ export default function PageEditorScreen() {
                   <View style={[styles.wordGridTallButton, styles.softAmber]}>
                     <Text style={styles.wordGridIcon}>📖</Text>
                     <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Apply to all pages</Text>
-                    <LightSwitch on={applyingAmbientToAll} onToggle={applyAmbientToAll} onColor="#e8a33d" />
+                    <LightSwitch
+                      on={ambientAppliedToAll}
+                      onToggle={() => {
+                        // Flipping OFF is just resetting this switch's own
+                        // display — there's nothing to "undo" (the copy
+                        // already landed on every page). Flipping ON is what
+                        // actually fires the copy.
+                        if (ambientAppliedToAll) setAmbientAppliedToAll(false);
+                        else applyAmbientToAll();
+                      }}
+                      onColor="#e8a33d"
+                    />
                   </View>
                   <View style={{ gap: 14 }}>
                     {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
@@ -1386,10 +1389,12 @@ export default function PageEditorScreen() {
                         </TactileButton>
                       </View>
                       <View style={styles.wordGridCell}>
-                        <View style={[styles.wordGridButton, styles.softBlue]}>
-                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>Play ambient</Text>
-                          <LightSwitch on={ambientPlaying} onToggle={playAmbient} onColor="#208AEF" />
-                        </View>
+                        <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
+                          <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
+                            {ambientPlaying ? 'Stop' : 'Play ambient'}
+                          </Text>
+                        </TactileButton>
                       </View>
                     </View>
                     <View style={styles.wordGridRow}>
@@ -1486,8 +1491,15 @@ export default function PageEditorScreen() {
                     doesn't get misread as the start of a drag. */}
                 <View style={styles.waveformRow}>
                   <View style={styles.waveformSideCol}>
-                    <LightSwitch on={previewPlayhead !== null} onToggle={playRecordingPreview} />
-                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>preview</Text>
+                    <TactileButton style={styles.waveformSideButton} onPress={playRecordingPreview}>
+                      {/* The ▶ glyph's visual mass sits left of its own box in most fonts — nudge right to look centered. */}
+                      <Text style={[styles.waveformSideButtonIcon, { color: '#fff', marginLeft: previewPlayhead !== null ? 0 : 2 }]}>
+                        {previewPlayhead !== null ? '⏹' : '▶'}
+                      </Text>
+                    </TactileButton>
+                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>
+                      {previewPlayhead !== null ? 'stop' : 'play'}
+                    </Text>
                   </View>
 
                   <View style={[styles.waveform, { flex: 1 }]} onLayout={onWaveformLayout}>
