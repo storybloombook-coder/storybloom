@@ -174,15 +174,20 @@ export default function LibraryScreen() {
           headerShown: true,
           title: favoritesOnly ? 'Favorites' : 'My Library',
           headerRight: () => (
-            <Pressable
-              onPress={() => setFavoritesOnly((v) => !v)}
-              hitSlop={12}
-              style={{ paddingHorizontal: 6 }}
-            >
-              <Text style={{ fontSize: 22, color: favoritesOnly ? '#f5b301' : subColor }}>
-                {favoritesOnly ? '★' : '☆'}
-              </Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Pressable onPress={() => router.push('/recordings')} hitSlop={12} style={{ paddingHorizontal: 6 }}>
+                <Text style={{ fontSize: 20, color: subColor }}>🎙️</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setFavoritesOnly((v) => !v)}
+                hitSlop={12}
+                style={{ paddingHorizontal: 6 }}
+              >
+                <Text style={{ fontSize: 22, color: favoritesOnly ? '#f5b301' : subColor }}>
+                  {favoritesOnly ? '★' : '☆'}
+                </Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
