@@ -10,6 +10,65 @@ session (or a fresh PC) should read._
 
 ---
 
+## This session (2026-07-16) — sound fixes + an offline-testing preview build
+
+- **Ambient now loops until the page turns** — a trimmed CUSTOM ambient
+  recording used to play its trim range once and go silent (library ambient
+  already looped correctly). Added `playRangeLooping` in
+  `lib/audio/playRange.ts`, used by both the Reader and the editor's ambient
+  preview.
+- **"Apply to all pages"** — new action in the ambient sheet
+  (`db.applyAmbientToAllPages`) sets the current page's ambient (sound + trim/
+  fade) on every page of the book in one write. Styled as a tall 1x2
+  toggle-shaped pill positioned top-left of the existing 2x2 ambient action
+  grid (library/play/record/remove) — reads as its own book-wide action, not
+  a fifth grid member.
+- **Recording preview ▶ now toggles to a real stop control** — tapping it
+  while playing stops playback (icon flips to ⏹, caption to "stop"); it used
+  to only ever fire, with no way to stop a preview early.
+- **Named, reusable recording library ("My recordings")** — recordings were
+  already saved permanently to `documents/recordings/` per-cue, but had no
+  name/index, so a good take couldn't be found again. Added a `recordings`
+  table (schema v7) + `Recording` type + db CRUD (`createRecording`,
+  `listRecordings`, `renameRecording`, `deleteRecording`), a name field when
+  saving a new recording, and a "My recordings" section at the top of the
+  sound picker (preview + tap-to-reuse) so any past recording can be applied
+  to a different word/page later.
+
+### ⚠️ Diagnosed but only PARTLY explained: library sounds are silent when the
+### phone is offline, in the DEV client
+This is expected dev-client behavior, not a code bug — **but it hasn't been
+verified fixed** (the preview build below finished after this session ended;
+nobody has confirmed sounds actually play offline on it yet). In a dev build,
+every bundled asset (including all `require()`'d sound files) is served by
+Metro over the network at runtime, not packaged into the APK — so unplugging
+from the dev PC / losing wifi means cues still visually "fire" but produce no
+audio, while a parent's own recordings (real `file://` uris already on the
+device) keep working. A **preview/production** EAS build (`expo export`)
+embeds the JS bundle + all assets into the APK instead, so this should not
+happen there. **First thing to check next session:** install the preview APK
+below, go fully offline, and confirm library sounds play.
+
+- **Preview build:** queued at 21:09, finished ~07:57 (unusually long free-tier
+  queue — ~10h45m, most of it sitting in `IN_QUEUE`; not a build failure).
+  Commit: `4245a07b`-triggered, built from `dc76bac` (BEFORE the four sound
+  fixes above — those landed in `0b3170f`, after this build was already
+  queued). So this APK can verify the offline-playback question but does NOT
+  have the ambient-loop/apply-to-all/recording-library UI yet; expect a
+  follow-up preview build once those are confirmed working.
+- **Direct APK download:**
+  https://expo.dev/artifacts/eas/ibpmHsKwATOrjEXL1USFh1FqKA0toI4Hcn5867ngE1M.apk
+  (expires ~2 weeks after build; rebuild via `npx eas-cli build --platform
+  android --profile preview` if it 404s)
+- Install the same way as a dev-client APK: `adb install -r <file>.apk`, or
+  open the URL/QR on the phone directly.
+- This is a **preview** build (`eas.json`'s `preview` profile — internal
+  distribution APK, not a dev client) — it does NOT connect to Metro; it's a
+  fully standalone app, which is exactly what's needed to test "does it work
+  with no PC around."
+
+---
+
 ## Where the app is right now
 
 The full loop works end to end, **fully on-device** (no cloud, no keys):
@@ -58,11 +117,17 @@ The full loop works end to end, **fully on-device** (no cloud, no keys):
 - **Page editor** — tap a word to attach/remove a sound; correct OCR text
   (keyboard no longer covers the input); "Re-scan area" (crop → re-OCR just
   that region); record/trim/fade custom sounds per word; **ambient
-  play/stop toggle** (used to loop forever with no way to stop it — fixed).
-- **Sound picker** — search bar (by id or trigger word), a "Suggested"
-  section ranked by relevance to the tapped word, the 114 effects grouped
-  into a collapsible category tree, and a **play/stop preview button on
-  every row** so you can hear a sound before assigning it.
+  play/stop toggle** (used to loop forever with no way to stop it — fixed);
+  ambient now **loops its trim range** instead of playing once (both in the
+  Reader and this editor's preview); an **"Apply to all pages"** toggle sets
+  the current ambient on the whole book in one tap; the recording-preview
+  button is now a real play/stop toggle; recordings are **named and saved to
+  a reusable "My recordings" library**, not just the one cue they were made for.
+- **Sound picker** — a **"My recordings" section** at the top (your own named
+  recordings, preview + reuse), search bar (by id or trigger word), a
+  "Suggested" section ranked by relevance to the tapped word, the 114 effects
+  grouped into a collapsible category tree, and a **play/stop preview button
+  on every row** so you can hear a sound before assigning it.
 - **Reader (`/read/[id]`)** — the payoff screen. Ambient bed **fades in and
   loops automatically** per page; **tap a highlighted word to fire its
   sound**; Next/Back page turns; end screen offers Read again or Done (the
