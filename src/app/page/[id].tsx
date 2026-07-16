@@ -1353,50 +1353,57 @@ export default function PageEditorScreen() {
             </Text>
             {page.ambientSoundId ? (
               <>
-                {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
-                <View style={styles.wordGridRow}>
-                  <View style={styles.wordGridCell}>
-                    <TactileButton
-                      style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                      onPress={openAmbientLibraryPicker}
-                    >
-                      <Text style={styles.wordGridIcon}>🎵</Text>
-                      <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
-                    </TactileButton>
-                  </View>
-                  <View style={styles.wordGridCell}>
-                    <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
-                      <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
-                      <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                        {ambientPlaying ? 'Stop' : 'Play ambient'}
-                      </Text>
-                    </TactileButton>
+                {/* Apply-to-all toggle (1 col x 2 rows) sits top-left of the
+                    2x2 action grid — a book-wide action, visually set apart
+                    from the per-ambient ones (library/play/record/remove). */}
+                <View style={styles.wordGridOuterRow}>
+                  <TactileButton
+                    style={[styles.wordGridTallButton, styles.softAmber]}
+                    onPress={applyAmbientToAll}
+                  >
+                    <Text style={styles.wordGridIcon}>📖</Text>
+                    <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Apply to all pages</Text>
+                  </TactileButton>
+                  <View style={{ gap: 14 }}>
+                    {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
+                    <View style={styles.wordGridRow}>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                          onPress={openAmbientLibraryPicker}
+                        >
+                          <Text style={styles.wordGridIcon}>🎵</Text>
+                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
+                        </TactileButton>
+                      </View>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
+                          <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
+                            {ambientPlaying ? 'Stop' : 'Play ambient'}
+                          </Text>
+                        </TactileButton>
+                      </View>
+                    </View>
+                    <View style={styles.wordGridRow}>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                          onPress={openAmbientRecorder}
+                        >
+                          <Text style={styles.wordGridIcon}>🎤</Text>
+                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                        </TactileButton>
+                      </View>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton style={[styles.wordGridButton, styles.destructiveButton]} onPress={removeAmbient}>
+                          <Text style={styles.wordGridIcon}>🗑️</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
+                        </TactileButton>
+                      </View>
+                    </View>
                   </View>
                 </View>
-                <View style={styles.wordGridRow}>
-                  <View style={styles.wordGridCell}>
-                    <TactileButton
-                      style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                      onPress={openAmbientRecorder}
-                    >
-                      <Text style={styles.wordGridIcon}>🎤</Text>
-                      <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
-                    </TactileButton>
-                  </View>
-                  <View style={styles.wordGridCell}>
-                    <TactileButton style={[styles.wordGridButton, styles.destructiveButton]} onPress={removeAmbient}>
-                      <Text style={styles.wordGridIcon}>🗑️</Text>
-                      <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
-                    </TactileButton>
-                  </View>
-                </View>
-                <TactileButton
-                  style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground, width: '100%', flexDirection: 'row', gap: 8 }]}
-                  onPress={applyAmbientToAll}
-                >
-                  <Text style={styles.wordGridIcon}>📖</Text>
-                  <Text style={[styles.wordGridLabel, { color: textColor }]}>Apply to all pages</Text>
-                </TactileButton>
               </>
             ) : (
               <View style={styles.wordGridRow}>
@@ -1475,7 +1482,7 @@ export default function PageEditorScreen() {
                     <TactileButton style={styles.waveformSideButton} onPress={playRecordingPreview}>
                       {/* The ▶ glyph's visual mass sits left of its own box in most fonts — nudge right to look centered. */}
                       <Text style={[styles.waveformSideButtonIcon, { color: '#fff', marginLeft: previewPlayhead !== null ? 0 : 2 }]}>
-                        {previewPlayhead !== null ? '⏸' : '▶'}
+                        {previewPlayhead !== null ? '⏹' : '▶'}
                       </Text>
                     </TactileButton>
                     <Text style={[styles.waveformSideCaption, { color: subColor }]}>
@@ -1901,8 +1908,11 @@ const styles = StyleSheet.create({
   destructiveButton: { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' },
   softBlue: { backgroundColor: 'rgba(32,138,239,0.15)', borderWidth: 2, borderColor: '#208AEF' },
   softGreen: { backgroundColor: 'rgba(47,179,68,0.15)', borderWidth: 2, borderColor: '#2fb344' },
+  softAmber: { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 2, borderColor: '#e8a33d' },
 
   wordGridRow: { flexDirection: 'row', gap: 14, justifyContent: 'center' },
+  // Outer row pairs the tall apply-to-all toggle with the 2x2 grid beside it.
+  wordGridOuterRow: { flexDirection: 'row', gap: 14, justifyContent: 'center' },
   wordGridCell: { width: 84 },
   wordGridButton: {
     width: 84,
@@ -1912,6 +1922,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 8,
     gap: 4,
+  },
+  // 1 grid-cell wide x 2 grid-cells tall (matches the 2x2 grid's full height:
+  // two 84-tall buttons + the 14 gap between their rows) — a toggle-shaped
+  // pill (rounder than the grid buttons) so it visually reads as its own
+  // book-wide action, not a fifth member of the per-ambient action grid.
+  wordGridTallButton: {
+    width: 84,
+    height: 182,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    gap: 6,
   },
   wordGridIcon: { fontSize: 20 },
   wordGridLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
