@@ -31,6 +31,7 @@ import {
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import LightSwitch from '../../components/LightSwitch';
 import PhotoEditor from '../../components/PhotoEditor';
 import TactileButton from '../../components/TactileButton';
 import {
@@ -262,6 +263,9 @@ export default function PageEditorScreen() {
   // toggle in the ambient sheet. Ambient loops with no natural end, so without
   // this there'd be no way to stop it.
   const [ambientPlaying, setAmbientPlaying] = useState(false);
+  // Momentary — flips ON only for the moment applyAmbientToAll's copy is
+  // running, not a persisted setting. See its own comment.
+  const [applyingAmbientToAll, setApplyingAmbientToAll] = useState(false);
   const ambientPreviewStopRef = useRef<(() => void) | null>(null);
   const recordingPreviewStopRef = useRef<(() => void) | null>(null);
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
@@ -548,6 +552,12 @@ export default function PageEditorScreen() {
 
   async function applyAmbientToAll() {
     if (!page?.ambientSoundId) return;
+    // Not a persistent setting — this is a one-time copy to every page, same
+    // as before. The switch just flips ON for the moment the copy is running
+    // (a physical "did something just happen" confirmation) rather than a
+    // button whose icon/label swaps; setAmbientDetailOpen(false) below closes
+    // the sheet right after, so it's never left stuck in the ON position.
+    setApplyingAmbientToAll(true);
     stopAmbientPreview();
     await applyAmbientToAllPages(page.bookId, {
       soundId: page.ambientSoundId,
@@ -558,6 +568,7 @@ export default function PageEditorScreen() {
     });
     setAmbientDetailOpen(false);
     await reload();
+    setApplyingAmbientToAll(false);
     setInfoModal({
       emoji: '🎵',
       title: 'Applied to every page',
@@ -1357,13 +1368,11 @@ export default function PageEditorScreen() {
                     2x2 action grid — a book-wide action, visually set apart
                     from the per-ambient ones (library/play/record/remove). */}
                 <View style={styles.wordGridOuterRow}>
-                  <TactileButton
-                    style={[styles.wordGridTallButton, styles.softAmber]}
-                    onPress={applyAmbientToAll}
-                  >
+                  <View style={[styles.wordGridTallButton, styles.softAmber]}>
                     <Text style={styles.wordGridIcon}>📖</Text>
                     <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Apply to all pages</Text>
-                  </TactileButton>
+                    <LightSwitch on={applyingAmbientToAll} onToggle={applyAmbientToAll} onColor="#e8a33d" />
+                  </View>
                   <View style={{ gap: 14 }}>
                     {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
                     <View style={styles.wordGridRow}>
@@ -1377,12 +1386,10 @@ export default function PageEditorScreen() {
                         </TactileButton>
                       </View>
                       <View style={styles.wordGridCell}>
-                        <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
-                          <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
-                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                            {ambientPlaying ? 'Stop' : 'Play ambient'}
-                          </Text>
-                        </TactileButton>
+                        <View style={[styles.wordGridButton, styles.softBlue]}>
+                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>Play ambient</Text>
+                          <LightSwitch on={ambientPlaying} onToggle={playAmbient} onColor="#208AEF" />
+                        </View>
                       </View>
                     </View>
                     <View style={styles.wordGridRow}>
@@ -1479,15 +1486,8 @@ export default function PageEditorScreen() {
                     doesn't get misread as the start of a drag. */}
                 <View style={styles.waveformRow}>
                   <View style={styles.waveformSideCol}>
-                    <TactileButton style={styles.waveformSideButton} onPress={playRecordingPreview}>
-                      {/* The ▶ glyph's visual mass sits left of its own box in most fonts — nudge right to look centered. */}
-                      <Text style={[styles.waveformSideButtonIcon, { color: '#fff', marginLeft: previewPlayhead !== null ? 0 : 2 }]}>
-                        {previewPlayhead !== null ? '⏹' : '▶'}
-                      </Text>
-                    </TactileButton>
-                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>
-                      {previewPlayhead !== null ? 'stop' : 'play'}
-                    </Text>
+                    <LightSwitch on={previewPlayhead !== null} onToggle={playRecordingPreview} />
+                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>preview</Text>
                   </View>
 
                   <View style={[styles.waveform, { flex: 1 }]} onLayout={onWaveformLayout}>
