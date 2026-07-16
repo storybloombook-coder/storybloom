@@ -34,10 +34,17 @@ export function createVoskRecognizer(): SpeechRecognizer {
       await loadModel(MODEL_PATHS[lang]);
     },
 
-    async start({ onPartial, onResult: onResultCb }) {
+    async start({ onPartial, onResult: onResultCb, vocabulary }) {
       partialSub = onPartialResult((text: string) => onPartial(text));
       resultSub = onResult((text: string) => onResultCb(text));
-      await voskStart();
+      // Grammar-constrain the decoder to this book's own words. Unrestricted,
+      // the small model is free to guess ANY Russian word for a given sound —
+      // closing the search space down to words that can actually appear on
+      // the page removes most of that guessing room. "[unk]" keeps a genuine
+      // off-script word (a child interrupting, a stumble) from being forced
+      // into the closest in-vocabulary word instead of just being discarded.
+      const grammar = vocabulary && vocabulary.length > 0 ? [...vocabulary, "[unk]"] : undefined;
+      await voskStart(grammar ? { grammar } : undefined);
     },
 
     async stop() {

@@ -70,6 +70,12 @@ const ALIGN_LOOKAHEAD = 60;
 // words actually move the cursor.
 const ALIGN_MIN_WORD_LENGTH = 3;
 
+/** Unique lowercase words (Unicode-letter runs) found in a piece of text. */
+function extractWords(text: string): string[] {
+  const matches = text.toLowerCase().match(/\p{L}+/gu);
+  return matches ? Array.from(new Set(matches)) : [];
+}
+
 function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
   switch (status) {
     case 'listening':
@@ -149,6 +155,10 @@ export default function ReaderScreen() {
   const pageRef = useRef<Page | null>(null);
   const cuesRef = useRef<Cue[]>([]);
   const langRef = useRef<SpeechLang>('en');
+  // The whole book's own vocabulary (every story page, not just the current
+  // one) — built once per book/language and handed to the recognizer at
+  // start() so listening doesn't need to gap/restart on every page turn.
+  const vocabRef = useRef<string[]>([]);
   const handleTextRef = useRef<(text: string, isFinal: boolean) => void>(() => {});
   const readCursorRef = useRef(0);
   const firedCueIdsRef = useRef<Set<string>>(new Set());
@@ -296,6 +306,15 @@ export default function ReaderScreen() {
     langRef.current = (book?.language as SpeechLang) ?? 'en';
   }, [book]);
 
+  useEffect(() => {
+    const words = new Set<string>();
+    for (const page of storyPages) {
+      for (const w of extractWords(page.ocrText)) words.add(w);
+    }
+    for (const w of extractWords(NEXT_PAGE_PHRASES[langRef.current])) words.add(w);
+    vocabRef.current = Array.from(words);
+  }, [storyPages, book]);
+
   // Re-pointed every render (cheap — just a ref write) so the ONE persistent
   // onResult/onPartialResult subscriptions below always call into fresh
   // state/closures (goNext, fireCue) without needing to tear down and
@@ -340,10 +359,21 @@ export default function ReaderScreen() {
           const idx = findWordFrom(ocrLower, word, from);
           if (idx < 0 || idx > from + ALIGN_LOOKAHEAD) continue; // not found nearby — skip, don't jump wildly
           const newCursor = idx + word.length;
+          // If this same word occurs AGAIN shortly after, we can't be sure
+          // which occurrence was actually just heard — a single recognized
+          // word is ambiguous evidence either way. Firing every queued cue
+          // all the way back to the old cursor in that case was the "two
+          // identical words nearby -> a burst of every sound in between"
+          // bug: instead, only fire the cue(s) sitting AT this occurrence
+          // itself, and let the earlier ones fire (as normal) if their own
+          // trigger words get recognized directly.
+          const nextSame = findWordFrom(ocrLower, word, newCursor);
+          const ambiguous = nextSame >= 0 && nextSame <= from + ALIGN_LOOKAHEAD;
+          const fireFrom = ambiguous ? idx : from;
           for (const cue of cuesRef.current) {
             if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
             if (firedCueIdsRef.current.has(cue.id)) continue;
-            if (cue.charStart >= from && cue.charStart < newCursor) {
+            if (cue.charStart >= fireFrom && cue.charStart < newCursor) {
               firedCueIdsRef.current.add(cue.id);
               const tokenIndex = tokens.findIndex(
                 (t) => !t.isSpace && cue.charStart! >= t.start && cue.charStart! < t.end
@@ -381,6 +411,7 @@ export default function ReaderScreen() {
         lang: langRef.current,
         onPartial: (text) => handleTextRef.current(text, false),
         onResult: (text) => handleTextRef.current(text, true),
+        vocabulary: vocabRef.current,
       });
       setMicStatus('listening');
     } catch (e: any) {
@@ -411,6 +442,7 @@ export default function ReaderScreen() {
           lang: langRef.current,
           onPartial: (text) => handleTextRef.current(text, false),
           onResult: (text) => handleTextRef.current(text, true),
+          vocabulary: vocabRef.current,
         });
         setMicStatus('listening');
       } catch (e: any) {

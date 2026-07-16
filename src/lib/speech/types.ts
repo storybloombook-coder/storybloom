@@ -21,6 +21,12 @@ export interface SpeechRecognizer {
     lang: SpeechLang;
     onPartial: (text: string) => void;
     onResult: (text: string) => void;
+    /** Words the recognizer should restrict itself to (plus "[unk]" for
+     *  anything else) — passing the known page text as a closed vocabulary
+     *  cuts recognition errors sharply versus open-domain decoding,
+     *  especially for the small Russian model. Implementations that don't
+     *  support a constrained grammar may ignore this. */
+    vocabulary?: string[];
   }): Promise<void>;
   /** Stop the current recognition session. */
   stop(): Promise<void>;
