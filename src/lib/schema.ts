@@ -9,7 +9,7 @@
 //   const db = await SQLite.openDatabaseAsync("storybloom.db");
 //   await initDatabase(db);
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 // Notes on design:
 // - Arrays (ambientCandidates, candidateSoundIds) are stored as JSON strings.
@@ -93,17 +93,22 @@ CREATE TABLE IF NOT EXISTS meta (
 -- A parent's named, reusable recorded sounds (independent of any one cue), so a
 -- recording can be found and re-applied to other words/pages later. The file
 -- itself lives at file_uri under documents/recordings/; the trim/fade envelope
--- travels with it so re-using it plays back the same way.
+-- travels with it so re-using it plays back the same way. origin_* columns are
+-- a snapshot of where it was first recorded for (see the Recording type doc).
 CREATE TABLE IF NOT EXISTS recordings (
-  id           TEXT PRIMARY KEY NOT NULL,
-  name         TEXT NOT NULL,
-  file_uri     TEXT NOT NULL,
-  duration_ms  INTEGER,
-  start_ms     INTEGER,
-  end_ms       INTEGER,
-  fade_in_ms   INTEGER,
-  fade_out_ms  INTEGER,
-  created_at   INTEGER NOT NULL
+  id                 TEXT PRIMARY KEY NOT NULL,
+  name               TEXT NOT NULL,
+  file_uri           TEXT NOT NULL,
+  duration_ms        INTEGER,
+  start_ms           INTEGER,
+  end_ms             INTEGER,
+  fade_in_ms         INTEGER,
+  fade_out_ms        INTEGER,
+  created_at         INTEGER NOT NULL,
+  origin_book_id     TEXT,
+  origin_book_title  TEXT,
+  origin_page_number INTEGER,
+  origin_label       TEXT
 );
 `;
 
@@ -160,6 +165,17 @@ async function migrateSchema(db: any): Promise<void> {
     if (!pageColNames.has(col)) {
       await db.execAsync(`ALTER TABLE pages ADD COLUMN ${col} INTEGER`);
     }
+  }
+
+  const recordingCols: Array<{ name: string }> = await db.getAllAsync('PRAGMA table_info(recordings)');
+  const recordingColNames = new Set(recordingCols.map((c) => c.name));
+  for (const col of ['origin_book_id', 'origin_book_title', 'origin_label']) {
+    if (!recordingColNames.has(col)) {
+      await db.execAsync(`ALTER TABLE recordings ADD COLUMN ${col} TEXT`);
+    }
+  }
+  if (!recordingColNames.has('origin_page_number')) {
+    await db.execAsync('ALTER TABLE recordings ADD COLUMN origin_page_number INTEGER');
   }
 }
 

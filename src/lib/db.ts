@@ -544,6 +544,10 @@ type RecordingRow = {
   fade_in_ms: number | null;
   fade_out_ms: number | null;
   created_at: number;
+  origin_book_id: string | null;
+  origin_book_title: string | null;
+  origin_page_number: number | null;
+  origin_label: string | null;
 };
 
 function rowToRecording(r: RecordingRow): Recording {
@@ -557,6 +561,10 @@ function rowToRecording(r: RecordingRow): Recording {
     fadeInMs: r.fade_in_ms,
     fadeOutMs: r.fade_out_ms,
     createdAt: r.created_at,
+    originBookId: r.origin_book_id,
+    originBookTitle: r.origin_book_title,
+    originPageNumber: r.origin_page_number,
+    originLabel: r.origin_label,
   };
 }
 
@@ -568,13 +576,41 @@ export async function createRecording(params: {
   endMs: number | null;
   fadeInMs: number | null;
   fadeOutMs: number | null;
+  originBookId?: string | null;
+  originBookTitle?: string | null;
+  originPageNumber?: number | null;
+  originLabel?: string | null;
 }): Promise<Recording> {
   const db = await getDatabase();
-  const rec: Recording = { id: generateId(), createdAt: Date.now(), ...params };
+  const rec: Recording = {
+    id: generateId(),
+    createdAt: Date.now(),
+    originBookId: params.originBookId ?? null,
+    originBookTitle: params.originBookTitle ?? null,
+    originPageNumber: params.originPageNumber ?? null,
+    originLabel: params.originLabel ?? null,
+    ...params,
+  };
   await db.runAsync(
-    `INSERT INTO recordings (id, name, file_uri, duration_ms, start_ms, end_ms, fade_in_ms, fade_out_ms, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [rec.id, rec.name, rec.fileUri, rec.durationMs, rec.startMs, rec.endMs, rec.fadeInMs, rec.fadeOutMs, rec.createdAt]
+    `INSERT INTO recordings
+       (id, name, file_uri, duration_ms, start_ms, end_ms, fade_in_ms, fade_out_ms, created_at,
+        origin_book_id, origin_book_title, origin_page_number, origin_label)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      rec.id,
+      rec.name,
+      rec.fileUri,
+      rec.durationMs,
+      rec.startMs,
+      rec.endMs,
+      rec.fadeInMs,
+      rec.fadeOutMs,
+      rec.createdAt,
+      rec.originBookId,
+      rec.originBookTitle,
+      rec.originPageNumber,
+      rec.originLabel,
+    ]
   );
   return rec;
 }

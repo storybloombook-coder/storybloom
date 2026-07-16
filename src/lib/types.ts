@@ -50,7 +50,14 @@ export interface Book {
 
 /** A parent's named, reusable recorded sound — browsable in the sound picker
  *  and re-applicable to any word/page, independent of the cue it was first made
- *  for. `fileUri` is a permanent file under documents/recordings/. */
+ *  for. `fileUri` is a permanent file under documents/recordings/.
+ *
+ *  The origin* fields are where it was FIRST recorded for — shown as context
+ *  in the "My recordings" list so a name isn't the only thing to go on (e.g.
+ *  "from 'Cat Book' · page 3 · 'meow'"). Snapshotted at record time (not a
+ *  live foreign key) so the context still makes sense even if that book is
+ *  later renamed or deleted; all null for recordings made before this
+ *  existed. Purely informational — never used to resolve playback. */
 export interface Recording {
   id: string;
   name: string;
@@ -61,6 +68,11 @@ export interface Recording {
   fadeInMs: number | null;
   fadeOutMs: number | null;
   createdAt: number;
+  originBookId: string | null;
+  originBookTitle: string | null;
+  originPageNumber: number | null;
+  /** The trigger word it was recorded for, or "Ambient" for a page ambient. */
+  originLabel: string | null;
 }
 
 export interface Page {

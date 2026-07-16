@@ -767,11 +767,14 @@ export default function PageEditorScreen() {
       const fadeInMs = Math.round(fadeIn * 1000);
       const fadeOutMs = Math.round(fadeOut * 1000);
 
+      let originLabel: string;
       if (recordTarget === 'ambient') {
         await updatePageAmbient(page.id, { soundId, startMs, endMs, fadeInMs, fadeOutMs });
+        originLabel = 'Ambient';
       } else if ('cue' in recordTarget) {
         await updateCueSoundTrim(recordTarget.cue.id, { soundId, startMs, endMs, fadeInMs, fadeOutMs });
         if (recordTarget.cue.reviewState === 'removed') await setCueReviewState(recordTarget.cue.id, 'confirmed');
+        originLabel = recordTarget.cue.triggerText;
       } else {
         const word = recordTarget.token.text.toLowerCase();
         const created = await createCue({
@@ -791,10 +794,14 @@ export default function PageEditorScreen() {
           fadeOutMs,
         });
         await setCueReviewState(created.id, 'confirmed');
+        originLabel = word;
       }
 
       // Also file it in the reusable "My recordings" library so it can be found
-      // and re-applied to other words/pages later.
+      // and re-applied to other words/pages later — with a snapshot of where it
+      // was first recorded for, so it's not just hanging with a bare name (see
+      // the Recording type doc).
+      const originBook = await getBook(page.bookId);
       await createRecording({
         name: recordingName.trim() || `Recording ${new Date().toLocaleDateString()}`,
         fileUri: dest.uri,
@@ -803,6 +810,10 @@ export default function PageEditorScreen() {
         endMs,
         fadeInMs,
         fadeOutMs,
+        originBookId: page.bookId,
+        originBookTitle: originBook?.title ?? null,
+        originPageNumber: page.pageNumber,
+        originLabel,
       });
 
       setRecordTarget(null);
@@ -1024,9 +1035,21 @@ export default function PageEditorScreen() {
   };
 
   // A saved recording row — preview it, or tap the name to reuse it here.
+  // The origin line (book/page/word it was first recorded for) is the ONLY
+  // context besides the name — without it, a recording just "hangs" there
+  // once you've made more than a couple and can't remember which was which.
   const renderRecordingRow = (rec: Recording) => {
     const cid = `${CUSTOM_PREFIX}${rec.fileUri}`;
     const previewing = previewingId === cid;
+    const origin = rec.originBookTitle
+      ? [
+          `“${rec.originBookTitle}”`,
+          rec.originPageNumber != null ? `p.${rec.originPageNumber}` : null,
+          rec.originLabel ? (rec.originLabel === 'Ambient' ? 'Ambient' : `“${rec.originLabel}”`) : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : null;
     return (
       <View key={rec.id} style={styles.soundRow}>
         <Pressable hitSlop={8} style={styles.soundPreviewBtn} onPress={() => togglePreview(cid)}>
@@ -1034,6 +1057,11 @@ export default function PageEditorScreen() {
         </Pressable>
         <Pressable style={styles.soundRowLabel} onPress={() => chooseRecording(rec)}>
           <Text style={[styles.soundId, { color: textColor }]}>🎤 {rec.name}</Text>
+          {origin && (
+            <Text style={[styles.recordingOrigin, { color: subColor }]} numberOfLines={1}>
+              {origin}
+            </Text>
+          )}
         </Pressable>
       </View>
     );
@@ -1894,8 +1922,9 @@ const styles = StyleSheet.create({
   },
   soundPreviewBtn: { paddingVertical: 12, paddingHorizontal: 8 },
   soundPreviewIcon: { fontSize: 18 },
-  soundRowLabel: { flex: 1, paddingVertical: 12, paddingHorizontal: 2 },
+  soundRowLabel: { flex: 1, paddingVertical: 10, paddingHorizontal: 2, gap: 1 },
   soundId: { fontSize: 16 },
+  recordingOrigin: { fontSize: 12 },
   pickerSearchInput: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15, marginBottom: 8 },
   pickerSectionLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', marginTop: 8, marginBottom: 2 },
   pickerEmpty: { fontSize: 14, textAlign: 'center', paddingVertical: 24 },
