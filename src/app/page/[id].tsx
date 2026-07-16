@@ -1767,10 +1767,19 @@ export default function PageEditorScreen() {
             />
             <ScrollView style={{ maxHeight: 360 }}>
               {visibleRecordings.length > 0 && (
-                <>
-                  <Text style={[styles.pickerSectionLabel, { color: subColor }]}>My recordings</Text>
-                  {visibleRecordings.map(renderRecordingRow)}
-                </>
+                <View>
+                  <Pressable
+                    style={styles.categoryHeader}
+                    onPress={() => toggleCategory('My recordings')}
+                  >
+                    <Text style={[styles.categoryHeaderLabel, { color: textColor }]}>
+                      {pickerSearching || expandedCategories.has('My recordings') ? '▾' : '▸'} My recordings
+                    </Text>
+                    <Text style={[styles.categoryHeaderCount, { color: subColor }]}>{visibleRecordings.length}</Text>
+                  </Pressable>
+                  {(pickerSearching || expandedCategories.has('My recordings')) &&
+                    visibleRecordings.map(renderRecordingRow)}
+                </View>
               )}
               {pickerSuggested.length > 0 && (
                 <Text style={[styles.pickerSectionLabel, { color: subColor }]}>Suggested</Text>
