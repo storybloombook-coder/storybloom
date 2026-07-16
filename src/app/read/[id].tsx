@@ -54,8 +54,21 @@ function findWordFrom(hay: string, needle: string, from: number): number {
 
 // How far ahead of the current read position a recognized word is still
 // trusted to belong to — keeps a misheard/filler word from yanking the
-// cursor (and cue-firing) far down the page.
-const ALIGN_LOOKAHEAD = 180;
+// cursor (and cue-firing) far down the page. Shrunk from 180: that width made
+// sense when the cursor only ever advanced on Vosk's FINAL result (one big
+// batch of words after a pause, needing lots of headroom to catch up in one
+// jump) — now that partial results drive it too (see handleTextRef below),
+// each update covers much less new text, so a smaller, safer window suffices.
+const ALIGN_LOOKAHEAD = 60;
+// A short/common word (a, the, in, и, в...) matches too many places in a page
+// to align against reliably on its own — a single misheard blip recognized as
+// "the" could snap the cursor to some FAR-AWAY occurrence of "the" within
+// ALIGN_LOOKAHEAD, and every cue between the old and new cursor position
+// would then fire in one burst (this was the "duplicate word jumps to the
+// wrong spot and every queued sound plays at once" bug). Words this short or
+// shorter are skipped for alignment purposes — only longer, more distinctive
+// words actually move the cursor.
+const ALIGN_MIN_WORD_LENGTH = 3;
 
 function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
   switch (status) {
@@ -118,6 +131,16 @@ export default function ReaderScreen() {
   const ambientStopRef = useRef<(() => void) | null>(null);
   const cuePlayerRef = useRef<Player | null>(null);
   const cueStopRef = useRef<(() => void) | null>(null);
+  // Pre-created (but not yet playing) players for the CURRENT page's cues,
+  // keyed by cue id — see the pre-warm effect below. createAudioPlayer, plus
+  // playFull's own wait-for-duration poll, both take a real (if usually
+  // small) amount of time for a player loading fresh from disk; firing a cue
+  // used to always pay that cost at the exact moment it needed to sound
+  // instant. Pre-creating each page's cue players as soon as the page loads
+  // gives that load time to happen in the background well before they're
+  // needed, so by the time a cue actually fires, `fireCue` can often just
+  // grab an already-ready player instead of starting from scratch.
+  const cuePlayerCacheRef = useRef<Map<string, Player>>(new Map());
   const recognizerRef = useRef<ReturnType<typeof createVoskRecognizer> | null>(null);
   // Kept fresh every render (see the no-deps effect below) so the ONE
   // long-lived onResult subscription (registered once, kept running across
@@ -126,9 +149,15 @@ export default function ReaderScreen() {
   const pageRef = useRef<Page | null>(null);
   const cuesRef = useRef<Cue[]>([]);
   const langRef = useRef<SpeechLang>('en');
-  const handleResultRef = useRef<(text: string) => void>(() => {});
+  const handleTextRef = useRef<(text: string, isFinal: boolean) => void>(() => {});
   const readCursorRef = useRef(0);
   const firedCueIdsRef = useRef<Set<string>>(new Set());
+  // Guards against firing "next page" twice for the SAME utterance — Vosk
+  // sends partials continuously, then one final; if the phrase is caught by
+  // an early partial and again by the final (same words, same utterance), the
+  // second one must not advance a SECOND page. Reset after every final (the
+  // utterance boundary), ready for the next one.
+  const nextPageFiredRef = useRef(false);
 
   useEffect(() => {
     setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
@@ -230,7 +259,37 @@ export default function ReaderScreen() {
     cuesRef.current = page ? cuesByPage.get(page.id) ?? [] : [];
     readCursorRef.current = 0;
     firedCueIdsRef.current = new Set();
+    nextPageFiredRef.current = false;
     setReadCursor(0);
+  }, [index, storyPages, cuesByPage]);
+
+  // Pre-warm this page's cue players ahead of time (see cuePlayerCacheRef's
+  // own comment) — and free the PREVIOUS page's, which fireCue may not have
+  // consumed (a cue the reader skipped past without triggering).
+  useEffect(() => {
+    const cache = cuePlayerCacheRef.current;
+    for (const p of cache.values()) {
+      try {
+        p.remove();
+      } catch {}
+    }
+    cache.clear();
+    for (const cue of cuesRef.current) {
+      if (cue.reviewState === 'removed' || !cue.soundId) continue;
+      const source = resolveSoundSource(cue.soundId);
+      if (!source) continue;
+      try {
+        cache.set(cue.id, createAudioPlayer(source));
+      } catch {}
+    }
+    return () => {
+      for (const p of cache.values()) {
+        try {
+          p.remove();
+        } catch {}
+      }
+      cache.clear();
+    };
   }, [index, storyPages, cuesByPage]);
 
   useEffect(() => {
@@ -238,42 +297,67 @@ export default function ReaderScreen() {
   }, [book]);
 
   // Re-pointed every render (cheap — just a ref write) so the ONE persistent
-  // onResult subscription below always calls into fresh state/closures
-  // (goNext, fireCue) without needing to tear down and re-register the
-  // recognizer — which would gap the listening across every page turn.
+  // onResult/onPartialResult subscriptions below always call into fresh
+  // state/closures (goNext, fireCue) without needing to tear down and
+  // re-register the recognizer — which would gap the listening across every
+  // page turn. Shared by BOTH partial and final results (see startListening) —
+  // partials arrive continuously as you speak (near-instant), while a FINAL
+  // only arrives once Vosk decides the utterance ended (often 0.5-2s after
+  // the word was actually said). Waiting for finals alone was the dominant
+  // cause of the read-along highlight and cue sounds both lagging noticeably
+  // behind actual speech. Safe to run on the same (still-growing) utterance
+  // repeatedly: readCursorRef only ever advances forward, and a word already
+  // behind it simply won't be found again nearby, so a partial's words and
+  // the eventual final's (mostly-overlapping) words don't double-fire.
   useEffect(() => {
-    handleResultRef.current = (text: string) => {
+    handleTextRef.current = (text: string, isFinal: boolean) => {
+      // Already advanced the page for THIS utterance — ignore the rest of it
+      // (a later partial, or the eventual final, repeating the same "next
+      // page" phrase plus whatever else was said) rather than aligning its
+      // leftover words against the page we just turned to. Only clears once
+      // the utterance actually ends.
+      if (nextPageFiredRef.current) {
+        if (isFinal) nextPageFiredRef.current = false;
+        return;
+      }
       const lang = langRef.current;
       if (text.toLowerCase().includes(NEXT_PAGE_PHRASES[lang])) {
+        nextPageFiredRef.current = true;
         goNext();
+        if (isFinal) nextPageFiredRef.current = false;
         return;
       }
       const page = pageRef.current;
-      if (!page) return;
-      const ocrLower = page.ocrText.toLowerCase();
-      const tokens = tokenize(page.ocrText);
-      const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-      for (const word of words) {
-        const from = readCursorRef.current;
-        const idx = findWordFrom(ocrLower, word, from);
-        if (idx < 0 || idx > from + ALIGN_LOOKAHEAD) continue; // not found nearby — skip, don't jump wildly
-        const newCursor = idx + word.length;
-        for (const cue of cuesRef.current) {
-          if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
-          if (firedCueIdsRef.current.has(cue.id)) continue;
-          if (cue.charStart >= from && cue.charStart < newCursor) {
-            firedCueIdsRef.current.add(cue.id);
-            const tokenIndex = tokens.findIndex(
-              (t) => !t.isSpace && cue.charStart! >= t.start && cue.charStart! < t.end
-            );
-            fireCue(cue, tokenIndex);
+      if (page) {
+        const ocrLower = page.ocrText.toLowerCase();
+        const tokens = tokenize(page.ocrText);
+        const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+        for (const word of words) {
+          // Short/common words (a, the, in, и, в...) match too many spots to
+          // align against alone — see ALIGN_MIN_WORD_LENGTH above.
+          if (word.length < ALIGN_MIN_WORD_LENGTH) continue;
+          const from = readCursorRef.current;
+          const idx = findWordFrom(ocrLower, word, from);
+          if (idx < 0 || idx > from + ALIGN_LOOKAHEAD) continue; // not found nearby — skip, don't jump wildly
+          const newCursor = idx + word.length;
+          for (const cue of cuesRef.current) {
+            if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
+            if (firedCueIdsRef.current.has(cue.id)) continue;
+            if (cue.charStart >= from && cue.charStart < newCursor) {
+              firedCueIdsRef.current.add(cue.id);
+              const tokenIndex = tokens.findIndex(
+                (t) => !t.isSpace && cue.charStart! >= t.start && cue.charStart! < t.end
+              );
+              fireCue(cue, tokenIndex);
+            }
           }
+          readCursorRef.current = newCursor;
         }
-        readCursorRef.current = newCursor;
+        // One state update per recognized result (not per word) — enough to
+        // re-render the read-so-far highlight without spamming setState.
+        setReadCursor(readCursorRef.current);
       }
-      // One state update per recognized result (not per word) — enough to
-      // re-render the read-so-far highlight without spamming setState.
-      setReadCursor(readCursorRef.current);
+      if (isFinal) nextPageFiredRef.current = false;
     };
   });
 
@@ -295,8 +379,8 @@ export default function ReaderScreen() {
       }
       await recognizer.start({
         lang: langRef.current,
-        onPartial: () => {},
-        onResult: (text) => handleResultRef.current(text),
+        onPartial: (text) => handleTextRef.current(text, false),
+        onResult: (text) => handleTextRef.current(text, true),
       });
       setMicStatus('listening');
     } catch (e: any) {
@@ -325,8 +409,8 @@ export default function ReaderScreen() {
       try {
         await recognizerRef.current?.start({
           lang: langRef.current,
-          onPartial: () => {},
-          onResult: (text) => handleResultRef.current(text),
+          onPartial: (text) => handleTextRef.current(text, false),
+          onResult: (text) => handleTextRef.current(text, true),
         });
         setMicStatus('listening');
       } catch (e: any) {
@@ -352,12 +436,25 @@ export default function ReaderScreen() {
 
   function fireCue(cue: Cue, tokenIndex: number) {
     if (!cue.soundId) return;
-    const source = resolveSoundSource(cue.soundId);
-    if (!source) return; // missing asset — the readiness gate flags these up front
     stopCue();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setFiringToken(tokenIndex);
-    const player = createAudioPlayer(source);
+    // Reuse the pre-warmed player if this page's warm-up already created one
+    // (see cuePlayerCacheRef) — its file load (and, inside playFull, the
+    // wait-for-duration probe) has very likely already finished in the
+    // background, so playback can start immediately instead of paying that
+    // cost right now. Falls back to creating fresh if it's somehow missing
+    // (e.g. a tap on a cue whose sound was just changed and hasn't been
+    // re-warmed yet).
+    const cache = cuePlayerCacheRef.current;
+    let player = cache.get(cue.id);
+    if (player) {
+      cache.delete(cue.id); // consumed — fireCue's own stopCue()/cueStopRef now own its lifecycle
+    } else {
+      const source = resolveSoundSource(cue.soundId);
+      if (!source) return; // missing asset — the readiness gate flags these up front
+      player = createAudioPlayer(source);
+    }
     cuePlayerRef.current = player;
     const onEnd = () => {
       cueStopRef.current = null;
