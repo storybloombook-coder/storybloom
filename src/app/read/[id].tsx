@@ -608,8 +608,13 @@ export default function ReaderScreen() {
   }
 
   // Re-targets the ball whenever the read cursor advances (or rewinds) to a
-  // different "current" word — the last non-space token already behind the
-  // cursor, same word the karaoke highlight just caught up to.
+  // different "current" word. Deliberately keyed on the word's START (not
+  // its end, unlike the karaoke highlight) being behind the cursor: a tap or
+  // ball-drop sets the cursor to the target word's OWN start (see
+  // moveReadCursorTo, which keeps it that way on purpose so saying that word
+  // again on a reread still finds it as a fresh forward match) — requiring
+  // the word's END would mean the very word just dropped on never satisfies
+  // its own condition, landing the ball one word early every time.
   useEffect(() => {
     const page = pageRef.current;
     if (!page) return;
@@ -617,7 +622,7 @@ export default function ReaderScreen() {
     let idx = -1;
     for (let i = 0; i < toks.length; i++) {
       const t = toks[i];
-      if (!t.isSpace && t.end <= readCursor) idx = i;
+      if (!t.isSpace && t.start <= readCursor) idx = i;
     }
     currentWordIndexRef.current = idx;
     if (idx < 0 || !positionBallAt(idx)) {
@@ -661,20 +666,28 @@ export default function ReaderScreen() {
   function handleBallDrop(x: number, y: number) {
     const page = pageRef.current;
     if (!page) return;
-    // Invert positionBallAt's own offset to recover an approximate
-    // word-center point from where the ball itself was dropped.
+    // The ball's own true center at drop time — NOT the "resting above a
+    // word" offset positionBallAt applies, which only makes sense once it's
+    // actually settled on a word. Reusing that offset here (as an earlier
+    // version did) added a spurious ~40px downward error to hit-testing,
+    // consistently biasing matches toward the wrong word/line.
     const dropCenterX = x + BALL_SIZE / 2;
-    const dropTopY = y + BALL_SIZE + 6;
-    const idx = findClosestWordIndex(dropCenterX, dropTopY);
+    const dropCenterY = y + BALL_SIZE / 2;
+    const idx = findClosestWordIndex(dropCenterX, dropCenterY);
+    ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
     if (idx < 0) {
       if (currentWordIndexRef.current >= 0) positionBallAt(currentWordIndexRef.current);
-      ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
       return;
     }
     const toks = tokenize(page.ocrText);
     const token = toks[idx];
-    if (token) moveReadCursorTo(token);
-    ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
+    if (!token) return;
+    moveReadCursorTo(token);
+    // Reposition immediately rather than waiting for the readCursor state
+    // update to re-render and the [readCursor] effect to catch up on the
+    // next tick — that round trip was the visible "delay" after a drop.
+    currentWordIndexRef.current = idx;
+    positionBallAt(idx);
   }
 
   const ballDragStartX = useSharedValue(0);
