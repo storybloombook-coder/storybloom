@@ -180,18 +180,19 @@ export default function RecordingsList() {
                 const text = k === 'all' ? 'All' : k === 'ambient' ? 'Ambient' : 'Sounds';
                 const color = active ? '#208AEF' : subColor;
                 return (
-                  <TactileButton
-                    key={k}
-                    style={[
-                      styles.kindToggleBtn,
-                      active
-                        ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
-                        : { backgroundColor: cardBackground, borderColor: chipBackground },
-                    ]}
-                    onPress={() => setKindFilter(k)}
-                  >
-                    <Text style={[styles.kindToggleLabel, { color }]}>{text}</Text>
-                  </TactileButton>
+                  <View key={k} style={styles.kindToggleBtnWrap}>
+                    <TactileButton
+                      style={[
+                        styles.kindToggleBtn,
+                        active
+                          ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
+                          : { backgroundColor: cardBackground, borderColor: chipBackground },
+                      ]}
+                      onPress={() => setKindFilter(k)}
+                    >
+                      <Text style={[styles.kindToggleLabel, { color }]}>{text}</Text>
+                    </TactileButton>
+                  </View>
                 );
               })}
             </View>
@@ -330,8 +331,12 @@ const styles = StyleSheet.create({
   filterBar: { paddingHorizontal: 16, paddingTop: 12, gap: 10 },
   searchInput: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15 },
   kindToggleRow: { flexDirection: 'row', gap: 8 },
+  // TactileButton only styles its OWN inner view, not the Pressable that
+  // actually carries flex sizing in the row layout — so flex:1 goes on this
+  // plain wrapper instead of kindToggleBtn itself (same fix already applied
+  // to record buttons / language toggles elsewhere in the app).
+  kindToggleBtnWrap: { flex: 1 },
   kindToggleBtn: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
