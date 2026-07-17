@@ -37,6 +37,7 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
+  type SharedValue,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -98,6 +99,27 @@ const ALIGN_MIN_WORD_LENGTH = 3;
 function extractWords(text: string): string[] {
   const matches = text.toLowerCase().match(/\p{L}+/gu);
   return matches ? Array.from(new Set(matches)) : [];
+}
+
+// Gap between wrapped lines, in its resting state vs. expanded around
+// whichever line the ball currently occupies (see RowGapSpacer/activeRowSV
+// below) — expanded needs to fit BALL_SIZE + positionBallAt's own 6px
+// clearance + the bounce's travel, with a little room to spare.
+const NORMAL_ROW_GAP = 10;
+const EXPANDED_ROW_GAP = 56;
+
+/** One inter-line gap in the reader's flowing text — a plain spacer whose
+ *  height animates between resting and expanded depending on whether the
+ *  ball currently sits on THIS row, so only the ball's own line pushes its
+ *  neighbors apart while every other gap stays at its normal size. Must be
+ *  its own component (not inlined) so each instance owns a single, stable
+ *  useAnimatedStyle call, regardless of how many rows a given page wraps
+ *  into. */
+function RowGapSpacer({ rowIndex, activeRow }: { rowIndex: number; activeRow: SharedValue<number> }) {
+  const style = useAnimatedStyle(() => ({
+    height: withTiming(activeRow.value === rowIndex ? EXPANDED_ROW_GAP : NORMAL_ROW_GAP, { duration: 260 }),
+  }));
+  return <Animated.View style={[{ width: '100%' }, style]} />;
 }
 
 // Bouncing-ball reading-position marker: hops to sit above whichever word was
@@ -201,6 +223,17 @@ export default function ReaderScreen() {
   const ballY = useSharedValue(0);
   const ballOpacity = useSharedValue(0);
   const ballBounce = useSharedValue(0);
+  // Which visual row (post-wrap line) each word landed in, and which token
+  // starts each row — both derived from wordLayoutsRef once layout settles
+  // (see recomputeRows), so the gap around the ball's own line can expand
+  // while every other gap stays put. rowsVersion bumps only when the row
+  // COUNT actually changes, to re-render with newly-known gaps inserted
+  // without looping forever (inserting those gaps reshapes layout, which
+  // re-fires onLayout, which would otherwise recompute and bump again).
+  const wordRowRef = useRef<Map<number, number>>(new Map());
+  const rowStartTokensRef = useRef<number[]>([]);
+  const [rowsVersion, setRowsVersion] = useState(0);
+  const activeRowSV = useSharedValue(-1);
   // Guards against firing "next page" twice for the SAME utterance — Vosk
   // sends partials continuously, then one final; if the phrase is caught by
   // an early partial and again by the final (same words, same utterance), the
@@ -316,6 +349,12 @@ export default function ReaderScreen() {
     wordLayoutsRef.current = new Map();
     currentWordIndexRef.current = -1;
     ballOpacity.value = 0;
+    // Same story for row structure — a new page wraps differently, so last
+    // page's row boundaries (and which one was "active") don't apply.
+    wordRowRef.current = new Map();
+    rowStartTokensRef.current = [];
+    setRowsVersion(0);
+    activeRowSV.value = -1;
   }, [index, storyPages, cuesByPage]);
 
   // The ball's continuous up/down bounce — independent of its hop-to-word
@@ -601,9 +640,36 @@ export default function ReaderScreen() {
     return true;
   }
 
+  /** Groups measured words into visual rows by shared Y position, so the
+   *  gap around whichever row the ball occupies can expand independently of
+   *  every other gap. Only bumps rowsVersion (triggering the re-render that
+   *  actually inserts/moves the gap spacers) when the row COUNT changes —
+   *  inserting those spacers reshapes the layout, re-firing onLayout for
+   *  every word, which would otherwise recompute and bump again forever. */
+  function recomputeRows() {
+    const entries = Array.from(wordLayoutsRef.current.entries()).sort((a, b) => a[0] - b[0]);
+    const rowOf = new Map<number, number>();
+    const starts: number[] = [];
+    let lastY: number | null = null;
+    let row = -1;
+    for (const [idx, pos] of entries) {
+      if (lastY === null || Math.abs(pos.y - lastY) > 4) {
+        row += 1;
+        starts.push(idx);
+        lastY = pos.y;
+      }
+      rowOf.set(idx, row);
+    }
+    const changed = starts.length !== rowStartTokensRef.current.length;
+    wordRowRef.current = rowOf;
+    rowStartTokensRef.current = starts;
+    if (changed) setRowsVersion((v) => v + 1);
+  }
+
   function onWordLayout(index: number, e: LayoutChangeEvent) {
     const { x, y, width, height } = e.nativeEvent.layout;
     wordLayoutsRef.current.set(index, { x, y, width, height });
+    recomputeRows();
     if (currentWordIndexRef.current === index) positionBallAt(index);
   }
 
@@ -625,6 +691,7 @@ export default function ReaderScreen() {
       if (!t.isSpace && t.start <= readCursor) idx = i;
     }
     currentWordIndexRef.current = idx;
+    activeRowSV.value = idx >= 0 ? (wordRowRef.current.get(idx) ?? -1) : -1;
     if (idx < 0 || !positionBallAt(idx)) {
       ballOpacity.value = withTiming(0, { duration: 100 });
     }
@@ -687,6 +754,7 @@ export default function ReaderScreen() {
     // update to re-render and the [readCursor] effect to catch up on the
     // next tick — that round trip was the visible "delay" after a drop.
     currentWordIndexRef.current = idx;
+    activeRowSV.value = wordRowRef.current.get(idx) ?? -1;
     positionBallAt(idx);
   }
 
@@ -711,6 +779,13 @@ export default function ReaderScreen() {
   const ballStyle = useAnimatedStyle(() => ({
     opacity: ballOpacity.value,
     transform: [{ translateX: ballX.value }, { translateY: ballY.value - ballBounce.value * 12 }],
+  }));
+
+  // The gap above the very FIRST line isn't a RowGapSpacer (there's no
+  // previous row to insert one between) — it's the container's own
+  // marginTop, animated the same way for when the ball is on row 0.
+  const flowWrapStyle = useAnimatedStyle(() => ({
+    marginTop: withTiming(activeRowSV.value === 0 ? EXPANDED_ROW_GAP : 16, { duration: 260 }),
   }));
 
   if (loading) {
@@ -801,74 +876,101 @@ export default function ReaderScreen() {
 
         <ScrollView contentContainerStyle={styles.textWrap}>
           {page.ocrText.trim() ? (
-            <View style={styles.flowWrap}>
+            <Animated.View style={[styles.flowWrap, flowWrapStyle]}>
               <GestureDetector gesture={ballDragGesture}>
                 <Animated.View style={[styles.ball, ballStyle]} />
               </GestureDetector>
-              {tokens.map((t, i) => {
-                // Karaoke-style read-so-far highlight — driven by the same
-                // speech-alignment cursor that fires cues, so it tracks
-                // exactly as far as recognized speech has actually reached.
-                const isRead = !t.isSpace && t.end <= readCursor;
-                if (t.isSpace) {
-                  // A literal line break in the OCR text (a page-photo's own
-                  // line, not just a run of spaces) forces a wrap here too —
-                  // a flex-wrap row of per-word chips doesn't otherwise know
-                  // about newlines the way a single native Text block did.
-                  if (t.text.includes('\n')) return <View key={i} style={styles.lineBreak} />;
-                  return (
-                    <Text key={i} style={[styles.flowText, { color: textColor }]}>
-                      {t.text}
-                    </Text>
-                  );
-                }
-                const cue = cueAtRange(cues, t.start, t.end);
-                const active = cue && cue.reviewState !== 'removed' && !!cue.soundId;
-                if (!active) {
-                  return (
+              {(() => {
+                // Built as a flat array (not one-node-per-token via .map)
+                // because a gap spacer needs to be a DIRECT sibling of the
+                // word/space Texts within flowWrap — its width:'100%' means
+                // "100% of flowWrap," which only holds if it isn't nested
+                // inside some other per-token wrapper. Row 0 needs no
+                // spacer of its own (nothing above it to push apart from;
+                // flowWrapStyle's marginTop handles the ball sitting there
+                // instead); every later row's start token gets one inserted
+                // right before it, whichever kind of token that happens to
+                // be (a space-run wraps onto a new row just as often as a
+                // word does).
+                const rowStartAt = new Map(rowStartTokensRef.current.map((tokenIdx, row) => [tokenIdx, row]));
+                const elements: React.ReactNode[] = [];
+                tokens.forEach((t, i) => {
+                  const rowStartingHere = rowStartAt.get(i);
+                  if (rowStartingHere != null && rowStartingHere > 0) {
+                    elements.push(<RowGapSpacer key={`gap-${i}`} rowIndex={rowStartingHere} activeRow={activeRowSV} />);
+                  }
+                  // Karaoke-style read-so-far highlight — driven by the same
+                  // speech-alignment cursor that fires cues, so it tracks
+                  // exactly as far as recognized speech has actually reached.
+                  const isRead = !t.isSpace && t.end <= readCursor;
+                  if (t.isSpace) {
+                    // A literal line break in the OCR text (a page-photo's
+                    // own line, not just a run of spaces) forces a wrap here
+                    // too — a flex-wrap row of per-word chips doesn't
+                    // otherwise know about newlines the way a single native
+                    // Text block did.
+                    if (t.text.includes('\n')) {
+                      elements.push(<View key={`t-${i}`} style={styles.lineBreak} />);
+                    } else {
+                      elements.push(
+                        <Text key={`t-${i}`} style={[styles.flowText, { color: textColor }]}>
+                          {t.text}
+                        </Text>
+                      );
+                    }
+                    return;
+                  }
+                  const cue = cueAtRange(cues, t.start, t.end);
+                  const active = cue && cue.reviewState !== 'removed' && !!cue.soundId;
+                  if (!active) {
+                    elements.push(
+                      <Text
+                        key={`t-${i}`}
+                        onLayout={(e) => onWordLayout(i, e)}
+                        onPress={() => moveReadCursorTo(t)}
+                        style={[
+                          styles.flowText,
+                          isRead ? [styles.readWord, { color: textColor }] : { color: textColor },
+                        ]}
+                      >
+                        {t.text}
+                      </Text>
+                    );
+                    return;
+                  }
+                  const firing = firingToken === i;
+                  elements.push(
                     <Text
-                      key={i}
+                      key={`t-${i}`}
                       onLayout={(e) => onWordLayout(i, e)}
-                      onPress={() => moveReadCursorTo(t)}
+                      onPress={() => {
+                        fireCue(cue!, i);
+                        moveReadCursorTo(t);
+                      }}
                       style={[
                         styles.flowText,
-                        isRead ? [styles.readWord, { color: textColor }] : { color: textColor },
+                        styles.cueWord,
+                        {
+                          // Already-spoken cue words get a touch more
+                          // opacity — same blue, just a bit bolder — so the
+                          // highlight still reads consistently across cue
+                          // and plain text.
+                          backgroundColor: firing
+                            ? 'rgba(32,138,239,0.6)'
+                            : isRead
+                              ? 'rgba(32,138,239,0.4)'
+                              : 'rgba(32,138,239,0.28)',
+                          color: textColor,
+                        },
                       ]}
                     >
                       {t.text}
                     </Text>
                   );
-                }
-                const firing = firingToken === i;
-                return (
-                  <Text
-                    key={i}
-                    onLayout={(e) => onWordLayout(i, e)}
-                    onPress={() => {
-                      fireCue(cue!, i);
-                      moveReadCursorTo(t);
-                    }}
-                    style={[
-                      styles.flowText,
-                      styles.cueWord,
-                      {
-                        // Already-spoken cue words get a touch more opacity —
-                        // same blue, just a bit bolder — so the highlight
-                        // still reads consistently across cue and plain text.
-                        backgroundColor: firing
-                          ? 'rgba(32,138,239,0.6)'
-                          : isRead
-                            ? 'rgba(32,138,239,0.4)'
-                            : 'rgba(32,138,239,0.28)',
-                        color: textColor,
-                      },
-                    ]}
-                  >
-                    {t.text}
-                  </Text>
-                );
-              })}
-            </View>
+                });
+                return elements;
+              })()}
+            </Animated.View>
           ) : (
             <Text style={[styles.noText, { color: subColor }]}>No text on this page — just turn the page.</Text>
           )}
@@ -958,18 +1060,15 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   pageImage: { width: '100%', height: 220, marginBottom: 8 },
   textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
-  // marginTop leaves headroom above the first line for the ball to bounce
-  // into without clipping against the container's own top edge.
-  // rowGap/marginTop leave enough headroom above EVERY line (not just the
-  // first) for the bigger ball plus its bounce to sit between lines without
-  // overlapping the line above.
+  // marginTop (animated, see flowWrapStyle) and the inter-row gaps (each an
+  // animated RowGapSpacer, see recomputeRows) supply ALL vertical spacing —
+  // deliberately no static value here, so only the ball's own line expands
+  // rather than every line being permanently spaced out to fit it.
   flowWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'flex-start',
     position: 'relative',
-    marginTop: 54,
-    rowGap: 54,
   },
   flowText: { fontSize: 22, lineHeight: 36 },
   lineBreak: { width: '100%', height: 0 },
