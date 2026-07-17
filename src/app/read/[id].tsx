@@ -11,6 +11,12 @@
 // part CLAUDE.md warns about — expect to retune ALIGN_LOOKAHEAD and watch for
 // missed/duplicate fires on real books.
 //
+// A bouncing ball hops to sit above whichever word was most recently read,
+// hopping forward as recognized speech advances the cursor (or backward if a
+// tap rewinds it — see moveReadCursorTo). It needs each word's own on-screen
+// position, which is why the page text renders as a flex-wrap row of
+// individually-measured word chips instead of one native Text block.
+//
 // Reaching the end offers "Read again" or "Done" — no separate approval step.
 
 import { createAudioPlayer, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
@@ -18,7 +24,17 @@ import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import {
+  ActivityIndicator,
+  type LayoutChangeEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useColorScheme,
+} from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../../components/TactileButton';
 import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/audio/playRange';
@@ -75,6 +91,11 @@ function extractWords(text: string): string[] {
   const matches = text.toLowerCase().match(/\p{L}+/gu);
   return matches ? Array.from(new Set(matches)) : [];
 }
+
+// Bouncing-ball reading-position marker: hops to sit above whichever word was
+// most recently read (the last token with end <= readCursor), sized/spaced
+// against BALL_SIZE below.
+const BALL_SIZE = 16;
 
 function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
   switch (status) {
@@ -162,6 +183,16 @@ export default function ReaderScreen() {
   const handleTextRef = useRef<(text: string, isFinal: boolean) => void>(() => {});
   const readCursorRef = useRef(0);
   const firedCueIdsRef = useRef<Set<string>>(new Set());
+  // Bouncing ball: each word's on-screen position (relative to the flow
+  // container), captured live via onLayout since text can wrap differently
+  // per device — filled in as words render, read fresh whenever the read
+  // cursor advances to a new "current" word.
+  const wordLayoutsRef = useRef<Map<number, { x: number; y: number; width: number; height: number }>>(new Map());
+  const currentWordIndexRef = useRef(-1);
+  const ballX = useSharedValue(0);
+  const ballY = useSharedValue(0);
+  const ballOpacity = useSharedValue(0);
+  const ballBounce = useSharedValue(0);
   // Guards against firing "next page" twice for the SAME utterance — Vosk
   // sends partials continuously, then one final; if the phrase is caught by
   // an early partial and again by the final (same words, same utterance), the
@@ -271,7 +302,20 @@ export default function ReaderScreen() {
     firedCueIdsRef.current = new Set();
     nextPageFiredRef.current = false;
     setReadCursor(0);
+    // A new page's tokens start over at index 0 — last page's measured word
+    // positions don't apply, and the ball should hide until the new page's
+    // words have been measured and the reader reaches the first one.
+    wordLayoutsRef.current = new Map();
+    currentWordIndexRef.current = -1;
+    ballOpacity.value = 0;
   }, [index, storyPages, cuesByPage]);
+
+  // The ball's continuous up/down bounce — independent of its hop-to-word
+  // position animation, runs for the lifetime of the screen.
+  useEffect(() => {
+    ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Pre-warm this page's cue players ahead of time (see cuePlayerCacheRef's
   // own comment) — and free the PREVIOUS page's, which fireCue may not have
@@ -534,6 +578,44 @@ export default function ReaderScreen() {
     setReadCursor(newCursor);
   }
 
+  /** Hops the ball to word `index`'s measured position, if known yet — a
+   *  word rendered this session but not yet laid out (e.g. the very first
+   *  frame after a page turn) simply isn't positioned until its own
+   *  onWordLayout fires and calls this again. Returns whether it moved. */
+  function positionBallAt(index: number): boolean {
+    const pos = wordLayoutsRef.current.get(index);
+    if (!pos) return false;
+    ballX.value = withSpring(pos.x + pos.width / 2 - BALL_SIZE / 2, { damping: 16, stiffness: 180 });
+    ballY.value = withSpring(pos.y - BALL_SIZE - 6, { damping: 16, stiffness: 180 });
+    ballOpacity.value = withTiming(1, { duration: 150 });
+    return true;
+  }
+
+  function onWordLayout(index: number, e: LayoutChangeEvent) {
+    const { x, y, width, height } = e.nativeEvent.layout;
+    wordLayoutsRef.current.set(index, { x, y, width, height });
+    if (currentWordIndexRef.current === index) positionBallAt(index);
+  }
+
+  // Re-targets the ball whenever the read cursor advances (or rewinds) to a
+  // different "current" word — the last non-space token already behind the
+  // cursor, same word the karaoke highlight just caught up to.
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+    const toks = tokenize(page.ocrText);
+    let idx = -1;
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
+      if (!t.isSpace && t.end <= readCursor) idx = i;
+    }
+    currentWordIndexRef.current = idx;
+    if (idx < 0 || !positionBallAt(idx)) {
+      ballOpacity.value = withTiming(0, { duration: 100 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readCursor]);
+
   function goNext() {
     stopCue();
     if (index < storyPages.length - 1) {
@@ -547,6 +629,11 @@ export default function ReaderScreen() {
     stopCue();
     if (index > 0) setIndex((i) => i - 1);
   }
+
+  const ballStyle = useAnimatedStyle(() => ({
+    opacity: ballOpacity.value,
+    transform: [{ translateX: ballX.value }, { translateY: ballY.value - ballBounce.value * 8 }],
+  }));
 
   if (loading) {
     return (
@@ -636,21 +723,37 @@ export default function ReaderScreen() {
 
         <ScrollView contentContainerStyle={styles.textWrap}>
           {page.ocrText.trim() ? (
-            <Text style={[styles.flow, { color: textColor }]}>
+            <View style={styles.flowWrap}>
+              <Animated.View pointerEvents="none" style={[styles.ball, ballStyle]} />
               {tokens.map((t, i) => {
                 // Karaoke-style read-so-far highlight — driven by the same
                 // speech-alignment cursor that fires cues, so it tracks
                 // exactly as far as recognized speech has actually reached.
                 const isRead = !t.isSpace && t.end <= readCursor;
-                if (t.isSpace) return <Text key={i}>{t.text}</Text>;
+                if (t.isSpace) {
+                  // A literal line break in the OCR text (a page-photo's own
+                  // line, not just a run of spaces) forces a wrap here too —
+                  // a flex-wrap row of per-word chips doesn't otherwise know
+                  // about newlines the way a single native Text block did.
+                  if (t.text.includes('\n')) return <View key={i} style={styles.lineBreak} />;
+                  return (
+                    <Text key={i} style={[styles.flowText, { color: textColor }]}>
+                      {t.text}
+                    </Text>
+                  );
+                }
                 const cue = cueAtRange(cues, t.start, t.end);
                 const active = cue && cue.reviewState !== 'removed' && !!cue.soundId;
                 if (!active) {
                   return (
                     <Text
                       key={i}
+                      onLayout={(e) => onWordLayout(i, e)}
                       onPress={() => moveReadCursorTo(t)}
-                      style={isRead ? [styles.readWord, { color: textColor }] : { color: textColor }}
+                      style={[
+                        styles.flowText,
+                        isRead ? [styles.readWord, { color: textColor }] : { color: textColor },
+                      ]}
                     >
                       {t.text}
                     </Text>
@@ -660,11 +763,13 @@ export default function ReaderScreen() {
                 return (
                   <Text
                     key={i}
+                    onLayout={(e) => onWordLayout(i, e)}
                     onPress={() => {
                       fireCue(cue!, i);
                       moveReadCursorTo(t);
                     }}
                     style={[
+                      styles.flowText,
                       styles.cueWord,
                       {
                         // Already-spoken cue words get a touch more opacity —
@@ -683,7 +788,7 @@ export default function ReaderScreen() {
                   </Text>
                 );
               })}
-            </Text>
+            </View>
           ) : (
             <Text style={[styles.noText, { color: subColor }]}>No text on this page — just turn the page.</Text>
           )}
@@ -773,10 +878,25 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   pageImage: { width: '100%', height: 220, marginBottom: 8 },
   textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
-  flow: { fontSize: 22, lineHeight: 36 },
+  // marginTop leaves headroom above the first line for the ball to bounce
+  // into without clipping against the container's own top edge.
+  flowWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', position: 'relative', marginTop: 26 },
+  flowText: { fontSize: 22, lineHeight: 36 },
+  lineBreak: { width: '100%', height: 0 },
   cueWord: { borderRadius: 5, overflow: 'hidden' },
   // The karaoke-style "already spoken" highlight for plain (non-cue) words.
   readWord: { backgroundColor: 'rgba(255,213,79,0.35)', borderRadius: 3 },
+  ball: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: BALL_SIZE,
+    height: BALL_SIZE,
+    borderRadius: BALL_SIZE / 2,
+    backgroundColor: '#ff8a3d',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   noText: { fontSize: 16, fontStyle: 'italic', textAlign: 'center', marginTop: 30 },
   hint: { fontSize: 13, textAlign: 'center', fontStyle: 'italic' },
 
