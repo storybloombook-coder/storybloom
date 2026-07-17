@@ -18,6 +18,7 @@ import {
   useColorScheme,
 } from 'react-native';
 import ConfirmDeleteModal from './ConfirmDeleteModal';
+import StandaloneRecordModal, { type RecordKind } from './StandaloneRecordModal';
 import SwipeableRow from './SwipeableRow';
 import TactileButton from './TactileButton';
 import { playFull } from '../lib/audio/playRange';
@@ -25,14 +26,18 @@ import { deleteRecording, listRecordings, renameRecording } from '../lib/db';
 import type { Recording } from '../lib/types';
 
 function originText(rec: Recording): string | null {
-  if (!rec.originBookTitle) return null;
-  return [
-    `“${rec.originBookTitle}”`,
-    rec.originPageNumber != null ? `p.${rec.originPageNumber}` : null,
-    rec.originLabel ? (rec.originLabel === 'Ambient' ? 'Ambient' : `“${rec.originLabel}”`) : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  if (rec.originBookTitle) {
+    return [
+      `“${rec.originBookTitle}”`,
+      rec.originPageNumber != null ? `p.${rec.originPageNumber}` : null,
+      rec.originLabel ? (rec.originLabel === 'Ambient' ? 'Ambient' : `“${rec.originLabel}”`) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  // Premade — recorded from My Recordings directly, with no page to
+  // attribute it to yet.
+  return rec.originLabel ?? null;
 }
 
 export default function RecordingsList() {
@@ -48,6 +53,7 @@ export default function RecordingsList() {
   const [renaming, setRenaming] = useState<Recording | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [pendingDelete, setPendingDelete] = useState<Recording | null>(null);
+  const [recordKind, setRecordKind] = useState<RecordKind | null>(null);
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
@@ -131,7 +137,8 @@ export default function RecordingsList() {
           <Text style={[styles.emptyTitle, { color: textColor }]}>No recordings yet</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
             Recordings you make for a word or an ambient sound (tap a word or the Ambient row in a
-            page, then "Record your own") show up here, reusable on any page.
+            page, then "Record your own") show up here, reusable on any page — or record one ahead
+            of time below and assign it to a word later.
           </Text>
         </View>
       ) : (
@@ -164,6 +171,34 @@ export default function RecordingsList() {
           }}
         />
       )}
+
+      <View style={styles.recordButtonRow}>
+        <View style={styles.recordButtonWrap}>
+          <TactileButton
+            style={[styles.recordButton, { backgroundColor: cardBackground }]}
+            onPress={() => setRecordKind('ambient')}
+          >
+            <Text style={styles.recordButtonEmoji}>🎵</Text>
+            <Text style={[styles.recordButtonLabel, { color: textColor }]}>Record an Ambient</Text>
+          </TactileButton>
+        </View>
+        <View style={styles.recordButtonWrap}>
+          <TactileButton
+            style={[styles.recordButton, { backgroundColor: cardBackground }]}
+            onPress={() => setRecordKind('sound')}
+          >
+            <Text style={styles.recordButtonEmoji}>🔊</Text>
+            <Text style={[styles.recordButtonLabel, { color: textColor }]}>Record a Sound</Text>
+          </TactileButton>
+        </View>
+      </View>
+
+      <StandaloneRecordModal
+        visible={recordKind !== null}
+        kind={recordKind ?? 'sound'}
+        onClose={() => setRecordKind(null)}
+        onSaved={load}
+      />
 
       <ConfirmDeleteModal
         visible={pendingDelete !== null}
@@ -209,6 +244,19 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 40, marginBottom: 4 },
   emptyTitle: { fontSize: 18, fontWeight: '700' },
   emptyText: { fontSize: 14, textAlign: 'center', lineHeight: 20 },
+
+  recordButtonRow: { flexDirection: 'row', gap: 12, padding: 16, paddingTop: 0 },
+  recordButtonWrap: { flex: 1 },
+  recordButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  recordButtonEmoji: { fontSize: 20 },
+  recordButtonLabel: { fontSize: 14, fontWeight: '600' },
 
   list: { padding: 16, gap: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, paddingHorizontal: 4 },
