@@ -177,7 +177,6 @@ export default function RecordingsList() {
             <View style={styles.kindToggleRow}>
               {(['all', 'ambient', 'sound'] as const).map((k) => {
                 const active = kindFilter === k;
-                const emoji = k === 'ambient' ? '🎵' : k === 'sound' ? '🔊' : null;
                 const text = k === 'all' ? 'All' : k === 'ambient' ? 'Ambient' : 'Sounds';
                 const color = active ? '#208AEF' : subColor;
                 return (
@@ -191,11 +190,6 @@ export default function RecordingsList() {
                     ]}
                     onPress={() => setKindFilter(k)}
                   >
-                    {/* Emoji and label as separate Text siblings, matching the
-                        record buttons below — combining them into one string
-                        left these buttons rendering with no visible text at
-                        all (see project session notes). */}
-                    {emoji && <Text style={styles.kindToggleEmoji}>{emoji}</Text>}
                     <Text style={[styles.kindToggleLabel, { color }]}>{text}</Text>
                   </TactileButton>
                 );
@@ -347,7 +341,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     gap: 4,
   },
-  kindToggleEmoji: { fontSize: 13 },
   kindToggleLabel: { fontSize: 13, fontWeight: '600' },
 
   list: { padding: 16, gap: 10 },
