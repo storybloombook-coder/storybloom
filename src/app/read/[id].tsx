@@ -484,6 +484,19 @@ export default function ReaderScreen() {
             }
           }
           readCursorRef.current = newCursor;
+          // setReadCursor below only fires ONCE, after this whole loop —
+          // so if the batch of words in this single callback contains this
+          // same word again (its own cumulative partial hypothesis
+          // stuttering, or the reader saying it twice in one breath), the
+          // loop would silently walk through THIS occurrence and settle on
+          // the NEXT one before anything ever renders, which looks exactly
+          // like the cursor "jumping ahead" instead of advancing steadily.
+          // Stopping here instead means the visible position always lands
+          // on the FIRST occurrence a recognized word could mean; reaching
+          // the second one takes an actual subsequent recognition (the next
+          // partial, or the eventual final), same as it would for a real
+          // second read of that word.
+          if (ambiguous) break;
         }
         // One state update per recognized result (not per word) — enough to
         // re-render the read-so-far highlight without spamming setState.
