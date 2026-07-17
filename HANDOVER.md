@@ -70,6 +70,28 @@ session (or a fresh PC) should read._
   page) could lock in a partial mid-burst snapshot, both misplacing the
   expanded gap and causing a visible re-render cascade/jank. This part in
   particular wants a fresh live-test pass now that it's debounced.
+- **Ambient ducks while listening** — it was looping at full volume right
+  through the parent's own speech, feeding back into the same mic Vosk
+  recognizes through. Now ramps down to a low murmur (not full mute, so
+  page turns don't feel abrupt) the instant `micStatus === 'listening'`,
+  and restores otherwise (`rampAmbientVolume` in `read/[id].tsx`).
+- **Fuzzy alignment fallback** — `matchWordInWindow` tries an exact match
+  first, then falls back to a small edit-distance-tolerant match
+  (`findWordFuzzy`, tolerance scales with word length) when nothing exact
+  is nearby. Vosk's small models often get a word's ending slightly wrong,
+  especially against Russian's rich inflection; catches those without
+  needing better raw recognition. The existing ambiguous-nearby-duplicate
+  guard (previous bullet) now covers fuzzy near-duplicates too, since both
+  the primary match and that check go through the same function.
+- **Confidence-aware alignment — investigated, NOT implemented.** Vosk's
+  raw JSON output does include per-word confidence
+  (`{"result":[{"conf":...,"word":...}]}`), but `react-native-vosk`'s
+  native wrapper discards it before it reaches JS (see
+  `VoskModule.kt`'s `parseHypothesis`, which extracts only the `"text"`
+  field — iOS's `Vosk.mm` does the same). Using it would need a
+  `patch-package` patch to the native module (Android + iOS) to emit the
+  full hypothesis instead, plus a native rebuild to test — bigger scope
+  than the two fixes above, explicitly deferred rather than attempted.
 
 **EAS build:** a `preview`-profile Android build was kicked off this
 session under the `alexstorybloom` account (matches `app.json`'s
