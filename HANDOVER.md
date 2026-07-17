@@ -10,6 +10,79 @@ session (or a fresh PC) should read._
 
 ---
 
+## Later same day (2026-07-17, second session) — dev/prod app separation, 4 reader/drag bugs
+
+**Dev-client can no longer clobber a preview/production install.** The dev
+client and a preview build shared the Android package `com.storybloom.app`
+(+ the same EAS-managed signing key), so Android treated a preview install
+as an UPDATE to the same app — installing an offline preview build silently
+wiped out the dev-client testing app. Converted `app.json` → `app.config.js`
+so the `development` EAS profile (via `APP_VARIANT=development`, set in
+`eas.json`'s `env`) gets its own package id `com.storybloom.app.dev`, its
+own name ("**Storybloom Testing**"), and a distinct icon tint (yellow) — it
+now installs as a genuinely separate app, permanently, alongside whatever
+preview/production build is also on the device. Needed (and triggered) a
+fresh dev-client build — EAS correctly generated it its own keystore, since
+it's a distinct app identity. Build `91a6f410`, queued a long time
+(free-tier) — check `eas build:list` if the link below has gone stale.
+
+**Four live-testing bugs fixed** (all in `src/app/read/[id].tsx` /
+`src/components/DraggablePageCard.tsx`), reasoned from careful code tracing
+— **the reader ones are NOT yet re-verified live** (need a real "next page"
+utterance + a book with a repeated word, on the new build):
+
+1. **"next page" jumped straight to the finish screen.** The `nextPageFiredRef`
+   dedupe-guard (meant to stop one utterance firing goNext() twice) was
+   ITSELF reset by the per-page `useEffect` that `goNext()` triggers via
+   `setIndex` — so the guard cleared before the SAME utterance's next Vosk
+   partial arrived (partials keep re-delivering the full utterance-so-far),
+   and each subsequent partial fired ANOTHER page turn, racing through the
+   whole book. Replaced with a plain `Date.now()` cooldown
+   (`NEXT_PAGE_COOLDOWN_MS`, no dependency on page-change side effects) and
+   gated to only act on `isFinal` (page turns are high-stakes enough to be
+   worth the extra ~0.5-1s wait for Vosk to settle, unlike a cue sound).
+2. **Read-cursor jumping over sentences on a repeated/similar word.** Vosk's
+   `onPartial` delivers the FULL utterance-so-far every callback, not just
+   what's new — but the alignment loop re-split `text` and re-matched EVERY
+   word from scratch each time, always searching from the current cursor. An
+   early word already matched in a prior partial got RE-matched against the
+   now-advanced cursor; if it (or a similar word) recurred within
+   `ALIGN_LOOKAHEAD`, the search landed on the LATER occurrence and snapped
+   the cursor past everything between — explains exactly "jumps over
+   sentences" whenever a word repeats. Added `utteranceWordsConsumedRef` to
+   track how many words of the CURRENT utterance have already been matched,
+   so only the newly-added tail is processed per callback (reset on
+   `isFinal`, and on every page turn).
+3. **Ball squash-and-stretch** — cosmetic ask, done: `scaleX`/`scaleY` now
+   interpolate off the same `ballBounce` value already driving the vertical
+   bob, squashing at the bottom of each bounce, stretching slightly at the
+   top.
+4. **Page drag-reorder was swapping the first and last page.**
+   `computeTargetIndex` builds every slot's position by summing
+   `itemHeights`, which starts at 0 for every card until each one's
+   `onLayout` fires. With several still-zero heights, the position math
+   collapses toward the top FOR EVERY CARD (each card's own cumulative
+   offset shrinks toward 0 too) — so even a modest drag distance walks
+   through many near-zero-width "slots" in one pass and overshoots to the
+   LAST index; a last-card drag's cumulative starts near 0 for the identical
+   reason, so it just as easily overshoots to the FIRST index. Added a
+   fallback (use the dragged card's own — definitely already measured,
+   since it's mid-drag — height for any still-zero slot) in both
+   `computeTargetIndex` and the neighbor "make room" shift math. **This one
+   is reasoned from code only, not yet confirmed against a live drag** —
+   there was no way to synthesize a real Pan gesture without the user's
+   phone in hand; re-test and report back if it recurs so real device logs
+   can be added.
+
+**New dev-client APK** (package `com.storybloom.app.dev`, name "Storybloom
+Testing" — installs alongside any existing `com.storybloom.app` build, does
+NOT overwrite it):
+- Build: https://expo.dev/accounts/alexstorybloom/projects/Storybloom/builds/91a6f410-6904-4585-b4b6-b862f397837d
+- Once finished, get the APK URL from that build page (or `eas build:list`)
+  and `adb install -r <file>.apk`, or open the link on the phone directly.
+
+---
+
 ## This session (2026-07-17) — My Recordings overhaul, reader bouncing ball, EAS build
 
 **My Recordings tab (`RecordingsList.tsx`):**
