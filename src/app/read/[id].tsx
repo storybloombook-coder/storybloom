@@ -36,6 +36,7 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  interpolate,
   runOnJS,
   type SharedValue,
   useAnimatedStyle,
@@ -161,6 +162,14 @@ const ALIGN_LOOKAHEAD = 60;
 // shorter are skipped for alignment purposes — only longer, more distinctive
 // words actually move the cursor.
 const ALIGN_MIN_WORD_LENGTH = 3;
+// Minimum gap between two "next page" ADVANCES. Not a dedupe-within-one-
+// utterance guard (that used to be a ref reset by the page-change effect
+// itself — see the removed nextPageFiredRef — which raced: goNext() changes
+// `index`, which re-runs the per-page reset effect, which reset the guard
+// BEFORE the same utterance's next partial arrived, so a single "next page"
+// could fire many rapid page turns straight to the end). A plain timestamp
+// cooldown has no such dependency on page-change side effects.
+const NEXT_PAGE_COOLDOWN_MS = 1200;
 
 /** Unique lowercase words (Unicode-letter runs) found in a piece of text. */
 function extractWords(text: string): string[] {
@@ -319,12 +328,20 @@ export default function ReaderScreen() {
   // cascade of re-renders. Debouncing collapses a whole burst into one
   // recompute after layout actually settles.
   const rowRecomputeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Guards against firing "next page" twice for the SAME utterance — Vosk
-  // sends partials continuously, then one final; if the phrase is caught by
-  // an early partial and again by the final (same words, same utterance), the
-  // second one must not advance a SECOND page. Reset after every final (the
-  // utterance boundary), ready for the next one.
-  const nextPageFiredRef = useRef(false);
+  // Timestamp of the last "next page" advance — see NEXT_PAGE_COOLDOWN_MS.
+  const lastNextPageAtRef = useRef(0);
+  // How many of the CURRENT utterance's words (Vosk's growing partial hypo-
+  // thesis, split on whitespace) have already been matched against the page.
+  // A partial re-delivers the FULL utterance-so-far on every callback, not
+  // just what's new — reprocessing already-consumed words against the
+  // now-advanced cursor was the "jumps over a sentence" bug: if an early
+  // word (or a similar one) recurs nearby, re-searching for it from the
+  // ADVANCED cursor finds that LATER occurrence and snaps forward to it,
+  // even though nothing new was actually said there. Only the words ADDED
+  // since this count was last updated are matched. Reset to 0 at the start
+  // of a fresh utterance (after a final) and on every page turn (a new
+  // page's text is a different alignment target).
+  const utteranceWordsConsumedRef = useRef(0);
 
   useEffect(() => {
     setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
@@ -465,7 +482,7 @@ export default function ReaderScreen() {
     cuesRef.current = page ? cuesByPage.get(page.id) ?? [] : [];
     readCursorRef.current = 0;
     firedCueIdsRef.current = new Set();
-    nextPageFiredRef.current = false;
+    utteranceWordsConsumedRef.current = 0;
     setReadCursor(0);
     // A new page's tokens start over at index 0 — last page's measured word
     // positions don't apply, and the ball should hide until the new page's
@@ -546,28 +563,38 @@ export default function ReaderScreen() {
   // the eventual final's (mostly-overlapping) words don't double-fire.
   useEffect(() => {
     handleTextRef.current = (text: string, isFinal: boolean) => {
-      // Already advanced the page for THIS utterance — ignore the rest of it
-      // (a later partial, or the eventual final, repeating the same "next
-      // page" phrase plus whatever else was said) rather than aligning its
-      // leftover words against the page we just turned to. Only clears once
-      // the utterance actually ends.
-      if (nextPageFiredRef.current) {
-        if (isFinal) nextPageFiredRef.current = false;
-        return;
-      }
       const lang = langRef.current;
       if (text.toLowerCase().includes(NEXT_PAGE_PHRASES[lang])) {
-        nextPageFiredRef.current = true;
-        goNext();
-        if (isFinal) nextPageFiredRef.current = false;
-        return;
+        // Only act on the FINAL result — a fleeting partial hypothesis can
+        // still be revised away by the time Vosk settles, and page
+        // navigation is high-stakes (skips content, unlike a cue sound)
+        // enough to be worth the extra ~0.5-1s of latency versus a
+        // partial-driven fire. NEXT_PAGE_COOLDOWN_MS on top guards against
+        // Vosk emitting more than one final for what a human said as a
+        // single utterance.
+        if (isFinal) {
+          const now = Date.now();
+          if (now - lastNextPageAtRef.current > NEXT_PAGE_COOLDOWN_MS) {
+            lastNextPageAtRef.current = now;
+            goNext();
+          }
+        }
+        return; // never align this utterance's words as page content, partial or final
       }
       const page = pageRef.current;
       if (page) {
         const ocrLower = page.ocrText.toLowerCase();
         const tokens = tokenize(page.ocrText);
         const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-        for (const word of words) {
+        // Only the words ADDED since this utterance was last looked at — see
+        // utteranceWordsConsumedRef's comment above for why re-matching
+        // already-consumed words (Vosk re-delivers the FULL utterance-so-far
+        // on every partial, not just what's new) was the "cursor jumps over
+        // a sentence" bug whenever a word recurred nearby.
+        const already = Math.min(utteranceWordsConsumedRef.current, words.length);
+        const newWords = words.slice(already);
+        utteranceWordsConsumedRef.current = words.length;
+        for (const word of newWords) {
           // Short/common words (a, the, in, и, в...) match too many spots to
           // align against alone — see ALIGN_MIN_WORD_LENGTH above.
           if (word.length < ALIGN_MIN_WORD_LENGTH) continue;
@@ -621,7 +648,9 @@ export default function ReaderScreen() {
         // re-render the read-so-far highlight without spamming setState.
         setReadCursor(readCursorRef.current);
       }
-      if (isFinal) nextPageFiredRef.current = false;
+      // A final closes out this utterance — the next partial starts a fresh
+      // one, so its words should all be treated as new again.
+      if (isFinal) utteranceWordsConsumedRef.current = 0;
     };
   });
 
@@ -920,10 +949,24 @@ export default function ReaderScreen() {
       runOnJS(handleBallDrop)(ballX.value, ballY.value);
     });
 
-  const ballStyle = useAnimatedStyle(() => ({
-    opacity: ballOpacity.value,
-    transform: [{ translateX: ballX.value }, { translateY: ballY.value - ballBounce.value * 12 }],
-  }));
+  const ballStyle = useAnimatedStyle(() => {
+    // Squash-and-stretch, driven by the same ballBounce value that already
+    // drives the vertical bob so the two stay perfectly in sync: at the
+    // BOTTOM of the bounce (value 0 — start of each cycle, and again every
+    // time it returns low) the ball squashes as if compressed on impact;
+    // at the top (value 1) it stretches slightly as if elongated mid-air.
+    const scaleY = interpolate(ballBounce.value, [0, 1], [0.82, 1.08]);
+    const scaleX = interpolate(ballBounce.value, [0, 1], [1.16, 0.94]);
+    return {
+      opacity: ballOpacity.value,
+      transform: [
+        { translateX: ballX.value },
+        { translateY: ballY.value - ballBounce.value * 12 },
+        { scaleX },
+        { scaleY },
+      ],
+    };
+  });
 
   // The gap above the very FIRST line isn't a RowGapSpacer (there's no
   // previous row to insert one between) — it's the container's own

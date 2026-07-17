@@ -74,9 +74,22 @@ export default function DraggablePageCard({
   function computeTargetIndex(dy: number) {
     'worklet';
     const heights = itemHeights.value;
+    // A card that hasn't reported onLayout yet (e.g. right after the list's
+    // length last changed, which resets every entry to 0 until each card
+    // re-measures) has height 0 here — but MY card is definitely laid out
+    // and measured, since I'm mid-drag. Use my own height as the fallback
+    // for any slot that reads 0, instead of treating it as truly zero-width.
+    // Without this, a handful of still-unmeasured 0-width slots collapse
+    // the whole position math toward the top: EVERY card's cumulative
+    // offset shrinks toward 0, so even a small/moderate drag walks through
+    // many "slots" in one go and overshoots straight to the last index —
+    // and a last-card drag's own cumulative starts near 0 for the same
+    // reason, so it can just as easily overshoot to the first index. That's
+    // exactly a first<->last swap on what should be a modest reorder.
+    const myHeight = heights[index] || 100;
+    const heightOf = (i: number) => heights[i] || myHeight;
     let cumulative = 0;
-    for (let i = 0; i < index; i++) cumulative += (heights[i] ?? 0) + PAGE_LIST_GAP;
-    const myHeight = heights[index] ?? 0;
+    for (let i = 0; i < index; i++) cumulative += heightOf(i) + PAGE_LIST_GAP;
     const myCenterY = cumulative + dy + myHeight / 2;
 
     // Sticky: stay on whichever slot is already the target (expanded a
@@ -85,8 +98,8 @@ export default function DraggablePageCard({
     const current = targetIndex.value;
     if (current >= 0 && current < heights.length) {
       let currentStart = 0;
-      for (let i = 0; i < current; i++) currentStart += (heights[i] ?? 0) + PAGE_LIST_GAP;
-      const currentSlot = (heights[current] ?? 0) + PAGE_LIST_GAP;
+      for (let i = 0; i < current; i++) currentStart += heightOf(i) + PAGE_LIST_GAP;
+      const currentSlot = heightOf(current) + PAGE_LIST_GAP;
       if (myCenterY >= currentStart - REORDER_HYSTERESIS && myCenterY < currentStart + currentSlot + REORDER_HYSTERESIS) {
         return current;
       }
@@ -94,7 +107,7 @@ export default function DraggablePageCard({
 
     let acc = 0;
     for (let i = 0; i < heights.length; i++) {
-      const slot = (heights[i] ?? 0) + PAGE_LIST_GAP;
+      const slot = heightOf(i) + PAGE_LIST_GAP;
       if (myCenterY < acc + slot) return i;
       acc += slot;
     }
@@ -157,7 +170,11 @@ export default function DraggablePageCard({
 
     let shiftY = 0;
     if (!isMe && from !== -1) {
-      const draggedHeight = (itemHeights.value[from] ?? 0) + PAGE_LIST_GAP;
+      // Same unmeasured-height fallback as computeTargetIndex — an
+      // unmeasured dragged card would otherwise "make room" by only
+      // PAGE_LIST_GAP instead of a full card height, leaving neighbors
+      // visibly overlapping the dragged card mid-reorder.
+      const draggedHeight = (itemHeights.value[from] || itemHeights.value[index] || 100) + PAGE_LIST_GAP;
       if (to > from && index > from && index <= to) shiftY = -draggedHeight;
       else if (to < from && index < from && index >= to) shiftY = draggedHeight;
     }
