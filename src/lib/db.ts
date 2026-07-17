@@ -626,25 +626,31 @@ export async function renameRecording(id: string, name: string): Promise<void> {
   await db.runAsync('UPDATE recordings SET name = ? WHERE id = ?', [name, id]);
 }
 
-/** Re-trims/re-fades an already-saved recording in place — the same envelope
- *  editor used at record time, reopened later from My Recordings. A cue or
- *  ambient that already picked this recording copied its envelope at that
- *  moment (see chooseRecording in page/[id].tsx), so this only affects the
- *  Recording row itself: previewing it here, and any NEW place it gets
+/** Re-trims/re-fades an already-saved recording in place (optionally
+ *  swapping in a freshly re-recorded file too) — the same envelope editor
+ *  used at record time, reopened later from My Recordings. A cue or ambient
+ *  that already picked this recording copied its envelope AND file uri at
+ *  that moment (see chooseRecording in page/[id].tsx), so this only affects
+ *  the Recording row itself: previewing it here, and any NEW place it gets
  *  assigned to from now on — same "already-placed uses keep their old
- *  values" rule as deleting a recording. */
+ *  values" rule as deleting a recording. Pass the existing fileUri/durationMs
+ *  back unchanged when only the trim/fades changed. */
 export async function updateRecordingTrim(
   id: string,
-  params: { startMs: number | null; endMs: number | null; fadeInMs: number | null; fadeOutMs: number | null }
+  params: {
+    fileUri: string;
+    durationMs: number | null;
+    startMs: number | null;
+    endMs: number | null;
+    fadeInMs: number | null;
+    fadeOutMs: number | null;
+  }
 ): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('UPDATE recordings SET start_ms = ?, end_ms = ?, fade_in_ms = ?, fade_out_ms = ? WHERE id = ?', [
-    params.startMs,
-    params.endMs,
-    params.fadeInMs,
-    params.fadeOutMs,
-    id,
-  ]);
+  await db.runAsync(
+    'UPDATE recordings SET file_uri = ?, duration_ms = ?, start_ms = ?, end_ms = ?, fade_in_ms = ?, fade_out_ms = ? WHERE id = ?',
+    [params.fileUri, params.durationMs, params.startMs, params.endMs, params.fadeInMs, params.fadeOutMs, id]
+  );
 }
 
 export async function deleteRecording(id: string): Promise<void> {

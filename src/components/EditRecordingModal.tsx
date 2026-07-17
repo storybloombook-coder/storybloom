@@ -1,18 +1,31 @@
-// EditRecordingModal.tsx — re-trim/re-fade an ALREADY-SAVED recording from My
-// Recordings. Same drag-to-trim waveform editor as StandaloneRecordModal /
-// page/[id].tsx's record sheet, minus the record-a-fresh-clip step: it opens
-// straight into the trim editor, seeded from the recording's own stored
-// envelope (startMs/endMs/fadeInMs/fadeOutMs) and duration.
+// EditRecordingModal.tsx — re-trim/re-fade (or replace entirely, via
+// re-record) an ALREADY-SAVED recording from My Recordings. Same drag-to-trim
+// waveform editor as StandaloneRecordModal / page/[id].tsx's record sheet: it
+// opens straight into the trim editor, seeded from the recording's own
+// stored envelope (startMs/endMs/fadeInMs/fadeOutMs) and duration, with the
+// right-side "↻ Re-record" button available too (records a fresh clip and,
+// on Save, copies it in as the recording's new permanent file — see
+// pendingUri below).
 //
-// The waveform bars here are a flat placeholder, not real amplitude — unlike
-// a fresh recording (where each bar is a live metering sample captured while
-// recording), there's no cheap way to pull amplitude back out of an already-
-// encoded m4a file without a PCM decode step this app doesn't have. The trim
-// handles and preview playback work exactly the same either way; only the
-// visual peaks are honest-but-flat instead of real.
+// The waveform bars for the ORIGINAL clip are a flat placeholder, not real
+// amplitude — unlike a fresh recording (where each bar is a live metering
+// sample captured while recording), there's no cheap way to pull amplitude
+// back out of an already-encoded m4a file without a PCM decode step this app
+// doesn't have. The trim handles and preview playback work exactly the same
+// either way; only the visual peaks are honest-but-flat instead of real.
+// (Re-recording via the ↻ button DOES get a real waveform, same as a fresh
+// recording, since it's captured live from that point on.)
 
 import * as Haptics from 'expo-haptics';
-import { createAudioPlayer } from 'expo-audio';
+import {
+  createAudioPlayer,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
+import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -34,6 +47,19 @@ import TactileButton from './TactileButton';
 const WAVEFORM_BARS = 56;
 const MIN_HANDLE_GAP_PX = 24;
 const PLACEHOLDER_WAVEFORM = new Array(WAVEFORM_BARS).fill(0.45);
+
+function bucketWaveform(raw: number[], bars: number): number[] {
+  if (raw.length === 0) return PLACEHOLDER_WAVEFORM;
+  const out: number[] = [];
+  for (let i = 0; i < bars; i++) {
+    const start = Math.floor((i / bars) * raw.length);
+    const end = Math.max(start + 1, Math.floor(((i + 1) / bars) * raw.length));
+    const slice = raw.slice(start, end);
+    const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
+    out.push(Math.max(0.08, avg));
+  }
+  return out;
+}
 
 export default function EditRecordingModal({
   visible,
@@ -62,14 +88,27 @@ export default function EditRecordingModal({
   const [waveformWidth, setWaveformWidth] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once the parent chooses to re-record instead of just re-trimming —
+  // from then on the editor operates on THIS fresh clip (its own full-length
+  // trim range) instead of the original file, and Save copies it in as the
+  // recording's new permanent file.
+  const [pendingUri, setPendingUri] = useState<string | null>(null);
+  // Real amplitude, captured live only while re-recording (see PLACEHOLDER_WAVEFORM
+  // for why the ORIGINAL clip can't get the same treatment).
+  const [rawWaveform, setRawWaveform] = useState<number[]>([]);
+  const [displayWaveform, setDisplayWaveform] = useState<number[]>(PLACEHOLDER_WAVEFORM);
 
   const startHandleX = useSharedValue(0);
   const endHandleX = useSharedValue(0);
   const startHandleDragStart = useSharedValue(0);
   const endHandleDragStart = useSharedValue(0);
 
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(recorder, 100);
   const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const previewStopRef = useRef<(() => void) | null>(null);
+
+  const activeUri = pendingUri ?? recording?.fileUri ?? null;
 
   // Seed every field from the recording's own stored envelope each time a
   // (different) one is opened for editing.
@@ -77,6 +116,9 @@ export default function EditRecordingModal({
     if (!visible || !recording) return;
     setError(null);
     setPreviewPlayhead(null);
+    setPendingUri(null);
+    setRawWaveform([]);
+    setDisplayWaveform(PLACEHOLDER_WAVEFORM);
     const durSec = (recording.durationMs ?? 0) / 1000;
     if (durSec > 0) {
       setRecordingDuration(durSec);
@@ -105,6 +147,17 @@ export default function EditRecordingModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, recording?.id]);
 
+  // One amplitude sample per poll while actively re-recording, from the
+  // recorder's own metering — becomes the waveform with no need to decode
+  // the finished file (same trick as a fresh recording).
+  useEffect(() => {
+    if (!recorderState.isRecording) return;
+    const dB = recorderState.metering;
+    if (typeof dB !== 'number') return;
+    const normalized = Math.max(0, Math.min(1, (dB + 50) / 50));
+    setRawWaveform((prev) => [...prev, normalized]);
+  }, [recorderState.durationMillis, recorderState.isRecording]);
+
   // Derived: 1s fades when the matching checkbox is on, clamped to half the
   // trimmed length — same rule as recording a fresh clip.
   useEffect(() => {
@@ -131,7 +184,7 @@ export default function EditRecordingModal({
   }
 
   function togglePreview() {
-    if (!recording) return;
+    if (!activeUri) return;
     if (previewPlayhead !== null) {
       stopPreview();
       return;
@@ -139,7 +192,7 @@ export default function EditRecordingModal({
     try {
       previewPlayerRef.current?.remove();
     } catch {}
-    const player = createAudioPlayer(recording.fileUri);
+    const player = createAudioPlayer(activeUri);
     previewPlayerRef.current = player;
     const rangeSec = Math.max(0.001, trimEnd - trimStart);
     setPreviewPlayhead(0);
@@ -156,8 +209,50 @@ export default function EditRecordingModal({
     });
   }
 
+  async function startReRecording() {
+    setError(null);
+    const perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      setError('Microphone access is required to re-record.');
+      return;
+    }
+    stopPreview();
+    setRawWaveform([]);
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+  }
+
+  async function stopReRecording() {
+    await recorder.stop();
+    const uri = recorder.uri;
+    setDisplayWaveform(bucketWaveform(rawWaveform, WAVEFORM_BARS));
+    if (!uri) return;
+    setPendingUri(uri);
+
+    const probe = createAudioPlayer(uri);
+    let attempts = 0;
+    const poll = () => {
+      attempts += 1;
+      if (probe.duration > 0 || attempts > 40) {
+        const dur = probe.duration > 0 ? probe.duration : 1;
+        const f = Math.min(1, dur / 2);
+        setRecordingDuration(dur);
+        setTrimStart(0);
+        setTrimEnd(dur);
+        setFadeIn(fadeInOn ? f : 0);
+        setFadeOut(fadeOutOn ? f : 0);
+        probe.remove();
+      } else {
+        setTimeout(poll, 50);
+      }
+    };
+    poll();
+  }
+
   function handleClose() {
     stopPreview();
+    if (recorderState.isRecording) recorder.stop().catch(() => {});
     onClose();
   }
 
@@ -166,7 +261,20 @@ export default function EditRecordingModal({
     setSaving(true);
     setError(null);
     try {
+      let fileUri = recording.fileUri;
+      let durationMs = recording.durationMs;
+      if (pendingUri) {
+        const dir = new Directory(Paths.document, 'recordings');
+        if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+        const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.m4a`;
+        const dest = new ExpoFile(dir, filename);
+        await new ExpoFile(pendingUri).copy(dest);
+        fileUri = dest.uri;
+        durationMs = Math.round(recordingDuration * 1000);
+      }
       await updateRecordingTrim(recording.id, {
+        fileUri,
+        durationMs,
         startMs: Math.round(trimStart * 1000),
         endMs: Math.round(trimEnd * 1000),
         fadeInMs: Math.round(fadeIn * 1000),
@@ -234,6 +342,21 @@ export default function EditRecordingModal({
               <Text style={[styles.sheetTitle, { color: textColor }]} numberOfLines={1}>
                 Edit “{recording?.name}”
               </Text>
+
+              {recorderState.isRecording ? (
+                <>
+                  <View style={styles.recordStatusRow}>
+                    <View style={styles.recordDot} />
+                    <Text style={[styles.recordTimer, { color: textColor }]}>
+                      {Math.floor((recorderState.durationMillis ?? 0) / 1000)}s
+                    </Text>
+                  </View>
+                  <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={stopReRecording}>
+                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop</Text>
+                  </TactileButton>
+                </>
+              ) : (
+                <>
               <Text style={[styles.recordHint, { color: subColor }]}>
                 Drag the edges to trim · {trimStart.toFixed(1)}s–{trimEnd.toFixed(1)}s of{' '}
                 {recordingDuration.toFixed(1)}s
@@ -257,7 +380,7 @@ export default function EditRecordingModal({
                 </View>
 
                 <View style={[styles.waveform, { flex: 1 }]} onLayout={onWaveformLayout}>
-                  {PLACEHOLDER_WAVEFORM.map((v, i) => (
+                  {displayWaveform.map((v, i) => (
                     <View
                       key={i}
                       style={[
@@ -298,8 +421,13 @@ export default function EditRecordingModal({
                 </View>
 
                 <View style={styles.waveformSideCol}>
-                  <View style={[styles.waveformSideButton, { opacity: 0.3, borderColor: subColor }]} />
-                  <Text style={[styles.waveformSideCaption, { color: 'transparent' }]}>-</Text>
+                  <TactileButton
+                    style={[styles.waveformSideButton, { borderColor: '#ff453a' }]}
+                    onPress={startReRecording}
+                  >
+                    <Text style={[styles.waveformSideButtonIcon, { color: '#ff453a' }]}>↻</Text>
+                  </TactileButton>
+                  <Text style={[styles.waveformSideCaption, { color: subColor }]}>Re-record</Text>
                 </View>
               </View>
 
@@ -317,9 +445,12 @@ export default function EditRecordingModal({
                   <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade out (1s)</Text>
                 </TactileButton>
               </View>
+                </>
+              )}
 
               {error && <Text style={styles.errorText}>{error}</Text>}
 
+              {!recorderState.isRecording && (
               <View style={styles.bottomActionsRow}>
                 <View style={styles.toolBtnWrap}>
                   <TactileButton
@@ -338,6 +469,7 @@ export default function EditRecordingModal({
                   </TactileButton>
                 </View>
               </View>
+              )}
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
@@ -351,6 +483,10 @@ const styles = StyleSheet.create({
   sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 32, gap: 8 },
   sheetTitle: { fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 2 },
   recordHint: { fontSize: 13, textAlign: 'center', marginBottom: 2 },
+  recordStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 8 },
+  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ff453a' },
+  recordTimer: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  destructiveButton: { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' },
 
   waveformRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
   waveformSideCol: { alignItems: 'center', gap: 4, paddingTop: 8 },

@@ -177,7 +177,7 @@ export default function RecordingsList() {
             <View style={styles.kindToggleRow}>
               {(['all', 'ambient', 'sound'] as const).map((k) => {
                 const active = kindFilter === k;
-                const label = k === 'all' ? 'All' : k === 'ambient' ? '🎵 Ambient' : '🔊 Sound effects';
+                const label = k === 'all' ? 'All' : k === 'ambient' ? '🎵 Ambient' : '🔊 Sounds';
                 return (
                   <TactileButton
                     key={k}
@@ -238,21 +238,15 @@ export default function RecordingsList() {
 
       <View style={styles.recordButtonRow}>
         <View style={styles.recordButtonWrap}>
-          <TactileButton
-            style={[styles.recordButton, { backgroundColor: cardBackground }]}
-            onPress={() => setRecordKind('ambient')}
-          >
+          <TactileButton style={styles.recordButton} onPress={() => setRecordKind('ambient')}>
             <Text style={styles.recordButtonEmoji}>🎵</Text>
-            <Text style={[styles.recordButtonLabel, { color: textColor }]}>Record an Ambient</Text>
+            <Text style={styles.recordButtonLabel}>Record an Ambient</Text>
           </TactileButton>
         </View>
         <View style={styles.recordButtonWrap}>
-          <TactileButton
-            style={[styles.recordButton, { backgroundColor: cardBackground }]}
-            onPress={() => setRecordKind('sound')}
-          >
+          <TactileButton style={styles.recordButton} onPress={() => setRecordKind('sound')}>
             <Text style={styles.recordButtonEmoji}>🔊</Text>
-            <Text style={[styles.recordButtonLabel, { color: textColor }]}>Record a Sound</Text>
+            <Text style={styles.recordButtonLabel}>Record a Sound</Text>
           </TactileButton>
         </View>
       </View>
@@ -325,15 +319,27 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 16,
     gap: 8,
+    backgroundColor: 'rgba(255,69,58,0.15)',
+    borderWidth: 2,
+    borderColor: '#ff453a',
   },
   recordButtonEmoji: { fontSize: 20 },
-  recordButtonLabel: { fontSize: 14, fontWeight: '600' },
+  recordButtonLabel: { fontSize: 14, fontWeight: '600', color: '#ff453a' },
 
   filterBar: { paddingHorizontal: 16, paddingTop: 12, gap: 10 },
   searchInput: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15 },
   kindToggleRow: { flexDirection: 'row', gap: 8 },
-  kindToggleBtn: { flex: 1, borderRadius: 10, borderWidth: 1.5, paddingVertical: 8, alignItems: 'center' },
-  kindToggleLabel: { fontSize: 13, fontWeight: '600' },
+  kindToggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+  },
+  kindToggleLabel: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
 
   list: { padding: 16, gap: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, paddingHorizontal: 4 },
