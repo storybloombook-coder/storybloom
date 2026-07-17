@@ -24,7 +24,7 @@ import TactileButton from '../../components/TactileButton';
 import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
-import { cueAtRange, tokenize } from '../../lib/reader/text';
+import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import { NEXT_PAGE_PHRASES, type SpeechLang } from '../../lib/speech/types';
 import { isReadablePage, type Book, type Cue, type Page } from '../../lib/types';
@@ -506,6 +506,34 @@ export default function ReaderScreen() {
     }
   }
 
+  // Manual override for the auto-alignment cursor: tap any word to jump the
+  // read-so-far position there — corrects a bad auto-jump (see the duplicate-
+  // word guard above; still not foolproof) or lets a parent deliberately
+  // rewind to reread a passage with a child. Moving backward un-fires cues
+  // from the new position onward so they can trigger again on the reread;
+  // moving forward silently marks skipped-over cues as fired (no burst of
+  // catch-up sounds — same reasoning as the ambiguous-word guard).
+  function moveReadCursorTo(token: Token) {
+    const newCursor = token.start;
+    const oldCursor = readCursorRef.current;
+    if (newCursor === oldCursor) return;
+    if (newCursor < oldCursor) {
+      for (const cue of cuesRef.current) {
+        if (cue.charStart != null && cue.charStart >= newCursor) {
+          firedCueIdsRef.current.delete(cue.id);
+        }
+      }
+    } else {
+      for (const cue of cuesRef.current) {
+        if (cue.charStart != null && cue.charStart >= oldCursor && cue.charStart < newCursor) {
+          firedCueIdsRef.current.add(cue.id);
+        }
+      }
+    }
+    readCursorRef.current = newCursor;
+    setReadCursor(newCursor);
+  }
+
   function goNext() {
     stopCue();
     if (index < storyPages.length - 1) {
@@ -621,6 +649,7 @@ export default function ReaderScreen() {
                   return (
                     <Text
                       key={i}
+                      onPress={() => moveReadCursorTo(t)}
                       style={isRead ? [styles.readWord, { color: textColor }] : { color: textColor }}
                     >
                       {t.text}
@@ -631,7 +660,10 @@ export default function ReaderScreen() {
                 return (
                   <Text
                     key={i}
-                    onPress={() => fireCue(cue!, i)}
+                    onPress={() => {
+                      fireCue(cue!, i);
+                      moveReadCursorTo(t);
+                    }}
                     style={[
                       styles.cueWord,
                       {
@@ -655,7 +687,10 @@ export default function ReaderScreen() {
           ) : (
             <Text style={[styles.noText, { color: subColor }]}>No text on this page — just turn the page.</Text>
           )}
-          <Text style={[styles.hint, { color: subColor }]}>Tap a highlighted word to play its sound.</Text>
+          <Text style={[styles.hint, { color: subColor }]}>
+            Tap a highlighted word to play its sound. Tap any word to jump the reading position
+            there — handy for a reread or to fix a mis-tracked spot.
+          </Text>
         </ScrollView>
       </View>
 
