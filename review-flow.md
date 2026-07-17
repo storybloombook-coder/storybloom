@@ -1,3 +1,14 @@
+> ⚠️ **SUPERSEDED — this screen was never built this way, and won't be.** The
+> manual per-cue Confirm/Remove/Swap review flow described below was replaced
+> by a lighter "readiness gate" (a Ready/N-things-to-check popup — see
+> `book/[id].tsx` + `lib/reader/readiness.ts`) before this screen was ever
+> implemented. Kept for ONE reason: **"Try another"** (auto-cycle to the next-
+> best candidate sound, distinct from the "Swap" manual-pick action that DOES
+> exist today in the sound picker) was never built anywhere, and this doc is
+> the only place its intended design is written down. If "Try another" is
+> ever built, take the concept from here; ignore everything else about the
+> screen layout/counter/approval flow — none of that reflects the real app.
+
 # Review Flow — approving a book's sounds
 
 After a book is processed, the parent reviews the AI's proposed sounds page by
