@@ -117,6 +117,15 @@ type CueTarget = { cue: Cue } | { token: Token };
  *  page's single ambient bed. */
 type RecordTarget = CueTarget | 'ambient';
 
+/** The word (or "Ambient") a recording is FOR — used to both pre-fill and
+ *  fall back the "My recordings" name, so a recording is always findable by
+ *  the word it was made for even if the parent never types a custom name. */
+function defaultRecordingName(target: RecordTarget): string {
+  if (target === 'ambient') return 'Ambient';
+  if ('cue' in target) return target.cue.triggerText;
+  return target.token.text;
+}
+
 /** Custom parent recordings are stored as `custom:<file uri>` in soundId — no
  *  schema change needed, and it's directly playable with no lookup table. */
 const CUSTOM_PREFIX = 'custom:';
@@ -526,6 +535,10 @@ export default function PageEditorScreen() {
     if (!wordDetail) return;
     setRecordTarget(wordDetail);
     setRecordedUri(null);
+    // Pre-fill the "My recordings" name with the word being recorded, so it's
+    // findable later without the parent having to type anything — still
+    // editable if they want something more specific.
+    setRecordingName(defaultRecordingName(wordDetail));
     setWordDetail(null);
   }
 
@@ -540,6 +553,7 @@ export default function PageEditorScreen() {
     setAmbientDetailOpen(false);
     setRecordTarget('ambient');
     setRecordedUri(null);
+    setRecordingName(defaultRecordingName('ambient'));
   }
 
   async function removeAmbient() {
@@ -803,7 +817,10 @@ export default function PageEditorScreen() {
       // the Recording type doc).
       const originBook = await getBook(page.bookId);
       await createRecording({
-        name: recordingName.trim() || `Recording ${new Date().toLocaleDateString()}`,
+        // Falls back to the word/target it was recorded for (same as the
+        // pre-filled field above) rather than a generic dated placeholder —
+        // a recording should always be findable by what it's FOR.
+        name: recordingName.trim() || originLabel,
         fileUri: dest.uri,
         durationMs: Math.round(recordingDuration * 1000),
         startMs,
