@@ -359,7 +359,7 @@ export default function EditRecordingModal({
                 <>
               <Text style={[styles.recordHint, { color: subColor }]}>
                 Drag the edges to trim · {trimStart.toFixed(1)}s–{trimEnd.toFixed(1)}s of{' '}
-                {recordingDuration.toFixed(1)}s
+                {recordingDuration.toFixed(1)}s · the full clip is always kept, only the played range changes
               </Text>
 
               <View style={styles.waveformRow}>
