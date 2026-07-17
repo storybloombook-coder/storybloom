@@ -77,6 +77,73 @@ function findWordFrom(hay: string, needle: string, from: number): number {
   }
 }
 
+/** Standard edit distance (insert/delete/substitute), O(len(a)*len(b)) —
+ *  fine here since both sides are single words, never full sentences. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prevDiag = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prevDiag : 1 + Math.min(prevDiag, dp[j], dp[j - 1]);
+      prevDiag = tmp;
+    }
+  }
+  return dp[n];
+}
+
+/** Closest WORD token (by edit distance) to `word` within [from, from +
+ *  lookahead], for when no EXACT match exists — Vosk's small models often
+ *  get a word's ending slightly wrong, especially against Russian's rich
+ *  inflection, and an exact-only search misses those entirely even though
+ *  the word is clearly recognizable. Tolerance is tight and scales with
+ *  word length (a 1-character slip on a 4-letter word is already a 25%
+ *  difference) specifically to avoid this becoming a NEW source of the
+ *  wrong-word-jump bugs the exact-match guards above exist to prevent. */
+function findWordFuzzy(
+  tokens: Token[],
+  word: string,
+  from: number,
+  lookahead: number
+): { start: number; end: number } | null {
+  const maxDist = word.length <= 5 ? 1 : 2;
+  let best: { start: number; end: number } | null = null;
+  let bestDist = Infinity;
+  for (const t of tokens) {
+    if (t.isSpace || t.start < from || t.start > from + lookahead) continue;
+    const candidate = t.text.toLowerCase();
+    if (Math.abs(candidate.length - word.length) > maxDist) continue; // cheap pre-filter
+    const dist = levenshtein(word, candidate);
+    if (dist <= maxDist && dist < bestDist) {
+      bestDist = dist;
+      best = { start: t.start, end: t.end };
+    }
+  }
+  return best;
+}
+
+/** Exact match first (cheap, and the common case); fuzzy fallback only
+ *  when nothing exact is found nearby. Shared by both the primary
+ *  alignment match and the "does this word recur nearby" ambiguity check
+ *  below, so a fuzzy near-duplicate gets the same burst-fire protection an
+ *  exact duplicate already does. */
+function matchWordInWindow(
+  ocrLower: string,
+  tokens: Token[],
+  word: string,
+  from: number,
+  lookahead: number
+): { start: number; end: number } | null {
+  if (lookahead < 0) return null;
+  const idx = findWordFrom(ocrLower, word, from);
+  if (idx >= 0 && idx <= from + lookahead) return { start: idx, end: idx + word.length };
+  return findWordFuzzy(tokens, word, from, lookahead);
+}
+
 // How far ahead of the current read position a recognized word is still
 // trusted to belong to — keeps a misheard/filler word from yanking the
 // cursor (and cue-firing) far down the page. Shrunk from 180: that width made
@@ -126,6 +193,14 @@ function RowGapSpacer({ rowIndex, activeRow }: { rowIndex: number; activeRow: Sh
 // most recently read (the last token with end <= readCursor), sized/spaced
 // against BALL_SIZE below.
 const BALL_SIZE = 32;
+
+// How far the ambient bed ducks while the mic is actively listening — it
+// loops continuously right through the parent's own speech, feeding back
+// into the same mic Vosk is trying to recognize against. Full mute would
+// make page turns/silence feel abrupt; a duck to a low murmur keeps the
+// scene alive while giving the recognizer a much cleaner signal.
+const AMBIENT_DUCK_VOLUME = 0.18;
+const AMBIENT_DUCK_MS = 350;
 
 function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
   switch (status) {
@@ -186,6 +261,7 @@ export default function ReaderScreen() {
 
   const ambientPlayerRef = useRef<Player | null>(null);
   const ambientStopRef = useRef<(() => void) | null>(null);
+  const ambientDuckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cuePlayerRef = useRef<Player | null>(null);
   const cueStopRef = useRef<(() => void) | null>(null);
   // Pre-created (but not yet playing) players for the CURRENT page's cues,
@@ -281,6 +357,8 @@ export default function ReaderScreen() {
   }, [bookId]);
 
   const stopAmbient = useCallback(() => {
+    if (ambientDuckTimerRef.current) clearInterval(ambientDuckTimerRef.current);
+    ambientDuckTimerRef.current = null;
     ambientStopRef.current?.();
     ambientStopRef.current = null;
     const p = ambientPlayerRef.current;
@@ -292,6 +370,42 @@ export default function ReaderScreen() {
       } catch {}
     }, 700);
   }, []);
+
+  // Ramps the ambient bed's volume toward `target` over AMBIENT_DUCK_MS —
+  // used to duck it while listening and restore it otherwise. A plain
+  // interval (matching the style already used for fades in
+  // lib/audio/playRange.ts) rather than Reanimated, since it's driving a
+  // native player property, not a UI style. Only ONE ramp runs at a time;
+  // starting a new one (e.g. mic status flips quickly) cancels the last.
+  const rampAmbientVolume = useCallback((target: number) => {
+    if (ambientDuckTimerRef.current) clearInterval(ambientDuckTimerRef.current);
+    const player = ambientPlayerRef.current;
+    if (!player) return;
+    const start = player.volume;
+    const startedAt = Date.now();
+    ambientDuckTimerRef.current = setInterval(() => {
+      const t = Math.min(1, (Date.now() - startedAt) / AMBIENT_DUCK_MS);
+      try {
+        player.volume = start + (target - start) * t;
+      } catch {
+        // Player was removed (e.g. page turned mid-ramp) — nothing left to animate.
+        if (ambientDuckTimerRef.current) clearInterval(ambientDuckTimerRef.current);
+        ambientDuckTimerRef.current = null;
+        return;
+      }
+      if (t >= 1 && ambientDuckTimerRef.current) {
+        clearInterval(ambientDuckTimerRef.current);
+        ambientDuckTimerRef.current = null;
+      }
+    }, 40);
+  }, []);
+
+  // Duck the instant listening actually starts (not while merely loading),
+  // and restore whenever it isn't — muted, error, or idle all mean nothing
+  // is competing with the ambient bed for the mic's attention.
+  useEffect(() => {
+    rampAmbientVolume(micStatus === 'listening' ? AMBIENT_DUCK_VOLUME : 1);
+  }, [micStatus, rampAmbientVolume]);
 
   const stopCue = useCallback(() => {
     cueStopRef.current?.();
@@ -458,9 +572,14 @@ export default function ReaderScreen() {
           // align against alone — see ALIGN_MIN_WORD_LENGTH above.
           if (word.length < ALIGN_MIN_WORD_LENGTH) continue;
           const from = readCursorRef.current;
-          const idx = findWordFrom(ocrLower, word, from);
-          if (idx < 0 || idx > from + ALIGN_LOOKAHEAD) continue; // not found nearby — skip, don't jump wildly
-          const newCursor = idx + word.length;
+          // Exact match first, falling back to a small edit-distance
+          // tolerance when nothing exact is nearby (see findWordFuzzy) —
+          // catches Vosk mis-hearing a word's ending without needing
+          // better raw recognition at all.
+          const match = matchWordInWindow(ocrLower, tokens, word, from, ALIGN_LOOKAHEAD);
+          if (!match) continue; // not found nearby — skip, don't jump wildly
+          const idx = match.start;
+          const newCursor = match.end;
           // If this same word occurs AGAIN shortly after, we can't be sure
           // which occurrence was actually just heard — a single recognized
           // word is ambiguous evidence either way. Firing every queued cue
@@ -469,8 +588,8 @@ export default function ReaderScreen() {
           // bug: instead, only fire the cue(s) sitting AT this occurrence
           // itself, and let the earlier ones fire (as normal) if their own
           // trigger words get recognized directly.
-          const nextSame = findWordFrom(ocrLower, word, newCursor);
-          const ambiguous = nextSame >= 0 && nextSame <= from + ALIGN_LOOKAHEAD;
+          const nextSame = matchWordInWindow(ocrLower, tokens, word, newCursor, from + ALIGN_LOOKAHEAD - newCursor);
+          const ambiguous = nextSame !== null;
           const fireFrom = ambiguous ? idx : from;
           for (const cue of cuesRef.current) {
             if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
