@@ -34,7 +34,15 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../../components/TactileButton';
 import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/audio/playRange';
@@ -95,7 +103,7 @@ function extractWords(text: string): string[] {
 // Bouncing-ball reading-position marker: hops to sit above whichever word was
 // most recently read (the last token with end <= readCursor), sized/spaced
 // against BALL_SIZE below.
-const BALL_SIZE = 16;
+const BALL_SIZE = 32;
 
 function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
   switch (status) {
@@ -585,8 +593,10 @@ export default function ReaderScreen() {
   function positionBallAt(index: number): boolean {
     const pos = wordLayoutsRef.current.get(index);
     if (!pos) return false;
-    ballX.value = withSpring(pos.x + pos.width / 2 - BALL_SIZE / 2, { damping: 16, stiffness: 180 });
-    ballY.value = withSpring(pos.y - BALL_SIZE - 6, { damping: 16, stiffness: 180 });
+    // mass 0.85 (default 1) — 15% less inertia so the hop settles a touch
+    // quicker/snappier instead of floating into place.
+    ballX.value = withSpring(pos.x + pos.width / 2 - BALL_SIZE / 2, { damping: 16, stiffness: 180, mass: 0.85 });
+    ballY.value = withSpring(pos.y - BALL_SIZE - 6, { damping: 16, stiffness: 180, mass: 0.85 });
     ballOpacity.value = withTiming(1, { duration: 150 });
     return true;
   }
@@ -630,9 +640,64 @@ export default function ReaderScreen() {
     if (index > 0) setIndex((i) => i - 1);
   }
 
+  /** Nearest measured word to a drop point (both in flow-container-relative
+   *  coordinates) — "nearest" rather than "inside" so a drop that lands in
+   *  the gap between words/lines still resolves to something sensible. */
+  function findClosestWordIndex(x: number, y: number): number {
+    let best = -1;
+    let bestDist = Infinity;
+    for (const [i, pos] of wordLayoutsRef.current) {
+      const cx = pos.x + pos.width / 2;
+      const cy = pos.y + pos.height / 2;
+      const dist = (cx - x) ** 2 + (cy - y) ** 2;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  function handleBallDrop(x: number, y: number) {
+    const page = pageRef.current;
+    if (!page) return;
+    // Invert positionBallAt's own offset to recover an approximate
+    // word-center point from where the ball itself was dropped.
+    const dropCenterX = x + BALL_SIZE / 2;
+    const dropTopY = y + BALL_SIZE + 6;
+    const idx = findClosestWordIndex(dropCenterX, dropTopY);
+    if (idx < 0) {
+      if (currentWordIndexRef.current >= 0) positionBallAt(currentWordIndexRef.current);
+      ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
+      return;
+    }
+    const toks = tokenize(page.ocrText);
+    const token = toks[idx];
+    if (token) moveReadCursorTo(token);
+    ballBounce.value = withRepeat(withTiming(1, { duration: 320 }), -1, true);
+  }
+
+  const ballDragStartX = useSharedValue(0);
+  const ballDragStartY = useSharedValue(0);
+  const ballDragGesture = Gesture.Pan()
+    .hitSlop(14)
+    .onStart(() => {
+      ballDragStartX.value = ballX.value;
+      ballDragStartY.value = ballY.value;
+      ballBounce.value = 0; // hold still while dragging — bounce would fight the finger
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+    })
+    .onUpdate((e) => {
+      ballX.value = ballDragStartX.value + e.translationX;
+      ballY.value = ballDragStartY.value + e.translationY;
+    })
+    .onEnd(() => {
+      runOnJS(handleBallDrop)(ballX.value, ballY.value);
+    });
+
   const ballStyle = useAnimatedStyle(() => ({
     opacity: ballOpacity.value,
-    transform: [{ translateX: ballX.value }, { translateY: ballY.value - ballBounce.value * 8 }],
+    transform: [{ translateX: ballX.value }, { translateY: ballY.value - ballBounce.value * 12 }],
   }));
 
   if (loading) {
@@ -724,7 +789,9 @@ export default function ReaderScreen() {
         <ScrollView contentContainerStyle={styles.textWrap}>
           {page.ocrText.trim() ? (
             <View style={styles.flowWrap}>
-              <Animated.View pointerEvents="none" style={[styles.ball, ballStyle]} />
+              <GestureDetector gesture={ballDragGesture}>
+                <Animated.View style={[styles.ball, ballStyle]} />
+              </GestureDetector>
               {tokens.map((t, i) => {
                 // Karaoke-style read-so-far highlight — driven by the same
                 // speech-alignment cursor that fires cues, so it tracks
@@ -880,7 +947,17 @@ const styles = StyleSheet.create({
   textWrap: { paddingHorizontal: 22, paddingVertical: 16, gap: 20 },
   // marginTop leaves headroom above the first line for the ball to bounce
   // into without clipping against the container's own top edge.
-  flowWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', position: 'relative', marginTop: 26 },
+  // rowGap/marginTop leave enough headroom above EVERY line (not just the
+  // first) for the bigger ball plus its bounce to sit between lines without
+  // overlapping the line above.
+  flowWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    position: 'relative',
+    marginTop: 54,
+    rowGap: 54,
+  },
   flowText: { fontSize: 22, lineHeight: 36 },
   lineBreak: { width: '100%', height: 0 },
   cueWord: { borderRadius: 5, overflow: 'hidden' },
