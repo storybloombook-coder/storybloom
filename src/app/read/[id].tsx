@@ -52,7 +52,7 @@ import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
 import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
-import { NEXT_PAGE_PHRASES, type SpeechLang } from '../../lib/speech/types';
+import { NEXT_PAGE_PHRASES, type RecognizedWord, type SpeechLang } from '../../lib/speech/types';
 import { isReadablePage, type Book, type Cue, type Page } from '../../lib/types';
 
 type Player = ReturnType<typeof createAudioPlayer>;
@@ -170,6 +170,12 @@ const ALIGN_MIN_WORD_LENGTH = 3;
 // could fire many rapid page turns straight to the end). A plain timestamp
 // cooldown has no such dependency on page-change side effects.
 const NEXT_PAGE_COOLDOWN_MS = 1200;
+// Below this, Vosk itself wasn't confident it heard the word right — trust it
+// less for alignment purposes (see the confidence-aware filtering below).
+// Only ever checked for a FINAL result: Vosk computes per-word confidence for
+// a completed chunk, never for a still-in-progress partial (needs the
+// react-native-vosk patch in patches/ — see speech/vosk.ts's onResultRaw use).
+const LOW_CONFIDENCE_THRESHOLD = 0.5;
 
 /** Unique lowercase words (Unicode-letter runs) found in a piece of text. */
 function extractWords(text: string): string[] {
@@ -342,6 +348,13 @@ export default function ReaderScreen() {
   // of a fresh utterance (after a final) and on every page turn (a new
   // page's text is a different alignment target).
   const utteranceWordsConsumedRef = useRef(0);
+  // Per-word confidence for the CURRENT final chunk (words array lines up
+  // with that chunk's plain text 1:1, in order) — set by onResultWithConfidence
+  // just before that same chunk's onResult callback runs (the patched native
+  // module emits them in that order deliberately, see vosk.ts), so it's
+  // already populated by the time handleTextRef needs it. Never set for a
+  // partial — Vosk has no per-word confidence until a chunk is finalized.
+  const lastFinalConfidenceRef = useRef<RecognizedWord[] | null>(null);
 
   useEffect(() => {
     setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
@@ -483,6 +496,7 @@ export default function ReaderScreen() {
     readCursorRef.current = 0;
     firedCueIdsRef.current = new Set();
     utteranceWordsConsumedRef.current = 0;
+    lastFinalConfidenceRef.current = null;
     setReadCursor(0);
     // A new page's tokens start over at index 0 — last page's measured word
     // positions don't apply, and the ball should hide until the new page's
@@ -594,7 +608,26 @@ export default function ReaderScreen() {
         const already = Math.min(utteranceWordsConsumedRef.current, words.length);
         const newWords = words.slice(already);
         utteranceWordsConsumedRef.current = words.length;
-        for (const word of newWords) {
+        // Per-word confidence for THIS chunk, if the patched native module
+        // supplied it (finals only) and it lines up 1:1 with `words` — a
+        // length mismatch means Vosk's text/result arrays disagreed for some
+        // reason, so just skip confidence-aware filtering rather than risk
+        // checking the wrong index.
+        const confidence =
+          isFinal && lastFinalConfidenceRef.current?.length === words.length
+            ? lastFinalConfidenceRef.current
+            : null;
+        for (let wi = 0; wi < newWords.length; wi++) {
+          const word = newWords[wi];
+          // A word Vosk itself wasn't confident about is more likely a
+          // coincidental mishear that happens to string-match some OTHER
+          // nearby page word than a correct recognition — exactly the kind
+          // of match that snaps the cursor to the wrong spot. Skip trusting
+          // it for alignment; a later, clearer recognition of the same word
+          // (this utterance's eventual final, or the reader repeating it)
+          // will still catch it normally.
+          const wordConfidence = confidence?.[already + wi]?.confidence;
+          if (wordConfidence !== undefined && wordConfidence < LOW_CONFIDENCE_THRESHOLD) continue;
           // Short/common words (a, the, in, и, в...) match too many spots to
           // align against alone — see ALIGN_MIN_WORD_LENGTH above.
           if (word.length < ALIGN_MIN_WORD_LENGTH) continue;
@@ -650,7 +683,10 @@ export default function ReaderScreen() {
       }
       // A final closes out this utterance — the next partial starts a fresh
       // one, so its words should all be treated as new again.
-      if (isFinal) utteranceWordsConsumedRef.current = 0;
+      if (isFinal) {
+        utteranceWordsConsumedRef.current = 0;
+        lastFinalConfidenceRef.current = null; // consumed — don't let it leak into a later chunk
+      }
     };
   });
 
@@ -674,6 +710,9 @@ export default function ReaderScreen() {
         lang: langRef.current,
         onPartial: (text) => handleTextRef.current(text, false),
         onResult: (text) => handleTextRef.current(text, true),
+        onResultWithConfidence: (words) => {
+          lastFinalConfidenceRef.current = words;
+        },
         vocabulary: vocabRef.current,
       });
       setMicStatus('listening');
@@ -705,6 +744,9 @@ export default function ReaderScreen() {
           lang: langRef.current,
           onPartial: (text) => handleTextRef.current(text, false),
           onResult: (text) => handleTextRef.current(text, true),
+          onResultWithConfidence: (words) => {
+            lastFinalConfidenceRef.current = words;
+          },
           vocabulary: vocabRef.current,
         });
         setMicStatus('listening');

@@ -1,0 +1,92 @@
+diff --git a/node_modules/react-native-vosk/android/src/main/java/com/vosk/VoskModule.kt b/node_modules/react-native-vosk/android/src/main/java/com/vosk/VoskModule.kt
+index c2c4d64..ce24884 100644
+--- a/node_modules/react-native-vosk/android/src/main/java/com/vosk/VoskModule.kt
++++ b/node_modules/react-native-vosk/android/src/main/java/com/vosk/VoskModule.kt
+@@ -35,6 +35,16 @@ class VoskModule(reactContext: ReactApplicationContext) :
+     // Get text data from string object
+     val text = parseHypothesis(hypothesis)
+ 
++    // PATCHED (Storybloom, via patch-package): forward the RAW hypothesis
++    // (unconditionally, even if "text" was empty) so JS can extract Vosk's
++    // per-word confidence from its "result" array, which parseHypothesis
++    // above discards. Emitted BEFORE emitOnResult (below), deliberately —
++    // JS's onResult and onResultRaw listeners fire in the same order these
++    // are emitted, so a confidence-aware onResult handler can rely on this
++    // chunk's confidence already being available by the time it runs,
++    // instead of racing it. See NativeVosk.ts's onResultRaw doc comment.
++    emitOnResultRaw(hypothesis)
++
+     // Send event if data found
+     if (!text.isNullOrEmpty()) {
+       emitOnResult(text)
+diff --git a/node_modules/react-native-vosk/lib/typescript/src/NativeVosk.d.ts b/node_modules/react-native-vosk/lib/typescript/src/NativeVosk.d.ts
+index 735a55a..ec4279b 100644
+--- a/node_modules/react-native-vosk/lib/typescript/src/NativeVosk.d.ts
++++ b/node_modules/react-native-vosk/lib/typescript/src/NativeVosk.d.ts
+@@ -22,6 +22,7 @@ export interface Spec extends TurboModule {
+     readonly onFinalResult: CodegenTypes.EventEmitter<string>;
+     readonly onError: CodegenTypes.EventEmitter<string>;
+     readonly onTimeout: CodegenTypes.EventEmitter<void>;
++    readonly onResultRaw: CodegenTypes.EventEmitter<string>;
+ }
+ declare const _default: Spec;
+ export default _default;
+diff --git a/node_modules/react-native-vosk/lib/typescript/src/index.d.ts b/node_modules/react-native-vosk/lib/typescript/src/index.d.ts
+index 858414f..0207a5d 100644
+--- a/node_modules/react-native-vosk/lib/typescript/src/index.d.ts
++++ b/node_modules/react-native-vosk/lib/typescript/src/index.d.ts
+@@ -73,4 +73,12 @@ export declare function onFinalResult(cb: (e: string) => void): import("react-na
+  * @returns A subscription to the event
+  */
+ export declare function onResult(cb: (e: string) => void): import("react-native").EventSubscription;
++/**
++ * PATCHED (Storybloom, via patch-package): event listener for the RAW
++ * hypothesis JSON accompanying each onResult, including per-word confidence.
++ *
++ * @param cb - Callback to be called with the raw hypothesis JSON string
++ * @returns A subscription to the event
++ */
++export declare function onResultRaw(cb: (e: string) => void): import("react-native").EventSubscription;
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
+diff --git a/node_modules/react-native-vosk/src/NativeVosk.ts b/node_modules/react-native-vosk/src/NativeVosk.ts
+index fe1dce5..362e864 100644
+--- a/node_modules/react-native-vosk/src/NativeVosk.ts
++++ b/node_modules/react-native-vosk/src/NativeVosk.ts
+@@ -28,6 +28,15 @@ export interface Spec extends TurboModule {
+   readonly onFinalResult: CodegenTypes.EventEmitter<string>;
+   readonly onError: CodegenTypes.EventEmitter<string>;
+   readonly onTimeout: CodegenTypes.EventEmitter<void>;
++  /**
++   * PATCHED (Storybloom, via patch-package — see patches/react-native-vosk+*.patch):
++   * fires alongside onResult with the RAW, unmodified hypothesis JSON string
++   * (e.g. `{"result":[{"conf":0.98,"start":0.3,"end":0.6,"word":"hello"}],"text":"hello"}`),
++   * which the built-in onResult discards down to just the "text" field. Vosk
++   * only computes per-word confidence for a completed chunk, never a partial,
++   * so this has no onPartialResult equivalent.
++   */
++  readonly onResultRaw: CodegenTypes.EventEmitter<string>;
+ }
+ 
+ export default TurboModuleRegistry.getEnforcing<Spec>('Vosk');
+diff --git a/node_modules/react-native-vosk/src/index.ts b/node_modules/react-native-vosk/src/index.ts
+index a9a83b1..59a2286 100644
+--- a/node_modules/react-native-vosk/src/index.ts
++++ b/node_modules/react-native-vosk/src/index.ts
+@@ -118,3 +118,16 @@ export function onFinalResult(cb: (e: string) => void) {
+ export function onResult(cb: (e: string) => void) {
+   return Vosk.onResult(cb);
+ }
++
++/**
++ * PATCHED (Storybloom, via patch-package): event listener for the RAW
++ * hypothesis JSON accompanying each onResult, before it's stripped down to
++ * just the "text" field — includes Vosk's per-word confidence ("result"
++ * array). See NativeVosk.ts's onResultRaw doc comment.
++ *
++ * @param cb - Callback to be called with the raw hypothesis JSON string
++ * @returns A subscription to the event
++ */
++export function onResultRaw(cb: (e: string) => void) {
++  return Vosk.onResultRaw(cb);
++}
