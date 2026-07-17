@@ -177,7 +177,9 @@ export default function RecordingsList() {
             <View style={styles.kindToggleRow}>
               {(['all', 'ambient', 'sound'] as const).map((k) => {
                 const active = kindFilter === k;
-                const label = k === 'all' ? 'All' : k === 'ambient' ? '🎵 Ambient' : '🔊 Sounds';
+                const emoji = k === 'ambient' ? '🎵' : k === 'sound' ? '🔊' : null;
+                const text = k === 'all' ? 'All' : k === 'ambient' ? 'Ambient' : 'Sounds';
+                const color = active ? '#208AEF' : subColor;
                 return (
                   <TactileButton
                     key={k}
@@ -189,7 +191,12 @@ export default function RecordingsList() {
                     ]}
                     onPress={() => setKindFilter(k)}
                   >
-                    <Text style={[styles.kindToggleLabel, { color: active ? '#208AEF' : subColor }]}>{label}</Text>
+                    {/* Emoji and label as separate Text siblings, matching the
+                        record buttons below — combining them into one string
+                        left these buttons rendering with no visible text at
+                        all (see project session notes). */}
+                    {emoji && <Text style={styles.kindToggleEmoji}>{emoji}</Text>}
+                    <Text style={[styles.kindToggleLabel, { color }]}>{text}</Text>
                   </TactileButton>
                 );
               })}
@@ -338,8 +345,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     paddingVertical: 8,
     paddingHorizontal: 6,
+    gap: 4,
   },
-  kindToggleLabel: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  kindToggleEmoji: { fontSize: 13 },
+  kindToggleLabel: { fontSize: 13, fontWeight: '600' },
 
   list: { padding: 16, gap: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, paddingHorizontal: 4 },
