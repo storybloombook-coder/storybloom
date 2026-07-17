@@ -234,6 +234,15 @@ export default function ReaderScreen() {
   const rowStartTokensRef = useRef<number[]>([]);
   const [rowsVersion, setRowsVersion] = useState(0);
   const activeRowSV = useSharedValue(-1);
+  // A page's ~dozens of words all report onLayout in a tight burst as it
+  // mounts (and again, briefly, after gap spacers first get inserted and
+  // reshape things) — recomputing row structure on every single one of
+  // those calls meant occasionally locking in a PARTIAL mid-burst snapshot
+  // (e.g. only the first few words measured so far), which is what caused
+  // both the visibly-wrong expanded gap and general jank from the resulting
+  // cascade of re-renders. Debouncing collapses a whole burst into one
+  // recompute after layout actually settles.
+  const rowRecomputeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Guards against firing "next page" twice for the SAME utterance — Vosk
   // sends partials continuously, then one final; if the phrase is caught by
   // an early partial and again by the final (same words, same utterance), the
@@ -329,6 +338,7 @@ export default function ReaderScreen() {
     () => () => {
       stopAmbient();
       stopCue();
+      if (rowRecomputeTimerRef.current) clearTimeout(rowRecomputeTimerRef.current);
     },
     [stopAmbient, stopCue]
   );
@@ -351,6 +361,7 @@ export default function ReaderScreen() {
     ballOpacity.value = 0;
     // Same story for row structure — a new page wraps differently, so last
     // page's row boundaries (and which one was "active") don't apply.
+    if (rowRecomputeTimerRef.current) clearTimeout(rowRecomputeTimerRef.current);
     wordRowRef.current = new Map();
     rowStartTokensRef.current = [];
     setRowsVersion(0);
@@ -669,7 +680,8 @@ export default function ReaderScreen() {
   function onWordLayout(index: number, e: LayoutChangeEvent) {
     const { x, y, width, height } = e.nativeEvent.layout;
     wordLayoutsRef.current.set(index, { x, y, width, height });
-    recomputeRows();
+    if (rowRecomputeTimerRef.current) clearTimeout(rowRecomputeTimerRef.current);
+    rowRecomputeTimerRef.current = setTimeout(recomputeRows, 80);
     if (currentWordIndexRef.current === index) positionBallAt(index);
   }
 
