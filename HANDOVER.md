@@ -10,6 +10,43 @@ session (or a fresh PC) should read._
 
 ---
 
+## Later still same day (2026-07-17, third session) — confidence-aware alignment implemented
+
+**The "investigated, NOT implemented" item from the previous session log below
+(search "Confidence-aware alignment") is now DONE**, via a `patch-package`
+patch to `react-native-vosk` (see `patches/react-native-vosk+2.1.7.patch`,
+committed and reapplied automatically on every `npm install` via the new
+`postinstall` script — **verified this survives a fresh install** by deleting
+`node_modules/react-native-vosk` and reinstalling).
+
+- The native module's `onResult` now ALSO emits a new `onResultRaw` event
+  with the full, unparsed Vosk hypothesis JSON (which includes per-word
+  `conf` — previously discarded down to just the `"text"` field), emitted
+  deliberately BEFORE the existing `onResult` text event so a
+  confidence-aware handler can rely on the confidence already being
+  available for that same chunk rather than racing it.
+- `speech/vosk.ts` parses it into `{word, confidence}[]` and forwards it via
+  a new optional `onResultWithConfidence` callback on `SpeechRecognizer`.
+- `read/[id].tsx`'s alignment loop now SKIPS using a word to advance the
+  cursor/fire a cue if Vosk's own confidence for it is below `0.5` (finals
+  only — Vosk has no per-word confidence for a partial). A low-confidence
+  recognition is more likely a coincidental mishear that happens to
+  string-match some unrelated nearby page word than a correct one — exactly
+  the failure mode behind several of today's earlier cursor-jump bugs (see
+  the "Later same day" section below), so this should reduce them further.
+- **iOS's `Vosk.mm` was deliberately NOT patched** — this project doesn't
+  build/test iOS (see CLAUDE.md: Android is the target). If iOS is ever
+  built, it needs the equivalent change or the TS `Spec`'s new
+  `onResultRaw` field will make iOS's codegen mismatch.
+- **Not yet verified on-device** — needs a fresh dev-client build (Kotlin
+  native change) and a real read-aloud pass with some genuinely mis-heard
+  words to confirm low-confidence filtering actually reduces bad jumps
+  rather than just silently doing nothing (or, worse, filtering out CORRECT
+  words too aggressively — `0.5` is a first guess, not tuned against real
+  speech yet).
+
+---
+
 ## Later same day (2026-07-17, second session) — dev/prod app separation, 4 reader/drag bugs
 
 **Dev-client can no longer clobber a preview/production install.** The dev
