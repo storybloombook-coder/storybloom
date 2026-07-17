@@ -43,6 +43,15 @@ session (or a fresh PC) should read._
   queued cue back to the last confirmed cursor position (only the cue at
   that exact occurrence fires). This was the "two identical words → every
   sound plays at once" bug from earlier sessions.
+- **Duplicate-word CURSOR jump fix** (a follow-up report the above didn't
+  cover) — `setReadCursor` only fires once per recognized-speech callback,
+  after processing every word in that callback's text. If a single batch's
+  words matched the same nearby word twice, the loop silently walked
+  through the first occurrence and settled on the second before anything
+  ever rendered — visually a jump, not "moving steady." The alignment loop
+  now stops advancing further in that same batch the moment it hits an
+  ambiguous match; reaching a second occurrence needs an actual subsequent
+  recognition event.
 - **Tap any word to reposition** the read cursor (fix a bad auto-jump, or
   rewind to reread a passage). Rewinding un-fires cues from that point so
   they can trigger again; jumping ahead silently marks skipped cues as
