@@ -5,7 +5,7 @@
 
 import { createAudioPlayer } from 'expo-audio';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -18,6 +18,7 @@ import {
   useColorScheme,
 } from 'react-native';
 import ConfirmDeleteModal from './ConfirmDeleteModal';
+import EditRecordingModal from './EditRecordingModal';
 import StandaloneRecordModal, { type RecordKind } from './StandaloneRecordModal';
 import SwipeableRow from './SwipeableRow';
 import TactileButton from './TactileButton';
@@ -40,6 +41,14 @@ function originText(rec: Recording): string | null {
   return rec.originLabel ?? null;
 }
 
+/** Every recording's originLabel is EXACTLY "Ambient" when it's an ambient
+ *  bed (whether recorded standalone or for a page's ambient row) — anything
+ *  else (a word's trigger text, "Sound effect", or null) means it's a
+ *  one-shot sound effect. No schema field needed for this split. */
+function recordingKind(rec: Recording): 'ambient' | 'sound' {
+  return rec.originLabel === 'Ambient' ? 'ambient' : 'sound';
+}
+
 export default function RecordingsList() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
@@ -54,6 +63,9 @@ export default function RecordingsList() {
   const [nameDraft, setNameDraft] = useState('');
   const [pendingDelete, setPendingDelete] = useState<Recording | null>(null);
   const [recordKind, setRecordKind] = useState<RecordKind | null>(null);
+  const [editingRecording, setEditingRecording] = useState<Recording | null>(null);
+  const [search, setSearch] = useState('');
+  const [kindFilter, setKindFilter] = useState<'all' | 'ambient' | 'sound'>('all');
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
@@ -61,6 +73,15 @@ export default function RecordingsList() {
     setRecordings(await listRecordings());
     setLoading(false);
   }, []);
+
+  const visibleRecordings = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return recordings.filter((r) => {
+      if (kindFilter !== 'all' && recordingKind(r) !== kindFilter) return false;
+      if (q && !r.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [recordings, search, kindFilter]);
 
   useFocusEffect(
     useCallback(() => {
@@ -142,34 +163,77 @@ export default function RecordingsList() {
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={recordings}
-          keyExtractor={(r) => r.id}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => {
-            const previewing = previewingId === item.id;
-            const origin = originText(item);
-            return (
-              <SwipeableRow onDelete={() => setPendingDelete(item)}>
-                <View style={[styles.row, { backgroundColor: cardBackground }]}>
-                  <Pressable hitSlop={8} style={styles.previewBtn} onPress={() => togglePreview(item)}>
-                    <Text style={styles.previewIcon}>{previewing ? '⏹' : '▶️'}</Text>
-                  </Pressable>
-                  <Pressable style={styles.rowLabel} onPress={() => openRename(item)}>
-                    <Text style={[styles.name, { color: textColor }]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    {origin && (
-                      <Text style={[styles.origin, { color: subColor }]} numberOfLines={1}>
-                        {origin}
-                      </Text>
-                    )}
-                  </Pressable>
-                </View>
-              </SwipeableRow>
-            );
-          }}
-        />
+        <>
+          <View style={styles.filterBar}>
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search recordings…"
+              placeholderTextColor={subColor}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={[styles.searchInput, { color: textColor, backgroundColor: cardBackground }]}
+            />
+            <View style={styles.kindToggleRow}>
+              {(['all', 'ambient', 'sound'] as const).map((k) => {
+                const active = kindFilter === k;
+                const label = k === 'all' ? 'All' : k === 'ambient' ? '🎵 Ambient' : '🔊 Sound effects';
+                return (
+                  <TactileButton
+                    key={k}
+                    style={[
+                      styles.kindToggleBtn,
+                      active
+                        ? { backgroundColor: 'rgba(32,138,239,0.15)', borderColor: '#208AEF' }
+                        : { backgroundColor: cardBackground, borderColor: chipBackground },
+                    ]}
+                    onPress={() => setKindFilter(k)}
+                  >
+                    <Text style={[styles.kindToggleLabel, { color: active ? '#208AEF' : subColor }]}>{label}</Text>
+                  </TactileButton>
+                );
+              })}
+            </View>
+          </View>
+
+          {visibleRecordings.length === 0 ? (
+            <View style={styles.center}>
+              <Text style={[styles.emptyText, { color: subColor }]}>No recordings match.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={visibleRecordings}
+              keyExtractor={(r) => r.id}
+              contentContainerStyle={styles.list}
+              renderItem={({ item }) => {
+                const previewing = previewingId === item.id;
+                const origin = originText(item);
+                return (
+                  <SwipeableRow onDelete={() => setPendingDelete(item)}>
+                    <View style={[styles.row, { backgroundColor: cardBackground }]}>
+                      <Pressable hitSlop={8} style={styles.previewBtn} onPress={() => togglePreview(item)}>
+                        <Text style={styles.previewIcon}>{previewing ? '⏹' : '▶️'}</Text>
+                      </Pressable>
+                      <Pressable style={styles.rowLabel} onPress={() => openRename(item)}>
+                        <Text style={[styles.name, { color: textColor }]} numberOfLines={1}>
+                          {item.name}
+                        </Text>
+                        {origin && (
+                          <Text style={[styles.origin, { color: subColor }]} numberOfLines={1}>
+                            {origin}
+                          </Text>
+                        )}
+                      </Pressable>
+                      <Pressable hitSlop={8} style={styles.editBtn} onPress={() => setEditingRecording(item)}>
+                        <Text style={styles.editIcon}>🎚️</Text>
+                      </Pressable>
+                    </View>
+                  </SwipeableRow>
+                );
+              }}
+            />
+          )}
+        </>
       )}
 
       <View style={styles.recordButtonRow}>
@@ -197,6 +261,13 @@ export default function RecordingsList() {
         visible={recordKind !== null}
         kind={recordKind ?? 'sound'}
         onClose={() => setRecordKind(null)}
+        onSaved={load}
+      />
+
+      <EditRecordingModal
+        visible={editingRecording !== null}
+        recording={editingRecording}
+        onClose={() => setEditingRecording(null)}
         onSaved={load}
       />
 
@@ -258,6 +329,12 @@ const styles = StyleSheet.create({
   recordButtonEmoji: { fontSize: 20 },
   recordButtonLabel: { fontSize: 14, fontWeight: '600' },
 
+  filterBar: { paddingHorizontal: 16, paddingTop: 12, gap: 10 },
+  searchInput: { borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15 },
+  kindToggleRow: { flexDirection: 'row', gap: 8 },
+  kindToggleBtn: { flex: 1, borderRadius: 10, borderWidth: 1.5, paddingVertical: 8, alignItems: 'center' },
+  kindToggleLabel: { fontSize: 13, fontWeight: '600' },
+
   list: { padding: 16, gap: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, paddingHorizontal: 4 },
   previewBtn: { paddingVertical: 14, paddingHorizontal: 10 },
@@ -265,6 +342,8 @@ const styles = StyleSheet.create({
   rowLabel: { flex: 1, paddingVertical: 12, paddingHorizontal: 2, gap: 1 },
   name: { fontSize: 16, fontWeight: '600' },
   origin: { fontSize: 12 },
+  editBtn: { paddingVertical: 14, paddingHorizontal: 10 },
+  editIcon: { fontSize: 18 },
 
   // Rename modal — same shape as book/[id].tsx's own rename sheet.
   processingOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
