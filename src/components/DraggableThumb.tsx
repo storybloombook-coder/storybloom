@@ -51,6 +51,12 @@ export default function DraggableThumb({
   const translateY = useSharedValue(0);
   const dragging = useSharedValue(0);
   const wiggle = useSharedValue(0);
+  // True from onStart until this thumb's own release animation settles --
+  // see DraggablePageCard.tsx's isSettlingOut for why this can't just be
+  // `draggingIndex.value === index` (that flips false the instant the drag
+  // ends, abandoning the translateX/Y settle animation mid-flight for an
+  // instant snap to 0 before layout={LinearTransition} even starts).
+  const isSettlingOut = useSharedValue(false);
 
   function computeTargetIndex(dx: number, dy: number) {
     'worklet';
@@ -69,6 +75,7 @@ export default function DraggableThumb({
     .activateAfterLongPress(350)
     .onStart(() => {
       dragging.value = 1;
+      isSettlingOut.value = true;
       draggingIndex.value = index;
       targetIndex.value = index;
       runOnJS(triggerDragHaptic)();
@@ -80,7 +87,10 @@ export default function DraggableThumb({
     })
     .onEnd((e) => {
       const target = computeTargetIndex(e.translationX, e.translationY);
-      translateX.value = withTiming(0);
+      const onSettled = (finished?: boolean) => {
+        if (finished) isSettlingOut.value = false;
+      };
+      translateX.value = withTiming(0, undefined, onSettled);
       translateY.value = withTiming(0);
       dragging.value = 0;
       draggingIndex.value = -1;
@@ -108,7 +118,7 @@ export default function DraggableThumb({
   // doesn't merge `transform` across separate style objects, so everything
   // has to land in one useAnimatedStyle.
   const animatedStyle = useAnimatedStyle(() => {
-    const isMe = draggingIndex.value === index;
+    const isMe = isSettlingOut.value;
     const from = draggingIndex.value;
     const to = targetIndex.value;
 

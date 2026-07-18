@@ -19,7 +19,8 @@
 
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
-import { StyleSheet } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -70,6 +71,25 @@ export default function DraggablePageCard({
 }) {
   const translateY = useSharedValue(0);
   const dragging = useSharedValue(0);
+  // True from the moment THIS card starts being dragged until its release
+  // animation fully settles. Deliberately NOT derived from comparing the
+  // shared draggingIndex to this card's `index` prop -- both change in the
+  // very same onEnd() tick (draggingIndex resets to -1, and index itself
+  // shifts via onReorder's setPages), so that comparison goes false the
+  // instant the drag ends.
+  const isSettlingOut = useSharedValue(false);
+  // Set (with a computed target, see onEnd) the instant a real reorder is
+  // triggered; cleared the moment this card's NEXT onLayout confirms the
+  // reordered list has actually landed at its new natural position -- see
+  // the long comment on the reorder branch below for why release can't just
+  // animate translateY down to 0 and trust layout={LinearTransition} to
+  // handle the rest.
+  const pendingSnapCorrection = useSharedValue(0);
+  const hasPendingCorrection = useSharedValue(false);
+  // Mirrors hasPendingCorrection into React state so the `layout` prop
+  // (evaluated at render time, not on the UI thread) can be suppressed for
+  // exactly the duration of a manual settle -- see onEnd/onCardLayout.
+  const [suppressLayoutAnim, setSuppressLayoutAnim] = useState(false);
 
   function computeTargetIndex(dy: number) {
     'worklet';
@@ -114,10 +134,49 @@ export default function DraggablePageCard({
     return Math.max(0, heights.length - 1);
   }
 
+  /** How far (in px) this card needs to shift from its OLD natural slot to
+   *  its NEW one after moving from `from` to `to` — the exact delta
+   *  layout={LinearTransition} would itself animate. Computed manually (by
+   *  walking the same heights array LinearTransition's own flex reflow will
+   *  land on) so the settle animation below can be driven by ONE value
+   *  (translateY) instead of two independently-timed systems racing each
+   *  other — see the onEnd reorder branch for why that race was the actual
+   *  bug behind "snaps to start position, then slides." */
+  function computeSettleOffset(from: number, to: number) {
+    'worklet';
+    const heights = itemHeights.value;
+    const myHeight = heights[from] || 100;
+    const heightOf = (i: number) => heights[i] || myHeight;
+    let oldOffset = 0;
+    for (let i = 0; i < from; i++) oldOffset += heightOf(i) + PAGE_LIST_GAP;
+    // Walk the OLD index order, skipping `from` itself (it's the one
+    // moving) — each step advances one NEW-array slot, so stopping once
+    // `count === to` leaves newOffset holding the cumulative height up to
+    // (but not including) the moved card's new slot.
+    let newOffset = 0;
+    let count = 0;
+    for (let i = 0; i < heights.length && count < to; i++) {
+      if (i === from) continue;
+      newOffset += heightOf(i) + PAGE_LIST_GAP;
+      count += 1;
+    }
+    return newOffset - oldOffset;
+  }
+
+  // Fires the actual reorder AND flips off layout={LinearTransition} for
+  // this card in the very same React batch — so by the time the reordered
+  // list re-renders, this instance already has no layout animation of its
+  // own to fight with the manual translateY settle below.
+  function commitReorder(from: number, to: number) {
+    setSuppressLayoutAnim(true);
+    onReorder(from, to);
+  }
+
   const panGesture = Gesture.Pan()
     .activateAfterLongPress(350)
     .onStart(() => {
       dragging.value = 1;
+      isSettlingOut.value = true;
       draggingIndex.value = index;
       targetIndex.value = index;
       runOnJS(triggerDragHaptic)();
@@ -132,31 +191,44 @@ export default function DraggablePageCard({
       draggingIndex.value = -1;
       targetIndex.value = -1;
       if (target !== index) {
-        // A real reorder — this card is about to move to a new NATURAL slot,
-        // which layout={LinearTransition} bridges by animating the gap
-        // between the OLD slot's position and the NEW one (nothing to do
-        // with translateY — it's a completely separate transform). Right
-        // now, translateY still holds the raw drag offset, i.e. the card is
-        // sitting exactly where the finger let go, which is generally NOT
-        // the old natural slot. If translateY snapped to 0 here, the card
-        // would visually jump BACK to its old natural slot for an instant
-        // before LinearTransition even started — a release that didn't
-        // continue smoothly from where it was let go.
-        // Instead, animate translateY down to 0 over the EXACT SAME
-        // duration/easing as LinearTransition below. Two transforms summed
-        // together, both easing out at the same rate, interpolate as ONE
-        // continuous motion: at any moment the total offset is (gap between
-        // old and new slot) + (remaining drag offset), which starts at
-        // "wherever the finger released it" and glides straight to the new
-        // slot — no snap, no separate "switch" animation.
-        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING });
-        runOnJS(onReorder)(index, target);
+        // A real reorder. The naive approach — animate translateY down to 0
+        // over the same duration/easing as layout={LinearTransition} below,
+        // and trust the two to interpolate together as one motion — LOOKED
+        // right on paper (both easing out identically, starting at whatever
+        // offset makes their sum continuous) but only holds if both
+        // animations start at the same wall-clock instant. LinearTransition
+        // can't start until React actually processes the reorder (a JS
+        // thread round trip + re-render + native layout pass), while
+        // translateY's withTiming starts immediately on the UI thread — so
+        // in practice translateY got a head start, the two drifted out of
+        // phase, and the card visibly snapped to its old slot before
+        // LinearTransition caught up. That's the "release near the target,
+        // then it jumps back to the start and slides over" bug reported
+        // live even after matching duration/easing.
+        //
+        // Fix: don't rely on two independently-timed systems at all. Compute
+        // the exact old-slot-to-new-slot delta ourselves (computeSettleOffset,
+        // using the same heights LinearTransition's own reflow would use),
+        // animate translateY THERE (not to 0) as the single source of
+        // motion, and suppress layout={LinearTransition} for this card (see
+        // commitReorder) so there's nothing else racing it. Once this card's
+        // NEXT onLayout confirms the reordered list actually landed at the
+        // new natural slot, onCardLayout below instantly zeroes translateY —
+        // invisible, because at that instant old-slot + settleOffset and
+        // new-slot + 0 are the same absolute position by construction.
+        const settleOffset = computeSettleOffset(index, target);
+        pendingSnapCorrection.value = settleOffset;
+        hasPendingCorrection.value = true;
+        translateY.value = withTiming(settleOffset, { duration: SETTLE_DURATION, easing: SETTLE_EASING });
+        runOnJS(commitReorder)(index, target);
       } else {
         // No reorder — dropped back in the same slot, so there's no layout
         // change to align with. This IS the only motion, so it just needs
         // its own smooth return (timing doesn't need to match anything else
         // here, but reusing the same constants keeps the feel consistent).
-        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING });
+        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING }, (finished) => {
+          if (finished) isSettlingOut.value = false;
+        });
       }
     });
 
@@ -164,7 +236,7 @@ export default function DraggablePageCard({
   // being dragged), OR a live "make room" shift by the DRAGGED card's height
   // (if the drag's current target would displace it), plus a press scale.
   const animatedStyle = useAnimatedStyle(() => {
-    const isMe = draggingIndex.value === index;
+    const isMe = isSettlingOut.value;
     const from = draggingIndex.value;
     const to = targetIndex.value;
 
@@ -202,19 +274,40 @@ export default function DraggablePageCard({
     };
   });
 
+  // Fires on every native layout pass for this card, including the one right
+  // after a reorder lands it at its new natural slot. When a manual settle
+  // is pending (see onEnd's reorder branch), THAT is the exact moment to
+  // hand off: rebase translateY from "offset relative to the OLD slot" to
+  // "offset relative to the NEW slot" by subtracting the same settleOffset
+  // the old value was animating toward. That rebase is invisible on screen
+  // (the layout position moved by +settleOffset in this exact same frame, so
+  // the two changes cancel out), and translateY then has only the leftover
+  // distance to finish unwinding to 0 -- continuing to close in on the
+  // correct spot instead of restarting from a bare snap.
+  function onCardLayout(e: LayoutChangeEvent) {
+    onMeasured(index, e.nativeEvent.layout.height);
+    if (hasPendingCorrection.value) {
+      hasPendingCorrection.value = false;
+      translateY.value = translateY.value - pendingSnapCorrection.value;
+      translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING }, (finished) => {
+        if (finished) isSettlingOut.value = false;
+      });
+      setSuppressLayoutAnim(false);
+    }
+  }
+
   return (
     <Animated.View
       // Bare LinearTransition defaults to a spring with noticeable overshoot
       // ("bounce") — too much for a card settling into its dropped slot.
-      // .duration()/.easing() make it a plain eased timing instead — and
-      // MUST exactly match SETTLE_DURATION/SETTLE_EASING used for translateY
-      // above, so the two separate transforms (this one bridging old-slot to
-      // new-slot, translateY unwinding the raw drag offset) interpolate
-      // together as one continuous motion instead of two independently-timed
-      // ones that don't line up (which is what read as a hard bounce).
-      layout={LinearTransition.duration(SETTLE_DURATION).easing(SETTLE_EASING)}
+      // .duration()/.easing() make it a plain eased timing instead. Suppressed
+      // entirely (undefined) for the one reorder this card is actively
+      // hand-settling itself via translateY above — see commitReorder/
+      // onCardLayout — so there's only ever ONE animated system moving this
+      // card at a time instead of two racing each other.
+      layout={suppressLayoutAnim ? undefined : LinearTransition.duration(SETTLE_DURATION).easing(SETTLE_EASING)}
       style={[styles.wrapper, animatedStyle]}
-      onLayout={(e) => onMeasured(index, e.nativeEvent.layout.height)}
+      onLayout={onCardLayout}
     >
       <GestureDetector gesture={panGesture}>
         <Animated.View>{children}</Animated.View>
