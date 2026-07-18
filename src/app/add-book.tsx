@@ -194,18 +194,6 @@ export default function AddBookScreen() {
     }
   }
 
-  function pickFile() {
-    // expo-document-picker's cache-copied files aren't reliably readable by
-    // any expo-file-system API (new or legacy) in this Expo Go environment —
-    // confirmed a real read failure, not a timing issue, across three
-    // independent attempts. Converting to photos and using the library
-    // picker (which does work) is the practical path until that's resolved.
-    Alert.alert(
-      'PDF import unavailable right now',
-      'Reading PDF files isn’t working in this Expo Go setup. Convert the PDF’s pages to photos (e.g. a PDF-to-JPG app, or "print to image") and add them with "Choose from Library" instead — same prep pipeline either way.'
-    );
-  }
-
   function finishCapture() {
     setTitleInput('');
     setTitleModalVisible(true);
@@ -417,14 +405,6 @@ export default function AddBookScreen() {
               </TactileButton>
             </View>
           </View>
-          <TactileButton
-            style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}
-            onPress={pickFile}
-          >
-            <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-              Add a File (PDF)
-            </Text>
-          </TactileButton>
           </>
         )}
         {pages.length > 0 && (

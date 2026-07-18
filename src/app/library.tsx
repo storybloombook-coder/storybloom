@@ -326,7 +326,7 @@ export default function LibraryScreen() {
 
                   <View style={styles.badges}>
                     <Badge
-                      label={item.source === 'pdf' ? 'PDF' : item.source === 'dictation' ? '🎙️ Dictated' : 'Photos'}
+                      label={item.source === 'dictation' ? '🎙️ Dictated' : 'Photos'}
                     />
                     {item.hasDialogue && <Badge label="Dialogue" />}
                     {missingCount > 0 && (

@@ -4,7 +4,7 @@
 // (schema.ts) and the AI module (ai/gemini.ts) both build on these.
 // Standalone: no device, no API key, pure types.
 
-export type BookSource = "photos" | "pdf" | "dictation";
+export type BookSource = "photos" | "dictation";
 export type ReviewStatus = "unreviewed" | "in_progress" | "approved";
 export type PrepStatus = "pending" | "processing" | "ready" | "failed";
 /** Chosen by the parent at upload time. Drives which single-language Tesseract

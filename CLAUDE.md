@@ -109,11 +109,13 @@ until then the factory falls back to the Gemini one-shot so Expo Go still works.
   created_at, prep_status, has_dialogue
   (true if prep found any quoted dialogue — drives the optional voices toggle),
   review_status ('unreviewed'|'in_progress'|'approved'),
-  source ('photos'|'pdf' — where the pages came from)
+  source ('photos'|'dictation' — where the pages came from; PDF import was
+  cut, see the build-order note below)
 - **Page**: id, book_id, page_number, image_path,
   page_type ('cover'|'title'|'story'|'illustration_only'|'back_cover'),
-  embedded_text (nullable — clean text pulled from a PDF page, passed to Gemini
-  as a wording hint; null for photos and image-only PDFs),
+  embedded_text (nullable — was meant for clean text pulled from a PDF page
+  as a wording hint; unused now that PDF import is cut, kept in the schema
+  in case a future import path wants the same hint mechanism),
   ocr_text, background_scene,
   ambient_sound_id (the current/confirmed choice),
   ambient_candidates (ordered list of library ids, best-first, for "Try another")
@@ -171,22 +173,20 @@ screenshots will be provided for that pass.
 
 ### CORE v1 (the whole default experience — dialogue is NOT part of this)
 1. Scaffold Expo + TS + expo-router; blank home screen; runs on Expo Go.
-2. Capture / import flow: TWO ways to get pages in —
-   (a) PHOTOS (primary): photograph multiple pages with the camera.
-   (b) PDF UPLOAD (secondary): pick a PDF; render EACH page to an image.
-   BOTH converge to the same thing: a list of page images stored locally. The
-   file type ONLY affects import — everything downstream is identical.
-   - If a PDF page has clean embedded text, keep it to pass to Gemini as an
-     accuracy HINT (see gemini-vision-prompt.md). Do NOT build a separate
-     text-only path; always render + analyze the image.
+2. Capture / import flow: photograph multiple pages with the camera (or pick
+   existing photos from the library) — a list of page images stored locally.
    - Import ALL pages (cover/title/blurb included); page_type classification +
      the review step let the parent skip non-story pages.
-   - DRM/encrypted or unreadable files: fail gracefully with a clear message
-     ("couldn't read this file"). Never attempt to bypass protection.
-   - EPUB and other formats are LATER, not v1 (reflowable text, no fixed pages,
-     commercial DRM). PDF only for now.
-3. Prep pipeline: send page image to Gemini Flash (free tier), parse structured
-   JSON, save Page + Cue rows to SQLite, match cues to bundled library sounds.
+   - PDF upload was attempted and then CUT (2026-07-18) — a working
+     import path never materialized, and it wasn't worth the ongoing
+     maintenance for a secondary path when photos alone covers the core
+     experience. `BookSource` is just `'photos' | 'dictation'` now. Don't
+     re-add it without a concrete reason; if reconsidered, EPUB and other
+     reflowable/DRM'd formats are still explicitly out of scope regardless.
+3. Prep pipeline: send the page image to the on-device vision pipeline
+   (Tesseract OCR + local trigger matcher — see docs/vision-providers.md;
+   Gemini was the original v1 plan but has since been cut entirely), parse
+   structured JSON, save Page + Cue rows to SQLite, match cues to bundled library sounds.
    For each cue/ambient, store an ORDERED candidate list (best-first) so the
    review step's "Try another" can offer alternatives.
    (Prep still EXTRACTS dialogue into character_cues and sets a

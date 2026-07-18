@@ -26,9 +26,10 @@ listens (and looks at the real book).
    "next page" to advance hands-free. Repeat to the end.
 
 ## Core features (v1)
-- **Capture / import**: two ways to add a book — photograph the pages (primary),
-  OR upload a PDF (secondary; each page is rendered to an image). Both feed the
-  same pipeline. Pages stored locally, reviewable/re-takeable.
+- **Capture / import**: photograph the book's pages (or pick existing photos).
+  PDF upload was attempted and cut (2026-07-18) — never got a working import
+  path, not worth the maintenance for a secondary route. Pages stored
+  locally, reviewable/re-takeable.
 - **AI prep pipeline**: per page, one Gemini Flash (free tier) call returns text
   (OCR), background scene, keyword cues, and character-line attribution as
   structured data. Each cue is matched to a bundled royalty-free sound.
@@ -68,8 +69,8 @@ AI-generated sounds are a v2 upgrade, not part of v1.
 
 ## Explicitly OUT of scope for v1 (future / v2)
 - AI-GENERATED sounds on the fly (v1 uses a curated library).
-- EPUB and other book formats (v1 imports photos + PDF only; EPUB is
-  reflowable, page-less, and often DRM'd — later).
+- EPUB and other book formats (v1 imports photos only, see above; EPUB is
+  reflowable, page-less, and often DRM'd — later, if ever).
 - Shared, browsable library across users (needs a backend).
 - User accounts, auth, sync across devices.
 - AUTOMATIC page-turn detection from speech position (v1 has manual tap +
