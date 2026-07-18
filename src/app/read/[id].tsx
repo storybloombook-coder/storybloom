@@ -36,12 +36,14 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   interpolate,
   runOnJS,
   type SharedValue,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
@@ -189,6 +191,9 @@ function extractWords(text: string): string[] {
 // clearance + the bounce's travel, with a little room to spare.
 const NORMAL_ROW_GAP = 10;
 const EXPANDED_ROW_GAP = 56;
+// How long a row's gap takes to expand/collapse — was 260ms, halved to 130
+// then halved again per feedback ("let's do twice faster").
+const ROW_GAP_DURATION_MS = 65;
 
 /** One inter-line gap in the reader's flowing text — a plain spacer whose
  *  height animates between resting and expanded depending on whether the
@@ -199,7 +204,9 @@ const EXPANDED_ROW_GAP = 56;
  *  into. */
 function RowGapSpacer({ rowIndex, activeRow }: { rowIndex: number; activeRow: SharedValue<number> }) {
   const style = useAnimatedStyle(() => ({
-    height: withTiming(activeRow.value === rowIndex ? EXPANDED_ROW_GAP : NORMAL_ROW_GAP, { duration: 260 }),
+    height: withTiming(activeRow.value === rowIndex ? EXPANDED_ROW_GAP : NORMAL_ROW_GAP, {
+      duration: ROW_GAP_DURATION_MS,
+    }),
   }));
   return <Animated.View style={[{ width: '100%' }, style]} />;
 }
@@ -208,10 +215,16 @@ function RowGapSpacer({ rowIndex, activeRow }: { rowIndex: number; activeRow: Sh
 // most recently read (the last token with end <= readCursor), sized/spaced
 // against BALL_SIZE below.
 const BALL_SIZE = 32;
-// Idle vertical bob height, in px — was 12, reduced 15% per feedback ("too
-// bouncy"). Only the bob amplitude, not the squash/stretch it drives — that
-// wasn't part of the ask.
-const BALL_BOB_AMPLITUDE = 12 * 0.85;
+// Idle vertical bob height, in px — was 12, reduced 15% then another 20% per
+// feedback ("too bouncy", twice). Only the bob amplitude, not the
+// squash/stretch it drives — that wasn't part of the ask.
+const BALL_BOB_AMPLITUDE = 12 * 0.85 * 0.8;
+// Extra upward lift layered on top of a hop's own X/Y spring, so a jump
+// between words arcs up and back down (ballistic) instead of sliding in a
+// straight line — see positionBallAt's ballArc trigger and ballStyle's use
+// of it below.
+const BALL_ARC_HEIGHT = 26;
+const BALL_ARC_HALF_DURATION_MS = 130;
 
 // How far the ambient bed ducks while the mic is actively listening — it
 // loops continuously right through the parent's own speech, feeding back
@@ -318,6 +331,7 @@ export default function ReaderScreen() {
   const ballY = useSharedValue(0);
   const ballOpacity = useSharedValue(0);
   const ballBounce = useSharedValue(0);
+  const ballArc = useSharedValue(0);
   // Which visual row (post-wrap line) each word landed in, and which token
   // starts each row — both derived from wordLayoutsRef once layout settles
   // (see recomputeRows), so the gap around the ball's own line can expand
@@ -867,6 +881,15 @@ export default function ReaderScreen() {
       'worklet';
       if (finished) activeRowSV.value = row;
     });
+    // Ballistic arc: a quick up-then-down lift layered on top of the X/Y
+    // spring above, so the hop reads as a thrown hop rather than a straight
+    // glide. Its own fixed duration is independent of the spring's (which
+    // varies with hop distance) — good enough for the typical short hop this
+    // drives; a long multi-row jump just has the arc finish a beat early.
+    ballArc.value = withSequence(
+      withTiming(1, { duration: BALL_ARC_HALF_DURATION_MS, easing: Easing.out(Easing.quad) }),
+      withTiming(0, { duration: BALL_ARC_HALF_DURATION_MS, easing: Easing.in(Easing.quad) })
+    );
     ballOpacity.value = withTiming(1, { duration: 150 });
     return true;
   }
@@ -891,7 +914,17 @@ export default function ReaderScreen() {
       }
       rowOf.set(idx, row);
     }
-    const changed = starts.length !== rowStartTokensRef.current.length;
+    // Comparing only .length (the original check) missed the case where the
+    // row COUNT happens to come out the same across two recompute passes but
+    // individual rows start at DIFFERENT token indices (e.g. once more words
+    // finish measuring and a row's wrap point shifts by a word) — the JSX
+    // then never re-renders with the corrected starts, so a RowGapSpacer
+    // stays keyed to a stale rowIndex further down the page than where its
+    // row actually begins now: activeRowSV briefly matching that stale index
+    // (while chasing the ball to a DIFFERENT, correct row nearby) reads as a
+    // large gap sitting right under the active line that shouldn't be there.
+    const prev = rowStartTokensRef.current;
+    const changed = starts.length !== prev.length || starts.some((v, i) => v !== prev[i]);
     wordRowRef.current = rowOf;
     rowStartTokensRef.current = starts;
     if (changed) setRowsVersion((v) => v + 1);
@@ -1023,7 +1056,7 @@ export default function ReaderScreen() {
       opacity: ballOpacity.value,
       transform: [
         { translateX: ballX.value },
-        { translateY: ballY.value - ballBounce.value * BALL_BOB_AMPLITUDE },
+        { translateY: ballY.value - ballBounce.value * BALL_BOB_AMPLITUDE - ballArc.value * BALL_ARC_HEIGHT },
         { scaleX },
         { scaleY },
       ],
@@ -1034,7 +1067,7 @@ export default function ReaderScreen() {
   // previous row to insert one between) — it's the container's own
   // marginTop, animated the same way for when the ball is on row 0.
   const flowWrapStyle = useAnimatedStyle(() => ({
-    marginTop: withTiming(activeRowSV.value === 0 ? EXPANDED_ROW_GAP : 16, { duration: 260 }),
+    marginTop: withTiming(activeRowSV.value === 0 ? EXPANDED_ROW_GAP : 16, { duration: ROW_GAP_DURATION_MS }),
   }));
 
   if (loading) {
