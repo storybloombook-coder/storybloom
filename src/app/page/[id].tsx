@@ -1318,63 +1318,66 @@ export default function PageEditorScreen() {
                     </View>
                   </View>
                 ) : (
-                  <View style={styles.wordGridOuterRow}>
-                    <TactileButton style={[styles.wordGridTallButton, styles.softAmber]} onPress={tryAnotherSound}>
-                      <Text style={styles.wordGridIcon}>🔀</Text>
-                      <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Try another</Text>
-                    </TactileButton>
-                    <View style={{ gap: 14 }}>
-                      {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
-                      <View style={styles.wordGridRow}>
-                        <View style={styles.wordGridCell}>
-                          <TactileButton
-                            style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                            onPress={openLibraryPicker}
-                          >
-                            <Text style={styles.wordGridIcon}>🎵</Text>
-                            <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
-                          </TactileButton>
-                        </View>
-                        <View style={styles.wordGridCell}>
-                          <TactileButton
-                            style={[styles.wordGridButton, styles.softBlue]}
-                            onPress={() => (wordSoundPlaying ? stopWordSound() : playSound(wordDetail.cue))}
-                            disabled={!wordDetail.cue.soundId}
-                          >
-                            <Text style={styles.wordGridIcon}>{wordSoundPlaying ? '⏹' : '▶️'}</Text>
-                            <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                              {wordSoundPlaying ? 'Stop' : 'Play sound'}
-                            </Text>
-                          </TactileButton>
-                        </View>
+                  <>
+                    {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
+                    <View style={styles.wordGridRow}>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                          onPress={openLibraryPicker}
+                        >
+                          <Text style={styles.wordGridIcon}>🎵</Text>
+                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
+                        </TactileButton>
                       </View>
-                      <View style={styles.wordGridRow}>
-                        <View style={styles.wordGridCell}>
-                          <TactileButton
-                            style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                            onPress={openRecorder}
-                          >
-                            <Text style={styles.wordGridIcon}>🎤</Text>
-                            <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
-                          </TactileButton>
-                        </View>
-                        <View style={styles.wordGridCell}>
-                          <TactileButton
-                            style={[styles.wordGridButton, styles.destructiveButton]}
-                            onPress={() => {
-                              const cue = wordDetail.cue;
-                              setCueReviewState(cue.id, 'removed')
-                                .then(reload)
-                                .then(() => setWordDetail(null));
-                            }}
-                          >
-                            <Text style={styles.wordGridIcon}>🗑️</Text>
-                            <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
-                          </TactileButton>
-                        </View>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.softBlue]}
+                          onPress={() => (wordSoundPlaying ? stopWordSound() : playSound(wordDetail.cue))}
+                          disabled={!wordDetail.cue.soundId}
+                        >
+                          <Text style={styles.wordGridIcon}>{wordSoundPlaying ? '⏹' : '▶️'}</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
+                            {wordSoundPlaying ? 'Stop' : 'Play sound'}
+                          </Text>
+                        </TactileButton>
                       </View>
                     </View>
-                  </View>
+                    <View style={styles.wordGridRow}>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                          onPress={openRecorder}
+                        >
+                          <Text style={styles.wordGridIcon}>🎤</Text>
+                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                        </TactileButton>
+                      </View>
+                      <View style={styles.wordGridCell}>
+                        <TactileButton
+                          style={[styles.wordGridButton, styles.destructiveButton]}
+                          onPress={() => {
+                            const cue = wordDetail.cue;
+                            setCueReviewState(cue.id, 'removed')
+                              .then(reload)
+                              .then(() => setWordDetail(null));
+                          }}
+                        >
+                          <Text style={styles.wordGridIcon}>🗑️</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
+                        </TactileButton>
+                      </View>
+                    </View>
+                    {/* Compact, not another big grid cell -- this is a quick,
+                        casual "no, not that one" action a parent might tap
+                        several times in a row, not a major standalone one. */}
+                    <TactileButton
+                      style={[styles.smallBtn, { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' }]}
+                      onPress={tryAnotherSound}
+                    >
+                      <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🔀 Try another</Text>
+                    </TactileButton>
+                  </>
                 )}
               </>
             ) : wordDetail ? (
@@ -1492,15 +1495,13 @@ export default function PageEditorScreen() {
                     </View>
                   </View>
                 </View>
-                {/* Full-width row, not a third tall pill next to Apply-to-all —
-                    two 84px pills plus the 2x2 grid was already close to the
-                    sheet's usable width on smaller phones. */}
+                {/* Compact, not another big grid cell — a quick, casual
+                    action, not a major standalone one like Apply-to-all. */}
                 <TactileButton
-                  style={[styles.wordGridButton, styles.softAmber, { width: '100%', flexDirection: 'row', gap: 8 }]}
+                  style={[styles.smallBtn, { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' }]}
                   onPress={tryAnotherAmbient}
                 >
-                  <Text style={styles.wordGridIcon}>🔀</Text>
-                  <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Try another</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🔀 Try another</Text>
                 </TactileButton>
               </>
             ) : (
