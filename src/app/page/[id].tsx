@@ -38,6 +38,8 @@ import {
   AMBIENT_IDS,
   EFFECT_CATEGORIES,
   EFFECT_IDS,
+  nextAmbientId,
+  nextEffectId,
   SCENE_VOCAB,
   SOUND_ALLOWLISTS,
   TRIGGER_VOCAB,
@@ -531,6 +533,20 @@ export default function PageEditorScreen() {
     setWordDetail(null);
   }
 
+  /** "Try another" for a word cue — one tap to the next candidate (same
+   *  category, wraps around), no picker. See soundLibrary.ts's
+   *  nextEffectId doc comment for why "same category" instead of a real
+   *  ranked-candidate list. */
+  async function tryAnotherSound() {
+    if (!wordDetail || !('cue' in wordDetail)) return;
+    const cue = wordDetail.cue;
+    const next = nextEffectId(isCustomSound(cue.soundId) ? null : cue.soundId);
+    await updateCueSoundId(cue.id, next);
+    if (cue.reviewState === 'removed') await setCueReviewState(cue.id, 'confirmed');
+    setWordDetail(null);
+    await reload();
+  }
+
   function openRecorder() {
     if (!wordDetail) return;
     setRecordTarget(wordDetail);
@@ -561,6 +577,15 @@ export default function PageEditorScreen() {
     stopAmbientPreview();
     await updatePageAmbient(page.id, null);
     setAmbientDetailOpen(false);
+    await reload();
+  }
+
+  /** "Try another" for the page ambient — same idea as tryAnotherSound. */
+  async function tryAnotherAmbient() {
+    if (!page) return;
+    const next = nextAmbientId(isCustomSound(page.ambientSoundId) ? null : page.ambientSoundId);
+    stopAmbientPreview();
+    await updatePageAmbient(page.id, { soundId: next, startMs: null, endMs: null, fadeInMs: null, fadeOutMs: null });
     await reload();
   }
 
@@ -1293,57 +1318,63 @@ export default function PageEditorScreen() {
                     </View>
                   </View>
                 ) : (
-                  <>
-                    {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
-                    <View style={styles.wordGridRow}>
-                      <View style={styles.wordGridCell}>
-                        <TactileButton
-                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                          onPress={openLibraryPicker}
-                        >
-                          <Text style={styles.wordGridIcon}>🎵</Text>
-                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
-                        </TactileButton>
+                  <View style={styles.wordGridOuterRow}>
+                    <TactileButton style={[styles.wordGridTallButton, styles.softAmber]} onPress={tryAnotherSound}>
+                      <Text style={styles.wordGridIcon}>🔀</Text>
+                      <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Try another</Text>
+                    </TactileButton>
+                    <View style={{ gap: 14 }}>
+                      {/* 2x2 grid: library (TL) / play (TR) / record (BL) / remove (BR) */}
+                      <View style={styles.wordGridRow}>
+                        <View style={styles.wordGridCell}>
+                          <TactileButton
+                            style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                            onPress={openLibraryPicker}
+                          >
+                            <Text style={styles.wordGridIcon}>🎵</Text>
+                            <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
+                          </TactileButton>
+                        </View>
+                        <View style={styles.wordGridCell}>
+                          <TactileButton
+                            style={[styles.wordGridButton, styles.softBlue]}
+                            onPress={() => (wordSoundPlaying ? stopWordSound() : playSound(wordDetail.cue))}
+                            disabled={!wordDetail.cue.soundId}
+                          >
+                            <Text style={styles.wordGridIcon}>{wordSoundPlaying ? '⏹' : '▶️'}</Text>
+                            <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
+                              {wordSoundPlaying ? 'Stop' : 'Play sound'}
+                            </Text>
+                          </TactileButton>
+                        </View>
                       </View>
-                      <View style={styles.wordGridCell}>
-                        <TactileButton
-                          style={[styles.wordGridButton, styles.softBlue]}
-                          onPress={() => (wordSoundPlaying ? stopWordSound() : playSound(wordDetail.cue))}
-                          disabled={!wordDetail.cue.soundId}
-                        >
-                          <Text style={styles.wordGridIcon}>{wordSoundPlaying ? '⏹' : '▶️'}</Text>
-                          <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                            {wordSoundPlaying ? 'Stop' : 'Play sound'}
-                          </Text>
-                        </TactileButton>
+                      <View style={styles.wordGridRow}>
+                        <View style={styles.wordGridCell}>
+                          <TactileButton
+                            style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
+                            onPress={openRecorder}
+                          >
+                            <Text style={styles.wordGridIcon}>🎤</Text>
+                            <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                          </TactileButton>
+                        </View>
+                        <View style={styles.wordGridCell}>
+                          <TactileButton
+                            style={[styles.wordGridButton, styles.destructiveButton]}
+                            onPress={() => {
+                              const cue = wordDetail.cue;
+                              setCueReviewState(cue.id, 'removed')
+                                .then(reload)
+                                .then(() => setWordDetail(null));
+                            }}
+                          >
+                            <Text style={styles.wordGridIcon}>🗑️</Text>
+                            <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
+                          </TactileButton>
+                        </View>
                       </View>
                     </View>
-                    <View style={styles.wordGridRow}>
-                      <View style={styles.wordGridCell}>
-                        <TactileButton
-                          style={[styles.wordGridButton, styles.wordGridOutline, { backgroundColor: cardBackground }]}
-                          onPress={openRecorder}
-                        >
-                          <Text style={styles.wordGridIcon}>🎤</Text>
-                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
-                        </TactileButton>
-                      </View>
-                      <View style={styles.wordGridCell}>
-                        <TactileButton
-                          style={[styles.wordGridButton, styles.destructiveButton]}
-                          onPress={() => {
-                            const cue = wordDetail.cue;
-                            setCueReviewState(cue.id, 'removed')
-                              .then(reload)
-                              .then(() => setWordDetail(null));
-                          }}
-                        >
-                          <Text style={styles.wordGridIcon}>🗑️</Text>
-                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
-                        </TactileButton>
-                      </View>
-                    </View>
-                  </>
+                  </View>
                 )}
               </>
             ) : wordDetail ? (
@@ -1461,6 +1492,16 @@ export default function PageEditorScreen() {
                     </View>
                   </View>
                 </View>
+                {/* Full-width row, not a third tall pill next to Apply-to-all —
+                    two 84px pills plus the 2x2 grid was already close to the
+                    sheet's usable width on smaller phones. */}
+                <TactileButton
+                  style={[styles.wordGridButton, styles.softAmber, { width: '100%', flexDirection: 'row', gap: 8 }]}
+                  onPress={tryAnotherAmbient}
+                >
+                  <Text style={styles.wordGridIcon}>🔀</Text>
+                  <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Try another</Text>
+                </TactileButton>
               </>
             ) : (
               <View style={styles.wordGridRow}>

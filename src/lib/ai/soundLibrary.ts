@@ -102,6 +102,35 @@ export const EFFECT_CATEGORIES: SoundCategory[] = [
 
 export const EFFECT_IDS = EFFECT_CATEGORIES.flatMap((c) => c.ids);
 
+// ---- "Try another" (cycle to a different candidate) ----------------------
+//
+// review-flow.md's original spec calls "Try another" a cycle through an
+// ORDERED, AI-ranked candidate list (candidateSoundIds) -- but nothing in this
+// app has ever populated that with more than the single chosen id (see
+// db.createCue: `candidateSoundIds: params.soundId ? [params.soundId] : []`).
+// The offline trigger matcher maps ONE word to ONE id directly; there's no
+// scoring step that produces real ranked alternates to store. Rather than
+// build that (a real matching-algorithm project), "next id in the same
+// category" is an honest, useful v1 stand-in: cycling through fx_animal_dog ->
+// fx_animal_cat -> fx_animal_cow etc. is a genuinely plausible alternative,
+// not a random jump across the whole library.
+
+/** Next effect id after `currentId`, cycling within the SAME category
+ *  (wrapping around) -- or the first id in that category/the whole list if
+ *  there's no current id, it's a custom recording, or it's unrecognized. */
+export function nextEffectId(currentId: string | null): string {
+  const category = EFFECT_CATEGORIES.find((c) => currentId != null && c.ids.includes(currentId));
+  const pool = category ? category.ids : EFFECT_IDS;
+  const idx = currentId ? pool.indexOf(currentId) : -1;
+  return pool[(idx + 1) % pool.length];
+}
+
+/** Same idea for ambient beds -- one flat list, no categories to stay within. */
+export function nextAmbientId(currentId: string | null): string {
+  const idx = currentId ? AMBIENT_IDS.indexOf(currentId) : -1;
+  return AMBIENT_IDS[(idx + 1) % AMBIENT_IDS.length];
+}
+
 export const VOICE_IDS = [
   'voice_child',
   'voice_child_group',
