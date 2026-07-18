@@ -64,6 +64,14 @@ module.exports = {
       'expo-sqlite',
       'expo-audio',
       'expo-sensors',
+      'expo-localization',
+      [
+        'expo-location',
+        {
+          locationWhenInUsePermission:
+            'Allow location so the sky above Kolobok matches yours — sunrise, clouds, even snow.',
+        },
+      ],
       [
         'react-native-vosk',
         {
