@@ -42,6 +42,7 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-nativ
 import { playRange } from '../lib/audio/playRange';
 import { updateRecordingTrim } from '../lib/db';
 import type { Recording } from '../lib/types';
+import PulsingDot from './PulsingDot';
 import TactileButton from './TactileButton';
 
 const WAVEFORM_BARS = 56;
@@ -225,6 +226,9 @@ export default function EditRecordingModal({
 
   async function stopReRecording() {
     await recorder.stop();
+    // Recording mode routes audio playback quietly on Android -- flip back to
+    // normal playback now that we're done capturing.
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     const uri = recorder.uri;
     setDisplayWaveform(bucketWaveform(rawWaveform, WAVEFORM_BARS));
     if (!uri) return;
@@ -252,7 +256,10 @@ export default function EditRecordingModal({
 
   function handleClose() {
     stopPreview();
-    if (recorderState.isRecording) recorder.stop().catch(() => {});
+    if (recorderState.isRecording) {
+      recorder.stop().catch(() => {});
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    }
     onClose();
   }
 
@@ -346,7 +353,7 @@ export default function EditRecordingModal({
               {recorderState.isRecording ? (
                 <>
                   <View style={styles.recordStatusRow}>
-                    <View style={styles.recordDot} />
+                    <PulsingDot size={10} />
                     <Text style={[styles.recordTimer, { color: textColor }]}>
                       {Math.floor((recorderState.durationMillis ?? 0) / 1000)}s
                     </Text>
@@ -484,7 +491,6 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 2 },
   recordHint: { fontSize: 13, textAlign: 'center', marginBottom: 2 },
   recordStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 8 },
-  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ff453a' },
   recordTimer: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
   destructiveButton: { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' },
 

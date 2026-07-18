@@ -102,33 +102,29 @@ export const EFFECT_CATEGORIES: SoundCategory[] = [
 
 export const EFFECT_IDS = EFFECT_CATEGORIES.flatMap((c) => c.ids);
 
-// ---- "Try another" (cycle to a different candidate) ----------------------
+// ---- "Feeling lucky" (assign a random candidate) --------------------------
 //
-// review-flow.md's original spec calls "Try another" a cycle through an
-// ORDERED, AI-ranked candidate list (candidateSoundIds) -- but nothing in this
-// app has ever populated that with more than the single chosen id (see
+// review-flow.md's original spec calls this a cycle through an ORDERED,
+// AI-ranked candidate list (candidateSoundIds) -- but nothing in this app has
+// ever populated that with more than the single chosen id (see
 // db.createCue: `candidateSoundIds: params.soundId ? [params.soundId] : []`).
 // The offline trigger matcher maps ONE word to ONE id directly; there's no
-// scoring step that produces real ranked alternates to store. Rather than
-// build that (a real matching-algorithm project), "next id in the same
-// category" is an honest, useful v1 stand-in: cycling through fx_animal_dog ->
-// fx_animal_cat -> fx_animal_cow etc. is a genuinely plausible alternative,
-// not a random jump across the whole library.
+// scoring step that produces real ranked alternates to store. With no ranking
+// to lean on, a genuine random pick from the whole library is the honest v1
+// behavior -- hence "Feeling lucky" rather than "Try another".
 
-/** Next effect id after `currentId`, cycling within the SAME category
- *  (wrapping around) -- or the first id in that category/the whole list if
- *  there's no current id, it's a custom recording, or it's unrecognized. */
-export function nextEffectId(currentId: string | null): string {
-  const category = EFFECT_CATEGORIES.find((c) => currentId != null && c.ids.includes(currentId));
-  const pool = category ? category.ids : EFFECT_IDS;
-  const idx = currentId ? pool.indexOf(currentId) : -1;
-  return pool[(idx + 1) % pool.length];
+/** A random effect id, excluding `currentId` where possible (so tapping
+ *  always changes something) -- falls back to the full pool if there's
+ *  nothing else to pick from. */
+export function randomEffectId(currentId: string | null): string {
+  const pool = currentId ? EFFECT_IDS.filter((id) => id !== currentId) : EFFECT_IDS;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
-/** Same idea for ambient beds -- one flat list, no categories to stay within. */
-export function nextAmbientId(currentId: string | null): string {
-  const idx = currentId ? AMBIENT_IDS.indexOf(currentId) : -1;
-  return AMBIENT_IDS[(idx + 1) % AMBIENT_IDS.length];
+/** Same idea for ambient beds. */
+export function randomAmbientId(currentId: string | null): string {
+  const pool = currentId ? AMBIENT_IDS.filter((id) => id !== currentId) : AMBIENT_IDS;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 export const VOICE_IDS = [

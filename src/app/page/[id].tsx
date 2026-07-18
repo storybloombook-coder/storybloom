@@ -33,13 +33,14 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LightSwitch from '../../components/LightSwitch';
 import PhotoEditor from '../../components/PhotoEditor';
+import PulsingDot from '../../components/PulsingDot';
 import TactileButton from '../../components/TactileButton';
 import {
   AMBIENT_IDS,
   EFFECT_CATEGORIES,
   EFFECT_IDS,
-  nextAmbientId,
-  nextEffectId,
+  randomAmbientId,
+  randomEffectId,
   SCENE_VOCAB,
   SOUND_ALLOWLISTS,
   TRIGGER_VOCAB,
@@ -533,17 +534,54 @@ export default function PageEditorScreen() {
     setWordDetail(null);
   }
 
-  /** "Try another" for a word cue — one tap to the next candidate (same
-   *  category, wraps around), no picker. See soundLibrary.ts's
-   *  nextEffectId doc comment for why "same category" instead of a real
-   *  ranked-candidate list. */
-  async function tryAnotherSound() {
+  /** "Feeling lucky" for a word cue — assigns a random effect from the
+   *  library, no picker. See soundLibrary.ts's randomEffectId doc comment
+   *  for why random instead of a real ranked-candidate list. */
+  async function feelingLuckySound() {
     if (!wordDetail || !('cue' in wordDetail)) return;
     const cue = wordDetail.cue;
-    const next = nextEffectId(isCustomSound(cue.soundId) ? null : cue.soundId);
+    const next = randomEffectId(isCustomSound(cue.soundId) ? null : cue.soundId);
     await updateCueSoundId(cue.id, next);
+    const nextReviewState = cue.reviewState === 'removed' ? 'confirmed' : cue.reviewState;
     if (cue.reviewState === 'removed') await setCueReviewState(cue.id, 'confirmed');
-    setWordDetail(null);
+    // Stay open (a random reroll is something a parent taps repeatedly to
+    // preview/compare) with the sheet reflecting the NEW sound -- matching
+    // updateCueSoundId's own clear of the trim/fade envelope above.
+    setWordDetail({
+      cue: {
+        ...cue,
+        soundId: next,
+        soundStartMs: null,
+        soundEndMs: null,
+        fadeInMs: null,
+        fadeOutMs: null,
+        reviewState: nextReviewState,
+      },
+    });
+    await reload();
+  }
+
+  /** "Feeling lucky" for a bare word with no cue yet -- creates one with a
+   *  random effect, then the sheet upgrades in place to the edit view (same
+   *  "stay open" idea as feelingLuckySound, just starting from nothing). */
+  async function feelingLuckyNewWord() {
+    if (!wordDetail || 'cue' in wordDetail || !page) return;
+    const token = wordDetail.token;
+    const soundId = randomEffectId(null);
+    const created = await createCue({
+      pageId: page.id,
+      type: 'keyword',
+      triggerText: token.text.toLowerCase(),
+      contextPhrase: null,
+      charStart: token.start,
+      charEnd: token.end,
+      soundId,
+      characterName: null,
+      intensity: null,
+      emotion: null,
+    });
+    await setCueReviewState(created.id, 'confirmed');
+    setWordDetail({ cue: { ...created, soundId, reviewState: 'confirmed' } });
     await reload();
   }
 
@@ -580,10 +618,10 @@ export default function PageEditorScreen() {
     await reload();
   }
 
-  /** "Try another" for the page ambient — same idea as tryAnotherSound. */
-  async function tryAnotherAmbient() {
+  /** "Feeling lucky" for the page ambient — same idea as feelingLuckySound. */
+  async function feelingLuckyAmbient() {
     if (!page) return;
-    const next = nextAmbientId(isCustomSound(page.ambientSoundId) ? null : page.ambientSoundId);
+    const next = randomAmbientId(isCustomSound(page.ambientSoundId) ? null : page.ambientSoundId);
     stopAmbientPreview();
     await updatePageAmbient(page.id, { soundId: next, startMs: null, endMs: null, fadeInMs: null, fadeOutMs: null });
     await reload();
@@ -711,18 +749,26 @@ export default function PageEditorScreen() {
       });
       return;
     }
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    setRecordedUri(null);
-    setRawWaveform([]);
-    setDisplayWaveform([]);
-    setWaveformWidth(0);
-    setPreviewPlayhead(null);
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      setRecordedUri(null);
+      setRawWaveform([]);
+      setDisplayWaveform([]);
+      setWaveformWidth(0);
+      setPreviewPlayhead(null);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (e: any) {
+      setInfoModal({ emoji: '⚠️', title: 'Could not start recording', message: e?.message ?? String(e) });
+    }
   }
 
   async function stopRecording() {
     await recorder.stop();
+    // Recording mode routes audio playback quietly on Android (voice-call-like
+    // routing) -- flip back to normal playback now that we're done capturing,
+    // otherwise every Play button on this screen sounds faint/silent afterward.
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     const uri = recorder.uri;
     setRecordedUri(uri);
     setDisplayWaveform(bucketWaveform(rawWaveform, WAVEFORM_BARS));
@@ -784,7 +830,10 @@ export default function PageEditorScreen() {
   }
 
   function cancelRecording() {
-    if (recorderState.isRecording) recorder.stop().catch(() => {});
+    if (recorderState.isRecording) {
+      recorder.stop().catch(() => {});
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    }
     setRecordTarget(null);
     setRecordedUri(null);
     setRecordingName('');
@@ -1370,12 +1419,18 @@ export default function PageEditorScreen() {
                     </View>
                     {/* Compact, not another big grid cell -- this is a quick,
                         casual "no, not that one" action a parent might tap
-                        several times in a row, not a major standalone one. */}
+                        several times in a row, not a major standalone one.
+                        Width matches the 2x2 grid above it (2 cells + gap)
+                        so it doesn't overhang the grid's edges. */}
                     <TactileButton
-                      style={[styles.smallBtn, { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' }]}
-                      onPress={tryAnotherSound}
+                      style={[
+                        styles.smallBtn,
+                        styles.wordGridWidthBtn,
+                        { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' },
+                      ]}
+                      onPress={feelingLuckySound}
                     >
-                      <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🔀 Try another</Text>
+                      <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
                     </TactileButton>
                   </>
                 )}
@@ -1403,6 +1458,16 @@ export default function PageEditorScreen() {
                     </TactileButton>
                   </View>
                 </View>
+                <TactileButton
+                  style={[
+                    styles.smallBtn,
+                    styles.wordGridWidthBtn,
+                    { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' },
+                  ]}
+                  onPress={feelingLuckyNewWord}
+                >
+                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+                </TactileButton>
               </>
             ) : null}
             <TactileButton style={styles.cancelRow} onPress={() => setWordDetail(null)}>
@@ -1496,12 +1561,18 @@ export default function PageEditorScreen() {
                   </View>
                 </View>
                 {/* Compact, not another big grid cell — a quick, casual
-                    action, not a major standalone one like Apply-to-all. */}
+                    action, not a major standalone one like Apply-to-all.
+                    Width matches the outer row above it (tall toggle + 2x2
+                    grid) so it doesn't overhang those edges. */}
                 <TactileButton
-                  style={[styles.smallBtn, { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' }]}
-                  onPress={tryAnotherAmbient}
+                  style={[
+                    styles.smallBtn,
+                    styles.wordGridOuterWidthBtn,
+                    { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' },
+                  ]}
+                  onPress={feelingLuckyAmbient}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🔀 Try another</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
                 </TactileButton>
               </>
             ) : (
@@ -1525,6 +1596,18 @@ export default function PageEditorScreen() {
                   </TactileButton>
                 </View>
               </View>
+            )}
+            {!page?.ambientSoundId && (
+              <TactileButton
+                style={[
+                  styles.smallBtn,
+                  styles.wordGridWidthBtn,
+                  { backgroundColor: 'rgba(232,163,61,0.15)', borderWidth: 1.5, borderColor: '#e8a33d' },
+                ]}
+                onPress={feelingLuckyAmbient}
+              >
+                <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+              </TactileButton>
             )}
             <TactileButton
               style={styles.cancelRow}
@@ -1558,7 +1641,7 @@ export default function PageEditorScreen() {
             {recorderState.isRecording ? (
               <>
                 <View style={styles.recordStatusRow}>
-                  <View style={styles.recordDot} />
+                  <PulsingDot size={10} />
                   <Text style={[styles.recordTimer, { color: textColor }]}>
                     {Math.floor((recorderState.durationMillis ?? 0) / 1000)}s
                   </Text>
@@ -2048,9 +2131,13 @@ const styles = StyleSheet.create({
   wordGridIcon: { fontSize: 20 },
   wordGridLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
   wordGridOutline: { borderWidth: 2, borderColor: '#fff' },
+  // Matches wordGridRow's width (2 cells + gap) so a button below the 2x2
+  // grid lines up with its edges instead of stretching full sheet width.
+  wordGridWidthBtn: { width: 84 * 2 + 14, alignSelf: 'center' },
+  // Matches wordGridOuterRow's width (tall toggle + gap + 2x2 grid).
+  wordGridOuterWidthBtn: { width: 84 + 14 + 84 * 2 + 14, alignSelf: 'center' },
 
   recordStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 8 },
-  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ff453a' },
   recordTimer: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
   recordHint: { fontSize: 13, textAlign: 'center', marginBottom: 2 },
   waveformRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },

@@ -33,6 +33,7 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { playRange } from '../lib/audio/playRange';
 import { createRecording } from '../lib/db';
+import PulsingDot from './PulsingDot';
 import TactileButton from './TactileButton';
 
 export type RecordKind = 'ambient' | 'sound';
@@ -164,6 +165,9 @@ export default function StandaloneRecordModal({
 
   async function stopRecording() {
     await recorder.stop();
+    // Recording mode routes audio playback quietly on Android -- flip back to
+    // normal playback now that we're done capturing.
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     const uri = recorder.uri;
     setRecordedUri(uri);
     setDisplayWaveform(bucketWaveform(rawWaveform, WAVEFORM_BARS));
@@ -217,7 +221,10 @@ export default function StandaloneRecordModal({
 
   function handleClose() {
     stopPreview();
-    if (recorderState.isRecording) recorder.stop().catch(() => {});
+    if (recorderState.isRecording) {
+      recorder.stop().catch(() => {});
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    }
     reset();
     onClose();
   }
@@ -317,7 +324,7 @@ export default function StandaloneRecordModal({
               {recorderState.isRecording ? (
                 <>
                   <View style={styles.recordStatusRow}>
-                    <View style={styles.recordDot} />
+                    <PulsingDot size={10} />
                     <Text style={[styles.recordTimer, { color: textColor }]}>
                       {Math.floor((recorderState.durationMillis ?? 0) / 1000)}s
                     </Text>
@@ -479,7 +486,6 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 14, fontWeight: '600', textAlign: 'center', marginBottom: 6 },
 
   recordStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 8 },
-  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ff453a' },
   recordTimer: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
   recordHint: { fontSize: 13, textAlign: 'center', marginBottom: 2 },
 

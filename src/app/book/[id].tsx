@@ -22,6 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ConfirmDeleteModal from '../../components/ConfirmDeleteModal';
 import DraggablePageCard, { PAGE_LIST_GAP } from '../../components/DraggablePageCard';
 import PhotoEditor from '../../components/PhotoEditor';
+import PulsingDot from '../../components/PulsingDot';
 import SwipeableRow from '../../components/SwipeableRow';
 import TactileButton from '../../components/TactileButton';
 import { SOUND_ALLOWLISTS } from '../../lib/ai/soundLibrary';
@@ -682,6 +683,13 @@ export default function BookDetailScreen() {
               style={[styles.dictateInput, { color: textColor, backgroundColor: chipBackground }]}
             />
 
+            {dictateStatus === 'listening' ? (
+              <View style={styles.dictateListeningRow}>
+                <PulsingDot size={9} />
+                <Text style={[styles.dictateListeningLabel, { color: subColor }]}>Listening…</Text>
+              </View>
+            ) : null}
+
             {dictateStatus === 'listening' && (dictateFinal || dictatePartial) ? (
               <View style={[styles.dictateTranscript, { backgroundColor: chipBackground }]}>
                 <Text style={{ color: textColor, fontSize: 14, lineHeight: 20 }}>
@@ -893,6 +901,8 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   dictateTranscript: { borderRadius: 10, padding: 12 },
+  dictateListeningRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  dictateListeningLabel: { fontSize: 13, fontWeight: '600' },
   dictateActionButton: { borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   dictateActionLabel: { fontSize: 16, fontWeight: '600' },
 });

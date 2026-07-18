@@ -658,9 +658,18 @@ export async function deleteRecording(id: string): Promise<void> {
   await db.runAsync('DELETE FROM recordings WHERE id = ?', [id]);
 }
 
+/** Assigns a plain library sound (or clears it) -- always clears any
+ *  leftover trim/fade envelope from a previous custom recording, since every
+ *  caller of this function means "untrimmed library sound", never a trimmed
+ *  one (that's updateCueSoundTrim). Without this, switching a trimmed cue to
+ *  a fresh library clip left the old start/end around, so playback tried to
+ *  seek into a range that doesn't exist on the new (usually shorter) clip. */
 export async function updateCueSoundId(cueId: string, soundId: string | null): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('UPDATE cues SET sound_id = ? WHERE id = ?', [soundId, cueId]);
+  await db.runAsync(
+    'UPDATE cues SET sound_id = ?, sound_start_ms = NULL, sound_end_ms = NULL, fade_in_ms = NULL, fade_out_ms = NULL WHERE id = ?',
+    [soundId, cueId]
+  );
 }
 
 /** Sets a cue's sound together with its trim/fade envelope — used when saving
