@@ -208,6 +208,10 @@ function RowGapSpacer({ rowIndex, activeRow }: { rowIndex: number; activeRow: Sh
 // most recently read (the last token with end <= readCursor), sized/spaced
 // against BALL_SIZE below.
 const BALL_SIZE = 32;
+// Idle vertical bob height, in px — was 12, reduced 15% per feedback ("too
+// bouncy"). Only the bob amplitude, not the squash/stretch it drives — that
+// wasn't part of the ask.
+const BALL_BOB_AMPLITUDE = 12 * 0.85;
 
 // How far the ambient bed ducks while the mic is actively listening — it
 // loops continuously right through the parent's own speech, feeding back
@@ -846,10 +850,23 @@ export default function ReaderScreen() {
   function positionBallAt(index: number): boolean {
     const pos = wordLayoutsRef.current.get(index);
     if (!pos) return false;
+    const row = wordRowRef.current.get(index) ?? -1;
     // mass 0.85 (default 1) — 15% less inertia so the hop settles a touch
     // quicker/snappier instead of floating into place.
     ballX.value = withSpring(pos.x + pos.width / 2 - BALL_SIZE / 2, { damping: 16, stiffness: 180, mass: 0.85 });
-    ballY.value = withSpring(pos.y - BALL_SIZE - 6, { damping: 16, stiffness: 180, mass: 0.85 });
+    // activeRowSV (the row-gap expansion, see RowGapSpacer) only updates once
+    // this spring actually SETTLES, not the instant the target changes — it
+    // used to be set immediately alongside the cursor, but the spring can
+    // take noticeably longer to physically arrive (especially hopping several
+    // words/rows in one go), so the gap was visibly opening up well before
+    // the ball got there. `finished` comes back false if a later
+    // positionBallAt call retargets this spring before it settles (e.g. fast
+    // reading re-triggering alignment); correctly skipped in that case, since
+    // the ball never actually reached that row.
+    ballY.value = withSpring(pos.y - BALL_SIZE - 6, { damping: 16, stiffness: 180, mass: 0.85 }, (finished) => {
+      'worklet';
+      if (finished) activeRowSV.value = row;
+    });
     ballOpacity.value = withTiming(1, { duration: 150 });
     return true;
   }
@@ -906,8 +923,11 @@ export default function ReaderScreen() {
       if (!t.isSpace && t.start <= readCursor) idx = i;
     }
     currentWordIndexRef.current = idx;
-    activeRowSV.value = idx >= 0 ? (wordRowRef.current.get(idx) ?? -1) : -1;
+    // Only reset here when there's no ball to show at all — the row it
+    // SHOULD expand for (a real target) is set inside positionBallAt's own
+    // spring-settle callback below, not immediately.
     if (idx < 0 || !positionBallAt(idx)) {
+      activeRowSV.value = -1;
       ballOpacity.value = withTiming(0, { duration: 100 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1003,7 +1023,7 @@ export default function ReaderScreen() {
       opacity: ballOpacity.value,
       transform: [
         { translateX: ballX.value },
-        { translateY: ballY.value - ballBounce.value * 12 },
+        { translateY: ballY.value - ballBounce.value * BALL_BOB_AMPLITUDE },
         { scaleX },
         { scaleY },
       ],
