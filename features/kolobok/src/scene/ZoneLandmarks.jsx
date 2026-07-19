@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
-import { storyMotion, useSceneStore } from '../state/sceneStore';
+import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -24,7 +24,12 @@ function IzbaWindow() {
   const materialRef = useRef();
   useFrame(() => {
     if (materialRef.current) {
-      materialRef.current.emissiveIntensity = storyMotion.windowGlow * 1.6;
+      // Time-of-day glow (ART_SPEC §8 `window` column, blended) with the
+      // ±10% firelight breathing at 0.1Hz (ANIMATION_SPEC §9), plus the
+      // story's own birth/rebirth pulse -- whichever is brighter wins.
+      const breathe = 1 + Math.sin(Date.now() / 1591) * 0.1;
+      const daily = atmosphereLive.windowGlow * breathe;
+      materialRef.current.emissiveIntensity = Math.max(daily, storyMotion.windowGlow * 1.6);
     }
   });
   return (

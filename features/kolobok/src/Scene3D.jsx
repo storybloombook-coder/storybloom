@@ -1,11 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Animated, StyleSheet, View, Text, Pressable,
+  Animated, AppState, StyleSheet, View, Text, Pressable,
 } from 'react-native';
 import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { KolobokScene } from './scene/KolobokScene';
 import { orbit, story, useSceneStore } from './state/sceneStore';
+import { refreshWeather } from './services/weather';
 import { ZONES } from './config/zones';
 import { MENU } from './config/menu';
 import { t } from './config/strings';
@@ -47,6 +48,20 @@ export function Scene3D({ onNavigate }) {
     else console.log('[kolobok] navigate ->', pendingNavigation);
     consumeNavigation();
   }, [pendingNavigation, onNavigate, consumeNavigation]);
+
+  // AppState pause (ANIMATION_SPEC §6 / WEATHER_SPEC §6): backgrounded ->
+  // stop the frameloop entirely (no renders, no weather requests); active ->
+  // resume + a foreground weather refresh (service debounces to 1 per 5min).
+  const [frameloop, setFrameloop] = useState('always');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      setFrameloop(st === 'active' ? 'always' : 'never');
+      if (st === 'active') {
+        refreshWeather().then((w) => useSceneStore.getState().setWeatherState(w));
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // Finale gulp fade (STORY_SPEC §3 ch8): plain RN Animated (no new deps).
   // Out = 300ms to black; in = 900ms back, matching the chapter table.
@@ -98,6 +113,7 @@ export function Scene3D({ onNavigate }) {
         <Canvas
           style={StyleSheet.absoluteFill}
           dpr={[1, 1.5]}
+          frameloop={frameloop}
           camera={{ fov: 45, near: 0.5, far: 60 }}
         >
           <KolobokScene />

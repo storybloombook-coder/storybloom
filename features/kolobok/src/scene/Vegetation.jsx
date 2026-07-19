@@ -36,6 +36,18 @@ function matrixAt(plant, localOffset = [0, 0, 0], localScale = [1, 1, 1]) {
   return dummy.matrix.clone();
 }
 
+// Spruce transforms live at module scope (pure + deterministic via the
+// seeded PRNG) so WeatherSystems' snow caps can reuse the exact top-tier
+// matrices without recomputing placement (WEATHER_SPEC §4 "instanced,
+// matching tree matrices").
+const SPRUCE_PLANTS = (() => {
+  const rng = makeRng(20);
+  return makePlants(rng, 14, ['wolf', 'bear'], {
+    radiusMin: ISLAND_RADIUS * 0.35, radiusMax: ISLAND_RADIUS * 0.88, scaleMin: 0.75, scaleMax: 1.15,
+  });
+})();
+export const SPRUCE_TOP_MATRICES = SPRUCE_PLANTS.map((p) => matrixAt(p, [0, 1.32, 0], [0.2, 0.1, 0.2]));
+
 function InstancedPart({ count, matrices, colors, children }) {
   return (
     <instancedMesh
@@ -66,12 +78,7 @@ export function Vegetation() {
       radiusMin: ISLAND_RADIUS * 0.4, radiusMax: ISLAND_RADIUS * 0.85, scaleMin: 0.8, scaleMax: 1.2,
     });
   }, []);
-  const spruce = useMemo(() => {
-    const rng = makeRng(20);
-    return makePlants(rng, 14, ['wolf', 'bear'], {
-      radiusMin: ISLAND_RADIUS * 0.35, radiusMax: ISLAND_RADIUS * 0.88, scaleMin: 0.75, scaleMax: 1.15,
-    });
-  }, []);
+  const spruce = SPRUCE_PLANTS;
   const bush = useMemo(() => {
     const rng = makeRng(30);
     // No home arc specified for bushes (ART_SPEC §5) -- scattered freely.

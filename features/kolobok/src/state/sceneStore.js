@@ -54,6 +54,32 @@ export const storyMotion = {
   teleportAngle: null,   // consume-once hard reset of Kolobok's path angle (finale black)
 };
 
+// Phase 6 (WEATHER_SPEC): the live, already-BLENDED atmosphere values every
+// scene consumer reads per frame. AtmosphereDirector is the only writer --
+// it lerps these toward the target (solar phase blend x weather state) at
+// 0.5/s (ANIMATION_SPEC §6) plus the 4s weather ramps and storm flashes.
+// Colors are [r,g,b] 0..1 arrays (cheap to lerp without allocations).
+export const atmosphereLive = {
+  zenith: [0.55, 0.77, 0.88],
+  horizon: [0.81, 0.91, 0.95],
+  dirLight: [1, 1, 1],
+  dirInt: 1.1,
+  ambient: 0.7,
+  fogColor: [0.75, 0.89, 0.95],
+  fogNear: 16,
+  fogFar: 30,
+  cloudCount: 2,       // 0..8 clusters visible (WEATHER_SPEC §2)
+  cloudOpacity: 0.7,
+  cloudColor: [1, 1, 1],
+  windowGlow: 0,       // ART_SPEC §8 `window` column, blended
+  rainT: 0,            // 0..1 ramps for the particle systems / caps
+  snowT: 0,
+  fogWispT: 0,
+  flash: 0,            // storm lightning envelope (0..1, added to lights/sky)
+  sunAzimuth: null,    // degrees; null = no location -> Sky's device-hour arc
+  sunElevation: null,
+};
+
 // Transient, per-frame encounter motion (ANIMATION_SPEC §4-5): written every
 // frame by EncounterDirector's timeline, read every frame by whichever
 // animal/Kolobok/CameraRig cares -- same "outside the store" reasoning as
@@ -82,6 +108,7 @@ export const useSceneStore = create((set, get) => ({
   narration: null,             // story-mode narrator/dialogue line (STORY_SPEC §1)
   storyPlaying: false,         // UI reacts: pills dim to 60%, ▶ becomes ❚❚
   fadeBlack: false,            // finale gulp: RN overlay fades to black (out 300ms/in 900ms)
+  weatherState: 'clear',       // discrete mapped state (WEATHER_SPEC §1)
 
   setActiveZone: (id) => set({ activeZone: id }),
 
@@ -131,4 +158,6 @@ export const useSceneStore = create((set, get) => ({
   setStoryPlaying: (storyPlaying) => set({ storyPlaying }),
 
   setFadeBlack: (fadeBlack) => set({ fadeBlack }),
+
+  setWeatherState: (weatherState) => set({ weatherState }),
 }));
