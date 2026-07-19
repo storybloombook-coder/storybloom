@@ -20,24 +20,38 @@ const PATH_Y = KOLOBOK_RADIUS + 0.3; // Kolobok's resting height on the path
 
 export const ZONE_ANGLE = Object.fromEntries(ZONES.map((z) => [z.id, rad(z.angleDeg)]));
 
-// Birth/rebirth staging points at the izba (angle 0). The sill sits on the
-// izba's CENTER-facing wall (the greybox box spans radius 5.55..6.85, so
-// 5.45 is just proud of that wall) -- visible to the story camera because
-// it sits KOLOBOK_LEAD (~26 deg) around the ring from the izba angle and
-// high enough to see over the roofline corner.
-const SILL_POS = [0, 1.05, 5.45];
+// Birth/rebirth staging points at the izba (angle 0). The sill sits just
+// proud of the izba's CENTER-facing wall (box spans radius 5.55..6.85).
+// On-device review showed the roof cone occludes a wall-hugging sill from
+// the default camera azimuth, so: the sill floats 0.35 off the wall, and
+// birth/rebirth pin Kolobok's angle at izba + BIRTH_STAGE so the camera
+// (which sits a further KOLOBOK_LEAD around) views the sill face from
+// ~44 deg aside -- clear of the roofline -- easing back to the izba angle
+// before the next road chapter so the roll-off never backtracks.
+const BIRTH_STAGE = rad(30);
+const SILL_POS = [0, 1.05, 5.2];
 const IZBA_PATH_POS = [Math.sin(0) * PATH_RADIUS, PATH_Y, Math.cos(0) * PATH_RADIUS];
 
-// Per-chapter camera framings (STORY_SPEC §2 radii; heights/lookAts from
-// the zone table, with the §2 note's izba override for birth/rebirth).
+// Per-chapter camera framings. Radii/heights start from STORY_SPEC §2's
+// table, tightened after live review (2026-07-19): during encounter
+// chapters the camera now looks AT the encounter spot on the rim (the
+// zone's ground point) instead of the island center, so Kolobok and the
+// animal hold the middle of the frame instead of hugging the edge.
+// `lookAt` is a full [x,y,z] target; chapters without one keep the
+// center-look (lookAtY only), e.g. roads, where the roll itself is the
+// subject.
+const encounterLook = (zoneId, y = 0.9) => {
+  const p = pointOnCircle(5.2, ZONE_ANGLE[zoneId]);
+  return [p[0], y, p[2]];
+};
 const FRAMING = {
-  birth: { radius: 11, height: 5.2, lookAtY: 1.6 },
+  birth: { radius: 12, height: 5.2, lookAtY: 1.6, lookAt: [0, 1.2, 4.2] },
   road: { radius: 13, height: 6.5, lookAtY: 1.2 },
-  hare: { radius: 12.2, height: 6.3, lookAtY: 1.1 },
-  wolf: { radius: 12.2, height: 6.8, lookAtY: 1.3 },
-  bear: { radius: 12.2, height: 7.0, lookAtY: 1.4 },
-  foxStart: { radius: 12.2, height: 6.2, lookAtY: 1.1 },
-  foxPush: { radius: 10, height: 6.0, lookAtY: 1.0 },
+  hare: { radius: 13.2, height: 5.9, lookAtY: 1.1, lookAt: encounterLook('hare') },
+  wolf: { radius: 13.2, height: 6.3, lookAtY: 1.3, lookAt: encounterLook('wolf') },
+  bear: { radius: 13.2, height: 6.5, lookAtY: 1.4, lookAt: encounterLook('bear') },
+  foxStart: { radius: 13.2, height: 5.9, lookAtY: 1.1, lookAt: encounterLook('fox') },
+  foxPush: { radius: 10.8, height: 5.6, lookAtY: 1.0, lookAt: encounterLook('fox', 0.8) },
 };
 
 /** Ticks several timelines in lockstep; done when all are done. Lets a
@@ -85,13 +99,15 @@ function buildBirth(ctx) {
     },
     { at: 6300, call: () => { storyMotion.squash = 0.3; storyMotion.dustBurstId += 1; } },
     { at: 6300, dur: 150, update: (t) => { storyMotion.squash = 0.3 * (1 - t); } },
-    // Settle: happy, one proud 360, release overrides, roll off.
+    // Settle: happy, one proud 360, release overrides, roll off -- easing
+    // the staged angle back to the izba so road chapter 1 starts in place.
     { at: 6600, call: () => { storyMotion.expression = 'happy'; storyMotion.posOverride = null; } },
     { at: 6600, dur: 1000, ease: 'easeInOutSine', update: (t) => { storyMotion.spinT = t; } },
+    { at: 6600, dur: 1400, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
     { at: 7600, call: () => { storyMotion.windowGlow = 0; storyMotion.smokeBoost = 1; storyMotion.spinT = 0; ctx.setNarration(null); } },
     { at: 8000, call: () => {} },
   ]);
-  return { composite: composeTimelines(tl), startAngle: ZONE_ANGLE.izba, framing: { ...FRAMING.birth } };
+  return { composite: composeTimelines(tl), startAngle: ZONE_ANGLE.izba + BIRTH_STAGE, framing: { ...FRAMING.birth } };
 }
 
 /** Road chapters (1/3/5/7): 72 deg in 4.5s, hum notes every ~2s. The
@@ -166,13 +182,14 @@ export function foxCatchSteps(ctx, at0 = 0) {
     { at: at0 + 600, dur: 300, update: (t) => { storyMotion.scale = 1 - t; } },
     { at: at0 + 600, call: () => { ctx.setFadeBlack(true); ctx.onGulp?.(); } },
     { at: at0 + 1100, call: () => ctx.setNarration('story.snap') },
-    // While black: reset everything to the izba.
+    // While black: reset everything to the izba (staged like the birth so
+    // the rebirth pop is framed clear of the roofline).
     {
       at: at0 + 2600,
       call: () => {
         storyMotion.posOverride = null;
-        storyMotion.teleportAngle = ZONE_ANGLE.izba;
-        storyMotion.kolobokAngle = ZONE_ANGLE.izba;
+        storyMotion.teleportAngle = ZONE_ANGLE.izba + BIRTH_STAGE;
+        storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE;
         storyMotion.foxHeadPitch = 0;
         storyMotion.framing = { ...FRAMING.birth };
         ctx.setStoryEncounter(null);
@@ -206,6 +223,9 @@ export function foxCatchSteps(ctx, at0 = 0) {
         ctx.setNarration(null);
       },
     },
+    // Ease the staged angle back to the izba so the looping road chapter
+    // picks him up exactly where it expects to start.
+    { at: at0 + 5900, dur: 300, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
   ];
 }
 

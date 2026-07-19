@@ -11,6 +11,12 @@ import { CHAPTERS } from './storyChapters';
 const LAUNCH_IDLE_MS = 1500;  // STORY_SPEC §1: sceneReady + 1.5s of no input
 const RESUME_IDLE_MS = 8000;  // §1: 8s idle in free mode resumes the story
 
+// Live-review feedback (2026-07-19): the spec's ~64s loop pacing read too
+// fast on device -- run every chapter at half speed (~128s loop) by scaling
+// the tick clock, so all timeline structures stay spec-shaped while the
+// whole tale breathes slower.
+const STORY_TIME_SCALE = 0.5;
+
 /** Returns every storyMotion field to "no override" -- the free-mode
  *  identity values. kolobokAngle is deliberately left alone (whatever angle
  *  he's at is where free mode picks him up). */
@@ -151,7 +157,7 @@ export function StoryDirector() {
       }
       const composite = compositeRef.current;
       if (composite) {
-        composite.tick(dt);
+        composite.tick(dt * STORY_TIME_SCALE);
         if (composite.done) {
           compositeRef.current = null;
           if (story.chapter === CHAPTERS.length - 1) {

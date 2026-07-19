@@ -35,16 +35,29 @@ export function CameraRig() {
   const framing = useRef({
     radius: IZBA_FRAMING.radius,
     height: IZBA_FRAMING.height,
+    lookAtX: 0,
     lookAtY: IZBA_FRAMING.lookAtY,
-    from: { ...IZBA_FRAMING },
-    to: { ...IZBA_FRAMING },
+    lookAtZ: 0,
+    from: null,
+    to: null,
     timeline: null,
     storyKey: null, // identity of the storyMotion.framing object last targeted
   });
 
+  // `to.lookAt` ([x,y,z], story encounter chapters) aims the camera at a
+  // world point off the island center; without it, the target stays the
+  // center at to.lookAtY (zone framings, roads).
   const retargetFraming = (f, to, durMs = FRAMING_EASE_MS) => {
-    f.from = { radius: f.radius, height: f.height, lookAtY: f.lookAtY };
-    f.to = to;
+    f.from = {
+      radius: f.radius, height: f.height, lookAtX: f.lookAtX, lookAtY: f.lookAtY, lookAtZ: f.lookAtZ,
+    };
+    f.to = {
+      radius: to.radius,
+      height: to.height,
+      lookAtX: to.lookAt ? to.lookAt[0] : 0,
+      lookAtY: to.lookAt ? to.lookAt[1] : to.lookAtY,
+      lookAtZ: to.lookAt ? to.lookAt[2] : 0,
+    };
     f.timeline = createTimeline([
       {
         at: 0,
@@ -53,7 +66,9 @@ export function CameraRig() {
         update: (t) => {
           f.radius = f.from.radius + (f.to.radius - f.from.radius) * t;
           f.height = f.from.height + (f.to.height - f.from.height) * t;
+          f.lookAtX = f.from.lookAtX + (f.to.lookAtX - f.from.lookAtX) * t;
           f.lookAtY = f.from.lookAtY + (f.to.lookAtY - f.from.lookAtY) * t;
+          f.lookAtZ = f.from.lookAtZ + (f.to.lookAtZ - f.from.lookAtZ) * t;
         },
       },
     ]);
@@ -131,7 +146,7 @@ export function CameraRig() {
       f.height,
       Math.cos(orbit.angle) * pushedRadius,
     );
-    camera.lookAt(0, f.lookAtY, 0);
+    camera.lookAt(f.lookAtX, f.lookAtY, f.lookAtZ);
   });
 
   return null;
