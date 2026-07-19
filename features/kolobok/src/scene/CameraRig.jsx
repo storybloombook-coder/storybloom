@@ -3,8 +3,15 @@ import { useFrame } from '@react-three/fiber/native';
 import {
   ZONES, nearestZone, rad, angleDelta,
 } from '../config/zones';
-import { orbit, useSceneStore } from '../state/sceneStore';
+import { orbit, encounterMotion, useSceneStore } from '../state/sceneStore';
 import { createTimeline } from './timeline';
+
+// ART_SPEC §10 / ANIMATION_SPEC §4: encounter push-ins multiply ON TOP of
+// the (possibly still-easing) zone framing radius, restoring in reverse
+// order automatically since this just reads encounterMotion.cameraPushT
+// fresh every frame -- no separate "restore" step needed, it falls back to
+// 1.0 the instant the beat's own retreat phase eases cameraPushT to 0.
+const ENCOUNTER_PUSH_IN = 0.04;
 
 const FRICTION = 0.94;        // per-frame velocity decay
 const SNAP_SPEED = 3.2;       // how eagerly we ease toward a zone
@@ -80,11 +87,14 @@ export function CameraRig() {
     }
     if (f.timeline) f.timeline.tick(dt);
 
-    // 5. Place camera on its orbit, always looking at the island center
+    // 5. Place camera on its orbit, always looking at the island center.
+    // Encounter push-in (a 4% radius nudge while a beat's approach/react
+    // is active) multiplies on top of the zone framing radius here.
+    const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
     camera.position.set(
-      Math.sin(orbit.angle) * f.radius,
+      Math.sin(orbit.angle) * pushedRadius,
       f.height,
-      Math.cos(orbit.angle) * f.radius,
+      Math.cos(orbit.angle) * pushedRadius,
     );
     camera.lookAt(0, f.lookAtY, 0);
   });

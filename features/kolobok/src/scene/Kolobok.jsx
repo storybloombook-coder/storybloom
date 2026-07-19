@@ -1,9 +1,14 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { PATH_RADIUS, KOLOBOK_RADIUS, angleDelta } from '../config/zones';
-import { orbit, useSceneStore } from '../state/sceneStore';
+import { orbit, encounterMotion, useSceneStore } from '../state/sceneStore';
 import { createTimeline } from './timeline';
 import { makeDoughTexture } from './textures/proceduralTextures';
+
+// ANIMATION_SPEC §4/§5: how far Kolobok rolls forward during a beat's react
+// phase, and the extra target-angle offset it rides on top of the normal
+// camera-follow lead.
+const REACT_ROLL_BOOST = (14 * Math.PI) / 180;
 
 const FOLLOW_LAG = 2.4;   // how quickly Kolobok catches up with the camera
 const LEAD = -0.45;       // radians ahead of the camera so he sits nicely in frame
@@ -88,6 +93,13 @@ export function Kolobok() {
     // Sing
     singing: false,
     singT: 0,
+
+    // Encounter reactions (ANIMATION_SPEC §4/§5), driven by the transient
+    // encounterMotion object rather than store state (it changes every
+    // frame while a beat runs).
+    encounterZoneWas: null, // edge-detect zone changes
+    wasSinging: false,      // edge-detect encounterMotion.singing
+    spinAngle: 0,           // additional rotation.y from the 360 spin beat
   });
 
   function startBlink(s, isDouble = false) {
@@ -147,11 +159,44 @@ export function Kolobok() {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
 
-    // Chase the point slightly ahead of the camera around the path ring
-    const target = orbit.angle + LEAD;
+    // --- Encounter reactions (ANIMATION_SPEC §4/§5) ---
+    // A new beat started (edge-triggered on zoneId changing to non-null):
+    // startled, or the "sly mirrored curiosity" look specifically for fox.
+    if (encounterMotion.zoneId !== s.encounterZoneWas) {
+      if (encounterMotion.zoneId) {
+        s.expressionTarget = encounterMotion.zoneId === 'fox' ? EXPRESSIONS.sly : EXPRESSIONS.startled;
+      } else if (!s.singing) {
+        s.expressionTarget = EXPRESSIONS.neutral;
+      }
+      s.encounterZoneWas = encounterMotion.zoneId;
+    }
+    // The beat's own "sing" window (edge-triggered): reuse the existing
+    // tap-to-sing machinery rather than a parallel system. The window is
+    // 700ms (1300-2000ms), shorter than a standalone tap-sing's own
+    // SING_DURATION_SEC timer, so the falling edge here forces an early
+    // stop when the encounter -- not a direct tap -- is what's driving it;
+    // a standalone tap-sing has encounterMotion.zoneId === null throughout
+    // and keeps running its own full timer untouched.
+    if (encounterMotion.singing && !s.wasSinging) startSing(s);
+    if (!encounterMotion.singing && s.wasSinging && encounterMotion.zoneId) s.singing = false;
+    s.wasSinging = encounterMotion.singing;
+
+    // Chase the point slightly ahead of the camera around the path ring,
+    // plus a temporary +14 deg roll-forward boost while the tapped animal
+    // reacts (react phase only -- approach/retreat don't push Kolobok).
+    const reactBoost = encounterMotion.zoneId && encounterMotion.phase === 'react'
+      ? REACT_ROLL_BOOST * Math.sin(Math.min(encounterMotion.phaseT, 1) * Math.PI)
+      : 0;
+    const target = orbit.angle + LEAD + reactBoost;
     const d = angleDelta(s.angle, target);
     const step = d * Math.min(1, FOLLOW_LAG * dt);
     s.angle += step;
+
+    // 360 deg defiant spin mid-beat (ANIMATION_SPEC §4: "at 1300, 700ms"),
+    // riding on top of the normal path-facing rotation applied below.
+    s.spinAngle = encounterMotion.zoneId && encounterMotion.spinT > 0 && encounterMotion.spinT < 1
+      ? encounterMotion.spinT * Math.PI * 2
+      : 0;
 
     // Rolling: arc length travelled / ball radius = spin delta
     const arc = step * PATH_RADIUS;
@@ -203,8 +248,9 @@ export function Kolobok() {
         KOLOBOK_RADIUS + 0.3 + idleBob + rollBounce + s.hopY + singBob,
         z,
       );
-      // Face along the tangent of the circle
-      root.current.rotation.y = s.angle + Math.PI / 2;
+      // Face along the tangent of the circle, plus the defiant 360 spin
+      // (ANIMATION_SPEC §4/§5) riding on top during its own beat window.
+      root.current.rotation.y = s.angle + Math.PI / 2 + s.spinAngle;
     }
 
     if (dough.current) {

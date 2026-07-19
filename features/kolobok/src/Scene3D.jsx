@@ -10,7 +10,6 @@ import { t } from './config/strings';
 
 const SWIPE_SENSITIVITY = 0.005;   // px -> radians
 const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
-const ENCOUNTER_DURATION_MS = 2200; // zones never navigate -- always just fade
 
 // The actual 3D branch (Canvas, gesture wiring, the zone card + encounter
 // bubble + the stone's accessibility-twin pill row -- all of it only makes
@@ -30,17 +29,12 @@ export function Scene3D({ onNavigate }) {
   const pendingNavigation = useSceneStore((s) => s.pendingNavigation);
   const locale = useSceneStore((s) => s.locale);
   const requestNavigation = useSceneStore((s) => s.requestNavigation);
-  const clearEncounter = useSceneStore((s) => s.clearEncounter);
   const consumeNavigation = useSceneStore((s) => s.consumeNavigation);
 
-  // Encounter beat: show the line, then fade. Zones never navigate (SPEC.md
-  // "Navigation" -- only the crossroads stone does). Interruptible —
-  // cleanup cancels it.
-  useEffect(() => {
-    if (!encounter) return undefined;
-    const timer = setTimeout(clearEncounter, ENCOUNTER_DURATION_MS);
-    return () => clearTimeout(timer);
-  }, [encounter, clearEncounter]);
+  // Encounter beat lifecycle (show bubble, fade, clear) is now fully owned
+  // by EncounterDirector's timeline (ANIMATION_SPEC §4/§5/§9) -- it's the
+  // one that calls clearEncounter when a beat finishes or gets interrupted,
+  // so this component only needs to read `encounter` for the bubble text.
 
   // The one place the scene touches your router: host passes onNavigate.
   useEffect(() => {
@@ -85,7 +79,7 @@ export function Scene3D({ onNavigate }) {
           <Text style={styles.zoneHint}>{t('ui.hint', locale)}</Text>
         </View>
 
-        {encounter && (
+        {encounter?.line && (
           <View style={styles.bubble} pointerEvents="none">
             <Text style={styles.bubbleText}>{encounter.line}</Text>
           </View>

@@ -1,36 +1,46 @@
-import { useRef } from 'react';
-import { useFrame } from '@react-three/fiber/native';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { useSceneStore } from '../state/sceneStore';
+import { Hare } from './characters/Hare';
+import { Wolf } from './characters/Wolf';
+import { Bear } from './characters/Bear';
+import { Fox } from './characters/Fox';
+import {
+  IzbaAmbience, HareAmbience, WolfAmbience, BearAmbience, FoxAmbience,
+} from './ZoneAmbience';
 
-// One greybox landmark. Izba gets a house silhouette, animals get a
-// body + head totem sized per character. All of this is placeholder
-// geometry to be swapped for GLB models in the art pass.
+const CHARACTERS = { hare: Hare, wolf: Wolf, bear: Bear, fox: Fox };
+const AMBIENCE = {
+  izba: IzbaAmbience, hare: HareAmbience, wolf: WolfAmbience, bear: BearAmbience, fox: FoxAmbience,
+};
+
+/** One zone: izba keeps its greybox house shape (ART_SPEC §4's full log-
+ *  cabin model isn't in any phase's explicit scope yet); hare/wolf/bear/fox
+ *  totems are replaced by their real animal (ART_SPEC §3). Every zone gets
+ *  its ambient-life layer (ANIMATION_SPEC §9 / ART_SPEC §11). `{ zone, mode
+ *  }` is passed straight through to the animal per CLAUDE.md's shared
+ *  interface. */
 function Landmark({ zone }) {
-  const group = useRef();
   const isActive = useSceneStore((s) => s.activeZone === zone.id);
+  const encounter = useSceneStore((s) => s.encounter);
   const startEncounter = useSceneStore((s) => s.startEncounter);
 
   const a = rad(zone.angleDeg);
   const pos = [Math.sin(a) * ZONE_RADIUS, 0, Math.cos(a) * ZONE_RADIUS];
 
-  useFrame(() => {
-    if (!group.current) return;
-    // Gentle breathing pulse on the zone the camera faces
-    const t = Date.now() / 500;
-    const s = isActive ? 1 + Math.sin(t) * 0.04 : 1;
-    group.current.scale.set(s, s, s);
-  });
+  const mode = encounter?.id === zone.id
+    ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
+    : 'idle';
 
   const onTap = (e) => {
     e.stopPropagation();
     startEncounter(zone);
   };
 
-  const scale = zone.id === 'bear' ? 1.35 : zone.id === 'hare' ? 0.75 : 1;
+  const Character = CHARACTERS[zone.id];
+  const Ambience = AMBIENCE[zone.id];
 
   return (
-    <group ref={group} position={pos} rotation={[0, a + Math.PI, 0]} onClick={onTap}>
+    <group position={pos} rotation={[0, a + Math.PI, 0]} onClick={onTap}>
       {zone.id === 'izba' ? (
         <>
           <mesh position={[0, 0.85, 0]}>
@@ -43,17 +53,9 @@ function Landmark({ zone }) {
           </mesh>
         </>
       ) : (
-        <>
-          <mesh position={[0, 0.6 * scale, 0]}>
-            <cylinderGeometry args={[0.35 * scale, 0.45 * scale, 1.0 * scale, 12]} />
-            <meshStandardMaterial color={zone.color} roughness={0.85} />
-          </mesh>
-          <mesh position={[0, 1.3 * scale, 0]}>
-            <sphereGeometry args={[0.32 * scale, 16, 16]} />
-            <meshStandardMaterial color={zone.color} roughness={0.85} />
-          </mesh>
-        </>
+        <Character mode={mode} isActiveZone={isActive} />
       )}
+      {Ambience && <Ambience isActiveZone={isActive} />}
       {/* Generous invisible hitbox so taps land easily on mobile */}
       <mesh position={[0, 1, 0]} visible={false}>
         <sphereGeometry args={[1.7, 8, 8]} />
