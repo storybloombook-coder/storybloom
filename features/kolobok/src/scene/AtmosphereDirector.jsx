@@ -4,6 +4,7 @@ import { PALETTES, currentPhase } from '../config/atmosphere';
 import { atmosphereLive, orbit, story, useSceneStore } from '../state/sceneStore';
 import { refreshWeather, weatherNow, currentWeatherState } from '../services/weather';
 import { solarPosition, phaseBlendForElevation } from '../services/sun';
+import { eggManager } from './easterEggs';
 
 // Per-state scene targets (WEATHER_SPEC §2). Missing keys inherit `clear`.
 const GRAY = [0xaa / 255, 0xb4 / 255, 0xbd / 255];
@@ -77,6 +78,9 @@ export function AtmosphereDirector() {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
     const now = Date.now();
+
+    // Easter egg timelines ride this shared frame hub.
+    eggManager.tick(dt);
 
     // --- Sleep power state (only while the story is off) ---
     orbit.frameParity = !orbit.frameParity;

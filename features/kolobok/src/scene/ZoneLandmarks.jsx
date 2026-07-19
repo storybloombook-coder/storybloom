@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
+import { eggManager } from './easterEggs';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -66,6 +67,9 @@ function Landmark({ zone }) {
 
   const onTap = (e) => {
     e.stopPropagation();
+    // The egg registry sees the tap first (fox 5-tap catch); if an egg
+    // consumed it, the normal encounter is skipped (EASTER_EGGS.md §1).
+    if (eggManager.tap(zone.id)) return;
     startEncounter(zone);
   };
 
