@@ -12,22 +12,12 @@ import {
   RepeatWrapping,
   SRGBColorSpace,
 } from 'three';
+import { makeRng } from '../prng';
 
-// Fixed seed -- every builder derives its own stream from this so two
-// builders called with the same args never (by coincidence) produce
-// correlated noise, while every reload still reproduces pixel-for-pixel.
-const TEXTURE_SEED = 133742;
-
-// mulberry32: tiny, fast, good-enough-for-texture-noise PRNG.
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function next() {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// Each builder gets its own stream offset so two builders called with the
+// same args never (by coincidence) produce correlated noise, while every
+// reload still reproduces pixel-for-pixel (see prng.js).
+const mulberry32 = (offset) => makeRng(offset);
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '');
@@ -55,7 +45,7 @@ function finishTexture(data, width, height) {
  *  applied equally to R/G/B so hue stays put and only brightness wobbles --
  *  the hand-painted feel ART_SPEC asks for). */
 export function makeSpeckle(base, speckle, size = 128, density = 0.04, jitter = 0.06) {
-  const rng = mulberry32(TEXTURE_SEED);
+  const rng = mulberry32(0);
   const [br, bg, bb] = hexToRgb(base);
   const [sr, sg, sb] = hexToRgb(speckle);
   const data = new Uint8Array(size * size * 4);
@@ -75,7 +65,7 @@ export function makeSpeckle(base, speckle, size = 128, density = 0.04, jitter = 
  *  20-60% of the width at a random x offset (birch bark). `horizontal:false`
  *  transposes the pattern to run vertically instead. */
 export function makeStripes(base, stripe, size = 128, count = 7, thickness = 0.06, horizontal = true) {
-  const rng = mulberry32(TEXTURE_SEED + 1);
+  const rng = mulberry32(1);
   const [br, bg, bb] = hexToRgb(base);
   const [sr, sg, sb] = hexToRgb(stripe);
   const data = new Uint8Array(size * size * 4);
@@ -111,7 +101,7 @@ export function makeStripes(base, stripe, size = 128, count = 7, thickness = 0.0
 
 /** Pure value-noise tint over a flat `base` fill. */
 export function makeNoiseGrain(base, amount = 0.08, size = 64) {
-  const rng = mulberry32(TEXTURE_SEED + 2);
+  const rng = mulberry32(2);
   const [br, bg, bb] = hexToRgb(base);
   const data = new Uint8Array(size * size * 4);
   for (let i = 0; i < size * size; i++) {
@@ -159,7 +149,7 @@ export function makeRadialGradientData(inner, outer, size = 128, width = size) {
  *  layering two separate DataTextures. Sphere v=0 is the bottom pole,
  *  v=1 the top, in three.js's default SphereGeometry UVs. */
 export function makeDoughTexture(base = '#f2c14e', crust = '#c98a2e', speckle = '#a86f24', size = 128, speckleDensity = 0.03) {
-  const rng = mulberry32(TEXTURE_SEED + 3);
+  const rng = mulberry32(3);
   const [br, bg, bb] = hexToRgb(base);
   const [cr, cg, cb] = hexToRgb(crust);
   const [sr, sg, sb] = hexToRgb(speckle);
