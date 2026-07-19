@@ -1,7 +1,11 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { PATH_RADIUS, KOLOBOK_RADIUS, angleDelta } from '../config/zones';
-import { orbit, encounterMotion, useSceneStore } from '../state/sceneStore';
+import {
+  PATH_RADIUS, KOLOBOK_RADIUS, KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, angleDelta,
+} from '../config/zones';
+import {
+  orbit, encounterMotion, storyMotion, useSceneStore,
+} from '../state/sceneStore';
 import { createTimeline } from './timeline';
 import { makeDoughTexture } from './textures/proceduralTextures';
 
@@ -10,8 +14,8 @@ import { makeDoughTexture } from './textures/proceduralTextures';
 // camera-follow lead.
 const REACT_ROLL_BOOST = (14 * Math.PI) / 180;
 
-const FOLLOW_LAG = 2.4;   // how quickly Kolobok catches up with the camera
-const LEAD = -0.45;       // radians ahead of the camera so he sits nicely in frame
+const FOLLOW_LAG = KOLOBOK_FOLLOW_LAG;
+const LEAD = KOLOBOK_LEAD;
 
 // Eye/brow placement, shared by both sides (z mirrors for left/right).
 const EYE_X = 0.5;
@@ -100,6 +104,10 @@ export function Kolobok() {
     encounterZoneWas: null, // edge-detect zone changes
     wasSinging: false,      // edge-detect encounterMotion.singing
     spinAngle: 0,           // additional rotation.y from the 360 spin beat
+
+    // Story-mode request channels (STORY_SPEC §3), edge-detected.
+    blinkBurstWas: 0,
+    storyExpressionWas: null,
   });
 
   function startBlink(s, isDouble = false) {
@@ -181,22 +189,44 @@ export function Kolobok() {
     if (!encounterMotion.singing && s.wasSinging && encounterMotion.zoneId) s.singing = false;
     s.wasSinging = encounterMotion.singing;
 
-    // Chase the point slightly ahead of the camera around the path ring,
-    // plus a temporary +14 deg roll-forward boost while the tapped animal
+    // --- Story-mode extras (STORY_SPEC §3), all edge-detected requests ---
+    // Hard teleport (finale's while-black reset): consume-once, bypasses
+    // the chase lag entirely so he's already at the izba when the screen
+    // fades back in.
+    if (storyMotion.teleportAngle !== null && storyMotion.teleportAngle !== undefined) {
+      s.angle = storyMotion.teleportAngle;
+      storyMotion.teleportAngle = null;
+    }
+    if (storyMotion.blinkBurst !== s.blinkBurstWas) {
+      s.blinkBurstWas = storyMotion.blinkBurst;
+      if (!s.blinkTimeline) startBlink(state.current);
+    }
+    if (storyMotion.expression !== s.storyExpressionWas) {
+      s.storyExpressionWas = storyMotion.expression;
+      if (storyMotion.expression) s.expressionTarget = EXPRESSIONS[storyMotion.expression] ?? EXPRESSIONS.neutral;
+    }
+
+    // Chase target: in story mode the director's scripted angle IS the
+    // target (STORY_SPEC §1 control inversion -- camera follows him
+    // instead); in free mode, the point slightly ahead of the camera. Both
+    // add the temporary +14 deg roll-forward boost while a tapped animal
     // reacts (react phase only -- approach/retreat don't push Kolobok).
     const reactBoost = encounterMotion.zoneId && encounterMotion.phase === 'react'
       ? REACT_ROLL_BOOST * Math.sin(Math.min(encounterMotion.phaseT, 1) * Math.PI)
       : 0;
-    const target = orbit.angle + LEAD + reactBoost;
+    const target = (orbit.mode === 'story' ? storyMotion.kolobokAngle : orbit.angle + LEAD) + reactBoost;
     const d = angleDelta(s.angle, target);
     const step = d * Math.min(1, FOLLOW_LAG * dt);
     s.angle += step;
 
     // 360 deg defiant spin mid-beat (ANIMATION_SPEC §4: "at 1300, 700ms"),
     // riding on top of the normal path-facing rotation applied below.
-    s.spinAngle = encounterMotion.zoneId && encounterMotion.spinT > 0 && encounterMotion.spinT < 1
-      ? encounterMotion.spinT * Math.PI * 2
-      : 0;
+    // storyMotion.spinT is the story chapters' own spin channel (birth's
+    // proud spin, finale beats) -- same visual, different driver.
+    const spinT = encounterMotion.zoneId && encounterMotion.spinT > 0 && encounterMotion.spinT < 1
+      ? encounterMotion.spinT
+      : (storyMotion.spinT > 0 && storyMotion.spinT < 1 ? storyMotion.spinT : 0);
+    s.spinAngle = spinT * Math.PI * 2;
 
     // Rolling: arc length travelled / ball radius = spin delta
     const arc = step * PATH_RADIUS;
@@ -240,32 +270,52 @@ export function Kolobok() {
     s.smileScale += (s.expressionTarget.smileScale - s.smileScale) * lerpAmt;
 
     if (root.current) {
-      const x = Math.sin(s.angle) * PATH_RADIUS;
-      const z = Math.cos(s.angle) * PATH_RADIUS;
-      const idleBob = Math.sin(Date.now() / 400) * 0.03;
-      root.current.position.set(
-        x,
-        KOLOBOK_RADIUS + 0.3 + idleBob + rollBounce + s.hopY + singBob,
-        z,
-      );
+      if (storyMotion.posOverride) {
+        // Story beat has him off the path entirely (windowsill, arc jumps,
+        // the fox's snout): position comes straight from the timeline;
+        // idle bob/roll bounce are suppressed so he sits still.
+        root.current.position.set(...storyMotion.posOverride);
+      } else {
+        const x = Math.sin(s.angle) * PATH_RADIUS;
+        const z = Math.cos(s.angle) * PATH_RADIUS;
+        const idleBob = Math.sin(Date.now() / 400) * 0.03;
+        root.current.position.set(
+          x,
+          KOLOBOK_RADIUS + 0.3 + idleBob + rollBounce + s.hopY + singBob,
+          z,
+        );
+      }
       // Face along the tangent of the circle, plus the defiant 360 spin
-      // (ANIMATION_SPEC §4/§5) riding on top during its own beat window.
+      // (ANIMATION_SPEC §4/§5) riding on top during its own beat window,
+      // plus the story's windowsill-wobble/snout-balance body tilt.
       root.current.rotation.y = s.angle + Math.PI / 2 + s.spinAngle;
+      root.current.rotation.z = storyMotion.bodyTilt;
+      // Birth pop (0 -> 1) / finale gulp (1 -> 0). setScalar would fight
+      // the dough's own squash scaling below, so scale the root instead.
+      root.current.scale.setScalar(storyMotion.scale);
+      // Publish world position + singing state for the particle pools
+      // (notes/dust spawn at wherever he currently is, path or override).
+      storyMotion.kolobokWorldPos[0] = root.current.position.x;
+      storyMotion.kolobokWorldPos[1] = root.current.position.y;
+      storyMotion.kolobokWorldPos[2] = root.current.position.z;
+      storyMotion.kolobokSinging = s.singing;
     }
 
     if (dough.current) {
       dough.current.rotation.x = s.spin;
       // Squash-and-stretch: continuous roll squash (max 18%, speed-driven)
-      // plus the one-shot landing squash from a hop, summed and clamped so
-      // hopping mid-roll doesn't over-squash.
-      const q = Math.min(0.35, speed * 0.18 + s.landSquash * 0.25);
+      // plus the one-shot landing squash from a hop OR a story beat's own
+      // squash channel (birth landing 30%), summed and clamped so nothing
+      // over-squashes.
+      const q = Math.min(0.35, speed * 0.18 + s.landSquash * 0.25 + storyMotion.squash);
       dough.current.scale.set(1 + q, 1 - q, 1 + q);
     }
 
     if (face.current) {
       // Keep the face looking outward toward the camera side -- deliberately
       // NOT reading dough.current.rotation, so the face never spins with it.
-      face.current.rotation.y = -Math.PI / 2;
+      // storyMotion.faceYaw adds the birth chapter's look-around.
+      face.current.rotation.y = -Math.PI / 2 + storyMotion.faceYaw;
     }
 
     // Eyelids: 0 open .. 1 closed, hemisphere rotates down to cover the eye.

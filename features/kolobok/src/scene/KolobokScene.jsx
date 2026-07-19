@@ -7,6 +7,8 @@ import { Sky } from './Sky';
 import { BackgroundForest } from './BackgroundForest';
 import { CrossroadsStone } from './CrossroadsStone';
 import { EncounterDirector } from './EncounterDirector';
+import { StoryDirector } from './StoryDirector';
+import { KolobokParticles } from './KolobokParticles';
 import { currentPhase, PALETTES } from '../config/atmosphere';
 
 // Fog/lighting now come from the time-of-day palette (ART_SPEC §8) instead
@@ -30,8 +32,10 @@ export function KolobokScene() {
       <CrossroadsStone />
       <ZoneLandmarks />
       <Kolobok />
+      <KolobokParticles />
       <CameraRig />
       <EncounterDirector />
+      <StoryDirector />
     </>
   );
 }

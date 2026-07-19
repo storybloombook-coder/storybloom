@@ -1,5 +1,7 @@
+import { useRef } from 'react';
+import { useFrame } from '@react-three/fiber/native';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
-import { useSceneStore } from '../state/sceneStore';
+import { storyMotion, useSceneStore } from '../state/sceneStore';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -12,6 +14,32 @@ const CHARACTERS = { hare: Hare, wolf: Wolf, bear: Bear, fox: Fox };
 const AMBIENCE = {
   izba: IzbaAmbience, hare: HareAmbience, wolf: WolfAmbience, bear: BearAmbience, fox: FoxAmbience,
 };
+
+/** The izba's window pane, on the CENTER-facing wall (local +z after the
+ *  landmark group's a+PI yaw): the story camera watches the birth/rebirth
+ *  beats from KOLOBOK_LEAD around the ring, which sees this side. Emissive
+ *  intensity rides storyMotion.windowGlow (birth pulse / rebirth glow,
+ *  STORY_SPEC §3); ANIMATION_SPEC §6's time-of-day glow joins in Phase 6. */
+function IzbaWindow() {
+  const materialRef = useRef();
+  useFrame(() => {
+    if (materialRef.current) {
+      materialRef.current.emissiveIntensity = storyMotion.windowGlow * 1.6;
+    }
+  });
+  return (
+    <mesh position={[0, 1.0, 0.66]}>
+      <planeGeometry args={[0.34, 0.3]} />
+      <meshStandardMaterial
+        ref={materialRef}
+        color="#3a3229"
+        emissive="#ffb84d"
+        emissiveIntensity={0}
+        roughness={0.6}
+      />
+    </mesh>
+  );
+}
 
 /** One zone: izba keeps its greybox house shape (ART_SPEC §4's full log-
  *  cabin model isn't in any phase's explicit scope yet); hare/wolf/bear/fox
@@ -51,6 +79,7 @@ function Landmark({ zone }) {
             <coneGeometry args={[1.35, 0.9, 4]} />
             <meshStandardMaterial color="#a5602f" roughness={0.9} />
           </mesh>
+          <IzbaWindow />
         </>
       ) : (
         <Character mode={mode} isActiveZone={isActive} />

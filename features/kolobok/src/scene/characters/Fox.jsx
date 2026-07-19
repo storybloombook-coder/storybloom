@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { CapsuleGeometry, SphereGeometry } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
-import { encounterMotion } from '../../state/sceneStore';
+import { encounterMotion, storyMotion } from '../../state/sceneStore';
 
 const FUR = '#d9722f';
 const CREAM = '#f2e8d8';
@@ -109,7 +109,12 @@ export function Fox({ mode, isActiveZone }) {
       rootRef.current.position.z = s.approachZ;
       rootRef.current.scale.setScalar(pulse);
     }
-    if (headGroupRef.current) headGroupRef.current.rotation.z = headTilt + lean;
+    if (headGroupRef.current) {
+      headGroupRef.current.rotation.z = headTilt + lean;
+      // Story finale toss (STORY_SPEC §3 ch8): head tilts back as she
+      // flips Kolobok up. Zero outside that beat.
+      headGroupRef.current.rotation.x = -storyMotion.foxHeadPitch * 0.6;
+    }
     // Yaw (Y), not pitch (X): the tail mesh is aligned along local Z (see
     // its own Math.PI/2 X-rotation below), so a Y-axis rotation sweeps its
     // far end left-right -- a natural sway. An X-axis rotation would flop

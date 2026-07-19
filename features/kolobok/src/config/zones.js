@@ -8,6 +8,12 @@ export const PATH_RADIUS = 4.6;      // Kolobok rolls on this ring
 export const ISLAND_RADIUS = 8;
 export const KOLOBOK_RADIUS = 0.6;
 
+// Kolobok <-> camera follow geometry, shared by BOTH follow directions
+// (free mode: Kolobok chases orbit.angle + LEAD; story mode: the camera
+// chases kolobokAngle - LEAD -- STORY_SPEC §1 "same math, inverted leader").
+export const KOLOBOK_LEAD = -0.45;      // radians ahead of the camera
+export const KOLOBOK_FOLLOW_LAG = 2.4;  // chase catch-up rate (1/s)
+
 // Per-zone camera framing (ART_SPEC §10) -- orbit radius / camera height /
 // lookAt-y to ease toward when this zone becomes active, and the ground
 // vertex-tint blended in within its 36° arc (ART_SPEC §6). Story chapter 0

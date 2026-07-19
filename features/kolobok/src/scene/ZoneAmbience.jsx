@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber/native';
 import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide, Object3D, SphereGeometry,
 } from 'three';
+import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 
 const dummy = new Object3D();
@@ -50,9 +51,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
 
-    // --- Chimney smoke: always on, +30% spawn rate when active ---
+    // --- Chimney smoke: always on, +30% spawn rate when active, and the
+    // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
     if (smokeRef.current) {
-      const rate = isActiveZone ? 1.3 : 1;
+      const rate = (isActiveZone ? 1.3 : 1) * storyMotion.smokeBoost;
       const positions = smokeGeometry.attributes.position;
       smokeState.current.forEach((p, i) => {
         p.t += dt * rate * 0.4;
