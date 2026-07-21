@@ -13,6 +13,7 @@ import {
   SRGBColorSpace,
 } from 'three';
 import { makeRng } from '../prng';
+import { grade } from '../../config/palette';
 
 // Each builder gets its own stream offset so two builders called with the
 // same args never (by coincidence) produce correlated noise, while every
@@ -138,6 +139,91 @@ export function makeRadialGradientData(inner, outer, size = 128, width = size) {
     }
   }
   return finishTexture(data, width, height);
+}
+
+// Cache of built ramps, keyed by base hex -- every hero material asking for
+// the same base color (e.g. all four legs of an instanced animal) shares one
+// 4x1 DataTexture instead of rebuilding it per mesh.
+const toonRampCache = new Map();
+
+/** VISUAL_QUALITY_SPEC §1: a 4-step toon gradient map for `base`, NEAREST-
+ *  filtered (hard bands are the point). Warm-light/cool-shadow bias baked
+ *  in -- shadow hue-shifts toward violet, highlight warms toward cream --
+ *  rather than a plain darken/lighten ramp, which is the actual "storybook"
+ *  signal per the spec ("never skip the hue shift"). */
+export function makeToonRamp(base) {
+  const cached = toonRampCache.get(base);
+  if (cached) return cached;
+
+  // VISUAL_QUALITY_SPEC §6: the global grade (+6% saturation) runs once
+  // here, at build time -- every toon-shaded surface gets the coherence
+  // pass for free just by going through this one function.
+  const [br, bg, bb] = hexToRgb(grade(base));
+  const [vr, vg, vb] = hexToRgb('#2a2a55'); // cool shadow tint
+  const [hr, hg, hb] = hexToRgb('#fff2d6'); // warm highlight tint
+
+  // step 0: darkened 35%, mixed 12% toward violet/blue, plus VISUAL_QUALITY_
+  // SPEC §6's extra 4%-toward-#2a2a55 coherence nudge reserved for shadows.
+  const s0 = [
+    lerp(lerp(br * 0.65, vr, 0.12), vr, 0.04),
+    lerp(lerp(bg * 0.65, vg, 0.12), vg, 0.04),
+    lerp(lerp(bb * 0.65, vb, 0.12), vb, 0.04),
+  ];
+  // step 1: darkened 12%, no hue shift.
+  const s1 = [br * 0.88, bg * 0.88, bb * 0.88];
+  // step 2: base as-is.
+  const s2 = [br, bg, bb];
+  // step 3: lightened 18%, warmed 8% toward cream.
+  const s3 = [
+    lerp(Math.min(255, br * 1.18), hr, 0.08),
+    lerp(Math.min(255, bg * 1.18), hg, 0.08),
+    lerp(Math.min(255, bb * 1.18), hb, 0.08),
+  ];
+
+  const steps = [s0, s1, s2, s3];
+  const data = new Uint8Array(4 * 4);
+  steps.forEach(([r, g, b], i) => {
+    const o = i * 4;
+    data[o] = clamp255(r);
+    data[o + 1] = clamp255(g);
+    data[o + 2] = clamp255(b);
+    data[o + 3] = 255;
+  });
+
+  const texture = new DataTexture(data, 4, 1, RGBAFormat, UnsignedByteType);
+  texture.magFilter = NearestFilter;
+  texture.minFilter = NearestFilter;
+  texture.needsUpdate = true;
+  toonRampCache.set(base, texture);
+  return texture;
+}
+
+/** VISUAL_QUALITY_SPEC §1's fake-specular overlay: a true center-out radial
+ *  falloff (unlike makeRadialGradientData's pole-to-pole gradient) -- opaque
+ *  white center fading to fully transparent at the rim, for an additive
+ *  highlight sphere/disc. `ClampToEdgeWrapping` is the caller's job (this
+ *  just fills the pixels); wrap defaults from finishTexture would tile the
+ *  falloff, which we don't want here, so this builds its own DataTexture
+ *  rather than routing through finishTexture. */
+export function makeRadialAlphaTexture(size = 32) {
+  const data = new Uint8Array(size * size * 4);
+  const c = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.sqrt((x - c) ** 2 + (y - c) ** 2) / c;
+      const a = clamp255((1 - Math.min(1, d)) * 255);
+      const o = (y * size + x) * 4;
+      data[o] = 255;
+      data[o + 1] = 255;
+      data[o + 2] = 255;
+      data[o + 3] = a;
+    }
+  }
+  const texture = new DataTexture(data, size, size, RGBAFormat, UnsignedByteType);
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 /** Kolobok's dough (ART_SPEC §2): stays `base` through the equator and

@@ -7,16 +7,30 @@
 // DRIVER once location is available (real solar elevation selects/blends
 // these rows instead). The hour table remains the fallback when it isn't.
 
+// POLISH_SPEC §2 per-phase fog near/far (weather states still override on
+// top via AtmosphereDirector's ramp blend -- these are the "clear" baseline).
 export const PALETTES = {
-  morning: { zenith: '#a8cfe4', horizon: '#f4dfc0', dirLight: '#fff2dd', dirInt: 1.0, ambient: 0.65, fog: '#e4ded2', window: 0 },
-  day: { zenith: '#8ec4e0', horizon: '#cfe8f2', dirLight: '#ffffff', dirInt: 1.1, ambient: 0.70, fog: '#bfe3f2', window: 0 },
-  evening: { zenith: '#7a86b8', horizon: '#f0b57e', dirLight: '#ffcf9e', dirInt: 0.9, ambient: 0.55, fog: '#e0b394', window: 0.8 },
-  night: { zenith: '#141b33', horizon: '#2c3555', dirLight: '#7d8fc4', dirInt: 0.35, ambient: 0.30, fog: '#1c2440', window: 1.4 },
+  morning: {
+    zenith: '#a8cfe4', horizon: '#f4dfc0', dirLight: '#fff2dd', dirInt: 1.0, ambient: 0.65, fog: '#e4ded2', window: 0, fogNear: 13, fogFar: 26,
+  },
+  day: {
+    zenith: '#8ec4e0', horizon: '#cfe8f2', dirLight: '#ffffff', dirInt: 1.1, ambient: 0.70, fog: '#bfe3f2', window: 0, fogNear: 17, fogFar: 32,
+  },
+  evening: {
+    zenith: '#7a86b8', horizon: '#f0b57e', dirLight: '#ffcf9e', dirInt: 0.9, ambient: 0.55, fog: '#e0b394', window: 0.8, fogNear: 14, fogFar: 27,
+  },
+  night: {
+    zenith: '#141b33', horizon: '#2c3555', dirLight: '#7d8fc4', dirInt: 0.35, ambient: 0.30, fog: '#1c2440', window: 1.4, fogNear: 12, fogFar: 24,
+  },
   // Twilight blend rows (WEATHER_SPEC §1) -- no `window` value specified
   // there; 0 matches their day-adjacent character (glow is a night/evening
   // thing only).
-  sunrise: { zenith: '#8fa0c8', horizon: '#f2b98a', dirLight: '#ffd9b0', dirInt: 0.7, ambient: 0.45, fog: '#d8b9a0', window: 0 },
-  sunset: { zenith: '#6f74a8', horizon: '#f09a6a', dirLight: '#ffb886', dirInt: 0.7, ambient: 0.45, fog: '#d09a84', window: 0 },
+  sunrise: {
+    zenith: '#8fa0c8', horizon: '#f2b98a', dirLight: '#ffd9b0', dirInt: 0.7, ambient: 0.45, fog: '#d8b9a0', window: 0, fogNear: 12, fogFar: 24,
+  },
+  sunset: {
+    zenith: '#6f74a8', horizon: '#f09a6a', dirLight: '#ffb886', dirInt: 0.7, ambient: 0.45, fog: '#d09a84', window: 0, fogNear: 12, fogFar: 24,
+  },
 };
 
 // Device-hour fallback bands (ART_SPEC §8), used until WEATHER_SPEC's solar

@@ -3,6 +3,8 @@ import { useFrame } from '@react-three/fiber/native';
 import { CapsuleGeometry, SphereGeometry } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion, storyMotion } from '../../state/sceneStore';
+import { makeToonMaterial } from '../materials/toonMaterial';
+import { BlobShadow } from '../BlobShadow';
 
 const FUR = '#d9722f';
 const CREAM = '#f2e8d8';
@@ -43,6 +45,13 @@ export function Fox({ mode, isActiveZone }) {
     { geometry: new SphereGeometry(0.06, 8, 6), color: FUR, position: [-0.09, 0.15, -0.02], scale: [0.8, 1, 0.6] },
     { geometry: new SphereGeometry(0.025, 6, 6), color: DARK, position: [-0.1, 0.19, -0.02] },
   ]), []);
+
+  const materials = useMemo(() => ({
+    body: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    head: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    tailBase: makeToonMaterial({ color: FUR, rimStrength: 0.35 }),
+    tailTip: makeToonMaterial({ color: CREAM, rimStrength: 0.35 }),
+  }), []);
 
   const state = useRef({
     swayPhase: 0,
@@ -125,23 +134,18 @@ export function Fox({ mode, isActiveZone }) {
 
   return (
     <group ref={rootRef}>
-      <mesh geometry={bodyGeometry}>
-        <meshStandardMaterial vertexColors roughness={0.8} />
-      </mesh>
+      <BlobShadow radiusX={0.65} radiusZ={0.65} />
+      <mesh geometry={bodyGeometry} material={materials.body} />
       <group ref={headGroupRef} position={[0, 0.62, 0.15]}>
-        <mesh geometry={headGeometry}>
-          <meshStandardMaterial vertexColors roughness={0.75} />
-        </mesh>
+        <mesh geometry={headGeometry} material={materials.head} />
       </group>
       <group ref={tailBaseRef} position={[0, 0.4, -0.16]}>
-        <mesh position={[0, 0, -0.14]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh position={[0, 0, -0.14]} rotation={[Math.PI / 2, 0, 0]} material={materials.tailBase}>
           <capsuleGeometry args={[0.09, 0.16, 2, 6]} />
-          <meshStandardMaterial color={FUR} roughness={0.85} />
         </mesh>
         <group ref={tailTipRef} position={[0, 0, -0.3]}>
-          <mesh position={[0, 0, -0.12]} rotation={[Math.PI / 2, 0, 0]}>
+          <mesh position={[0, 0, -0.12]} rotation={[Math.PI / 2, 0, 0]} material={materials.tailTip}>
             <capsuleGeometry args={[0.065, 0.14, 2, 6]} />
-            <meshStandardMaterial color={CREAM} roughness={0.85} />
           </mesh>
         </group>
       </group>

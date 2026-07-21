@@ -58,6 +58,18 @@ The greybox in `src/` is the baseline and its architecture contract is final:
 7. **Easter eggs** — the hidden-interaction registry and full egg set per
    docs/EASTER_EGGS.md (Grandpa fishing, owl, hedgehog, dizzy Kolobok,
    moon wink, cloud drizzle, smoke rings).
+8. **Depth & life polish** — fake shadows, layered fog and mist, aerial
+   perspective, global wind, reactive grass, ambient micro-motion per
+   docs/POLISH_SPEC.md.
+9. **Sound** — opt-in procedural audio, zero bundled files, per
+   docs/SOUND_SPEC.md.
+10. **Seasons & holidays** — calendar-driven variants per
+    docs/SEASONS_SPEC.md.
+11. **Host integration** — badge magpie, photo mode, egg tally per
+    docs/INTEGRATION_SPEC.md, plus the ship-readiness gate.
+12. **Visual quality** — toon shading, rim light, light rig, adaptive
+    AA/dpr, shape warmth, global color grade per
+    docs/VISUAL_QUALITY_SPEC.md.
 
 ## Navigation: the crossroads stone (3-button menu)
 
@@ -200,6 +212,67 @@ systems halved and frame skip active.
   greybox code.
 
 Acceptance: EASTER_EGGS.md §3 in full.
+
+### Phase 8 — Depth and life polish
+- Blob shadows + contact darkening, per-phase fog tuning, aerial
+  perspective on the horizon layers, ground mist, the global wind system
+  with grass tufts and bend-away reactions, and the "never a static frame"
+  set — all per docs/POLISH_SPEC.md, in its internal order.
+
+Acceptance: POLISH_SPEC.md §7 in full.
+
+### Phase 12 — Visual quality (shading and light polish)
+- Toon ramp shading with warm-light/cool-shadow gradient maps, fresnel rim
+  light tied to the atmosphere palette, a 3-light hemisphere+sun+fill rig,
+  adaptive AA/dpr, organic vertex jitter and puffier canopies, and a
+  global color grade snapping every hex to a curated palette — all per
+  docs/VISUAL_QUALITY_SPEC.md. Safe to run any time after Phase 4
+  (needs characters/environment to exist) — consider running it BEFORE
+  Phases 8–11 if visual quality is the priority, since it's pure
+  shading/light and touches no logic.
+
+Acceptance: VISUAL_QUALITY_SPEC.md §7 in full, including the
+before/after screenshot comparison.
+
+### Phase 9 — Sound (opt-in, procedural)
+- Offline-rendered WAV synth, cache, mixer, speaker toggle, full recipe
+  set per docs/SOUND_SPEC.md.
+
+Acceptance: SOUND_SPEC.md §3 in full.
+
+### Phase 10 — Seasons and holidays
+- Calendar-driven season table (tints, densities, winter pond ice with
+  slippery Kolobok, bare birches) and holiday props (New Year garland +
+  tree + Santa hat, Maslenitsa pancakes) per docs/SEASONS_SPEC.md.
+
+Acceptance: SEASONS_SPEC.md §3 in full.
+
+### Phase 11 — Host integration
+- Messenger magpie badge system, photo mode with share sheet, and the
+  hidden egg tally per docs/INTEGRATION_SPEC.md.
+
+Acceptance: INTEGRATION_SPEC.md §4 in full.
+
+## Ship-readiness gate (after the final phase, before release)
+
+Not a phase — a checklist the implementing agent runs and reports:
+
+1. **Battery protocol**: 30 min idle on the 3D scene (story looping,
+   screen on, mid brightness) vs 30 min on flat mode, same device; target
+   drain delta ≤ 8 percentage points. Report both numbers.
+2. **Thermal**: device must not exceed "warm" (no OS thermal throttling
+   logged) during the battery run.
+3. **FPS histogram**: dev flag `perf.hud` logs a 60 s histogram (p50/p95
+   frame time) in: idle scene, story chapter 8, storm weather, photo mode.
+   p95 ≤ 40 ms on the low-end test device in all four.
+4. **Memory**: steady-state after 10 min ≤ 350 MB total app; no growth
+   trend across 3 story loops (leak check).
+5. **Telemetry wired**: `onSceneError`, `onEasterEgg`, `onSceneModeChange`
+   all reach the host callbacks (verified with a logging host harness).
+6. **Network audit**: exactly ≤ 1 Open-Meteo request per 5 min active, 0
+   when backgrounded, 0 in flat mode (verified via proxy or flipper).
+7. **Repo audit**: `git ls-files` = code + docs only; placeholder scan
+   shows only the three menu labels (or zero once supplied).
 
 ## Global acceptance criteria
 

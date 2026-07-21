@@ -13,7 +13,8 @@ import { t } from './config/strings';
 
 const SWIPE_SENSITIVITY = 0.005;   // px -> radians
 const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
-const STORY_INTERRUPT_PAN_PX = 12; // STORY_SPEC §1: any pan > 12px interrupts
+const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
+const PITCH_OFFSET_MAX = 1.6;
 
 // The actual 3D branch (Canvas, gesture wiring, the zone card + encounter
 // bubble + the stone's accessibility-twin pill row -- all of it only makes
@@ -32,6 +33,7 @@ export function Scene3D({ onNavigate }) {
   const encounter = useSceneStore((s) => s.encounter);
   const narration = useSceneStore((s) => s.narration);
   const storyPlaying = useSceneStore((s) => s.storyPlaying);
+  const storyCompleted = useSceneStore((s) => s.storyCompleted);
   const fadeBlack = useSceneStore((s) => s.fadeBlack);
   const pendingNavigation = useSceneStore((s) => s.pendingNavigation);
   const locale = useSceneStore((s) => s.locale);
@@ -75,26 +77,31 @@ export function Scene3D({ onNavigate }) {
   }, [fadeBlack, fadeOpacity]);
 
   // Gesture wiring: JS-thread callbacks writing into the transient `orbit`
-  // object. In story mode a pan past 12px raises the interrupt flag
-  // (StoryDirector consumes it and hands control back); orbit.angle keeps
-  // accumulating regardless, which is harmless mid-story since CameraRig
-  // overwrites it every frame until the handback actually happens.
-  const panAccum = useRef(0);
+  // object. In story mode, dragging no longer pauses the tale -- it just
+  // marks `orbit.lookingAway` so CameraRig stops correcting orbit.angle back
+  // toward the story's tracked azimuth (Kolobok/narration keep going
+  // regardless); CameraRig itself clears the flag and resumes the auto-
+  // follow after 15s of no input (story.lastInputAt below).
   const pan = Gesture.Pan()
     .runOnJS(true)
-    .onBegin(() => { panAccum.current = 0; })
+    .onBegin(() => { orbit.freeLookActive = true; })
     .onChange((e) => {
       story.lastInputAt = Date.now();
-      panAccum.current += Math.abs(e.changeX);
-      if (orbit.mode === 'story' && panAccum.current > STORY_INTERRUPT_PAN_PX) {
-        story.interruptRequest = true;
-      }
+      if (orbit.mode === 'story') orbit.lookingAway = true;
       orbit.snapTarget = null;
       orbit.angle += -e.changeX * SWIPE_SENSITIVITY;
       orbit.velocity = 0;
+      // Free-look: vertical drag nudges camera height/tilt on top of
+      // whichever framing (zone or story) is active; CameraRig eases this
+      // back to 0 the instant freeLookActive goes false below.
+      orbit.pitchOffset = Math.max(
+        -PITCH_OFFSET_MAX,
+        Math.min(PITCH_OFFSET_MAX, orbit.pitchOffset - e.changeY * VERTICAL_SENSITIVITY),
+      );
     })
     .onEnd((e) => {
       orbit.velocity = -e.velocityX * FLING_SENSITIVITY;
+      orbit.freeLookActive = false;
     });
 
   const onPlayPause = () => {
@@ -112,7 +119,8 @@ export function Scene3D({ onNavigate }) {
       <GestureDetector gesture={pan}>
         <Canvas
           style={StyleSheet.absoluteFill}
-          dpr={[1, 1.5]}
+          dpr={2}
+          gl={{ antialias: true }}
           frameloop={frameloop}
           camera={{ fov: 45, near: 0.5, far: 60 }}
         >
@@ -157,15 +165,22 @@ export function Scene3D({ onNavigate }) {
         </View>
       </View>
 
-      {/* ▶ / ❚❚ (STORY_SPEC §1): bottom-right, 40x40, controls the tale. */}
+      {/* ▶ / ❚❚ / restart (STORY_SPEC §1 + one-round loop stop): bottom-
+          right, 40x40, controls the tale. Once a full round finishes the
+          loop stops itself (see StoryDirector's 'stopped' mode) and this
+          swaps to a restart icon; tapping it starts back at chapter 0. */}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={storyPlaying ? t('ui.pauseTale', locale) : t('ui.playTale', locale)}
+        accessibilityLabel={
+          storyPlaying ? t('ui.pauseTale', locale)
+            : storyCompleted ? t('ui.restartTale', locale)
+              : t('ui.playTale', locale)
+        }
         onPress={onPlayPause}
         style={styles.storyButton}
         hitSlop={8}
       >
-        <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : '▶'}</Text>
+        <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
       </Pressable>
 
       {/* Finale fade-to-black overlay; never intercepts touches. */}
@@ -173,6 +188,54 @@ export function Scene3D({ onNavigate }) {
         pointerEvents="none"
         style={[StyleSheet.absoluteFillObject, styles.fadeOverlay, { opacity: fadeOpacity }]}
       />
+
+      <Vignette />
+    </View>
+  );
+}
+
+// POLISH_SPEC §2 vignette: plain RN overlay (not GL), transparent center ->
+// rgba(20,16,10,0.16) at the corners. RN has no gradient primitive without
+// a new dependency CLAUDE.md doesn't list, so this fakes the radial falloff
+// with 3 concentric, low-opacity circles per corner, each centered exactly
+// ON that corner point (negative left/top-or-right/bottom offsets) so only
+// a quarter of each circle shows -- their overlap near the corner and
+// falloff toward its edges approximates a soft radial gradient without
+// ever needing a true one.
+const VIGNETTE_RINGS = [
+  { r: 190, alpha: 0.05 },
+  { r: 120, alpha: 0.06 },
+  { r: 60, alpha: 0.05 },
+];
+function VignetteCorner({ top, bottom, left, right }) {
+  const hKey = left !== undefined ? 'left' : 'right';
+  const vKey = top !== undefined ? 'top' : 'bottom';
+  return (
+    <View style={[styles.vignetteAnchor, { [vKey]: 0, [hKey]: 0 }]} pointerEvents="none">
+      {VIGNETTE_RINGS.map((ring) => (
+        <View
+          key={ring.r}
+          style={{
+            position: 'absolute',
+            width: ring.r * 2,
+            height: ring.r * 2,
+            borderRadius: ring.r,
+            backgroundColor: `rgba(20,16,10,${ring.alpha})`,
+            [vKey]: -ring.r,
+            [hKey]: -ring.r,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+function Vignette() {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <VignetteCorner top left />
+      <VignetteCorner top right />
+      <VignetteCorner bottom left />
+      <VignetteCorner bottom right />
     </View>
   );
 }
@@ -231,4 +294,5 @@ const styles = StyleSheet.create({
   },
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
   fadeOverlay: { backgroundColor: '#000000' },
+  vignetteAnchor: { position: 'absolute', width: 0, height: 0 },
 });

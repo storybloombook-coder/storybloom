@@ -33,6 +33,7 @@ function resetStoryMotion() {
   storyMotion.foxHeadPitch = 0;
   storyMotion.framing = null;
   storyMotion.teleportAngle = null;
+  storyMotion.grandmaCooking = false;
 }
 
 /** STORY_SPEC's story-mode state machine: launches the tale after 1.5s of
@@ -91,6 +92,10 @@ export function StoryDirector() {
     st.setNarration(null);
     st.setFadeBlack(false);
     st.setStoryPlaying(false);
+    // 'stopped' (a full round just finished) is a terminal state distinct
+    // from 'paused' (a user interrupt, which still auto-resumes after
+    // RESUME_IDLE_MS below) -- only a manual restart tap leaves it.
+    if (nextMode === 'stopped') st.setStoryCompleted(true);
     resetStoryMotion();
     orbit.mode = 'user';
     story.mode = nextMode;
@@ -104,6 +109,7 @@ export function StoryDirector() {
     const st = useSceneStore.getState();
     if (st.encounter?.story) st.clearEncounter();
     st.setNarration(null);
+    st.setStoryCompleted(false);
 
     story.chapter = index;
     const built = CHAPTERS[index](ctxRef.current);
@@ -149,31 +155,26 @@ export function StoryDirector() {
     }
 
     if (story.mode === 'playing') {
-      // Pan-past-12px interrupt (set by Scene3D's gesture handler).
-      if (story.interruptRequest) {
-        story.interruptRequest = false;
-        stopStory('paused');
-        return;
-      }
+      // Dragging no longer interrupts the tale (see orbit.lookingAway,
+      // handled entirely in CameraRig) -- it keeps ticking here regardless.
       const composite = compositeRef.current;
       if (composite) {
         composite.tick(dt * STORY_TIME_SCALE);
         if (composite.done) {
           compositeRef.current = null;
           if (story.chapter === CHAPTERS.length - 1) {
-            // Finale done: loop. Every 4th loop replays the full birth.
+            // Finale done: stop instead of auto-looping -- the user restarts
+            // manually via the play button, which shows a restart icon
+            // while story.mode is 'stopped' (see Scene3D's storyCompleted).
             story.loopCount += 1;
-            startChapter(story.loopCount % 4 === 0 ? 0 : 1);
-          } else {
-            startChapter(story.chapter + 1);
+            stopStory('stopped');
+            return;
           }
+          startChapter(story.chapter + 1);
         }
       }
       return;
     }
-
-    // Clear any stale interrupt flag raised outside playback.
-    story.interruptRequest = false;
 
     // ---- Autoplay / auto-resume timers ----
     if (reducedMotionRef.current) return; // §4: no autoplay under reduced motion

@@ -70,25 +70,34 @@ const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2],
 
 // ---------------------------------------------------------------- chapters
 
-/** Chapter 0 — Birth (8s, STORY_SPEC §3). */
+// Extra spec-ms inserted before the pop so Grandma's kneading/shaping is
+// actually visible in the window for a few seconds, not just implied by the
+// glow -- every beat from the old "pop" onward shifts back by this same
+// amount so their relative pacing is unchanged.
+const COOKING_DELTA = 3200;
+
+/** Chapter 0 — Birth (~11s, STORY_SPEC §3 + a visible cooking lead-in). */
 function buildBirth(ctx) {
   const tl = createTimeline([
     { at: 0, dur: 800, update: (t) => { storyMotion.windowGlow = t; } },
-    { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; } },
+    { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; storyMotion.grandmaCooking = true; } },
     { at: 400, call: () => ctx.setNarration('story.bake1') },
-    { at: 1600, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
+    { at: 2200, call: () => ctx.setNarration('story.bake1b') },
+    // Kneading stops just before the dough appears on the sill.
+    { at: 1600 + COOKING_DELTA - 200, call: () => { storyMotion.grandmaCooking = false; } },
+    { at: 1600 + COOKING_DELTA, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
     // Look around: -20 deg -> +20 deg, two blinks along the way.
-    { at: 2400, dur: 1200, ease: 'easeInOutSine', update: (t) => { storyMotion.faceYaw = rad(-20 + 40 * t); } },
-    { at: 2500, call: () => { storyMotion.blinkBurst += 1; } },
-    { at: 3200, call: () => { storyMotion.blinkBurst += 1; } },
-    { at: 3600, dur: 200, update: (t) => { storyMotion.faceYaw = rad(20) * (1 - t); } },
-    { at: 3800, call: () => ctx.setNarration('story.bake2') },
+    { at: 2400 + COOKING_DELTA, dur: 1200, ease: 'easeInOutSine', update: (t) => { storyMotion.faceYaw = rad(-20 + 40 * t); } },
+    { at: 2500 + COOKING_DELTA, call: () => { storyMotion.blinkBurst += 1; } },
+    { at: 3200 + COOKING_DELTA, call: () => { storyMotion.blinkBurst += 1; } },
+    { at: 3600 + COOKING_DELTA, dur: 200, update: (t) => { storyMotion.faceYaw = rad(20) * (1 - t); } },
+    { at: 3800 + COOKING_DELTA, call: () => ctx.setNarration('story.bake2') },
     // Windowsill wobble: +-6 deg twice, sly brows.
-    { at: 4600, dur: 700, update: (t) => { storyMotion.bodyTilt = Math.sin(t * Math.PI * 4) * rad(6); } },
-    { at: 4600, call: () => { storyMotion.expression = 'sly'; } },
+    { at: 4600 + COOKING_DELTA, dur: 700, update: (t) => { storyMotion.bodyTilt = Math.sin(t * Math.PI * 4) * rad(6); } },
+    { at: 4600 + COOKING_DELTA, call: () => { storyMotion.expression = 'sly'; } },
     // The jump: sill -> path, parabolic arc h=0.5 over the straight line.
     {
-      at: 5600,
+      at: 5600 + COOKING_DELTA,
       dur: 700,
       ease: 'easeInOutSine',
       update: (t) => {
@@ -97,15 +106,15 @@ function buildBirth(ctx) {
         storyMotion.posOverride = p;
       },
     },
-    { at: 6300, call: () => { storyMotion.squash = 0.3; storyMotion.dustBurstId += 1; } },
-    { at: 6300, dur: 150, update: (t) => { storyMotion.squash = 0.3 * (1 - t); } },
+    { at: 6300 + COOKING_DELTA, call: () => { storyMotion.squash = 0.3; storyMotion.dustBurstId += 1; } },
+    { at: 6300 + COOKING_DELTA, dur: 150, update: (t) => { storyMotion.squash = 0.3 * (1 - t); } },
     // Settle: happy, one proud 360, release overrides, roll off -- easing
     // the staged angle back to the izba so road chapter 1 starts in place.
-    { at: 6600, call: () => { storyMotion.expression = 'happy'; storyMotion.posOverride = null; } },
-    { at: 6600, dur: 1000, ease: 'easeInOutSine', update: (t) => { storyMotion.spinT = t; } },
-    { at: 6600, dur: 1400, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
-    { at: 7600, call: () => { storyMotion.windowGlow = 0; storyMotion.smokeBoost = 1; storyMotion.spinT = 0; ctx.setNarration(null); } },
-    { at: 8000, call: () => {} },
+    { at: 6600 + COOKING_DELTA, call: () => { storyMotion.expression = 'happy'; storyMotion.posOverride = null; } },
+    { at: 6600 + COOKING_DELTA, dur: 1000, ease: 'easeInOutSine', update: (t) => { storyMotion.spinT = t; } },
+    { at: 6600 + COOKING_DELTA, dur: 1400, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
+    { at: 7600 + COOKING_DELTA, call: () => { storyMotion.windowGlow = 0; storyMotion.smokeBoost = 1; storyMotion.spinT = 0; ctx.setNarration(null); } },
+    { at: 8000 + COOKING_DELTA, call: () => {} },
   ]);
   return { composite: composeTimelines(tl), startAngle: ZONE_ANGLE.izba + BIRTH_STAGE, framing: { ...FRAMING.birth } };
 }
@@ -232,10 +241,13 @@ export function foxCatchSteps(ctx, at0 = 0) {
 /** Chapter 8 — Fox finale (12s): the one time the tale wins. */
 function buildFoxFinale(ctx) {
   const foxAngle = ZONE_ANGLE.fox;
-  // Fox glides 0.5 toward the path during the intro; her snout ends up
-  // ~0.3 further in and ~0.65 up from her ground point.
+  // Fox glides 0.5 toward the path during the intro; her snout surface ends
+  // up ~0.3 further in and ~0.65 up from her ground point. Kolobok's
+  // POSITION is his CENTER (see Kolobok.jsx / PATH_Y's own "+ KOLOBOK_RADIUS"
+  // convention), so resting ON that surface means the center sits one
+  // radius above it -- omitting this made him sink into the fox's face.
   const snoutPos = pointOnCircle(ZONE_RADIUS - 0.5 - 0.3, foxAngle);
-  snoutPos[1] = 0.65;
+  snoutPos[1] = 0.65 + KOLOBOK_RADIUS;
   const pathPoint = pointOnCircle(PATH_RADIUS, foxAngle);
   pathPoint[1] = PATH_Y;
 

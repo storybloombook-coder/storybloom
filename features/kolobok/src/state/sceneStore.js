@@ -14,11 +14,26 @@ export const orbit = {
   // every frame, so flipping back to 'user' mid-story hands control over
   // with zero camera jump.
   mode: 'user',
+  // Free-look vertical drag (up/down finger drag): a live height/tilt
+  // offset on top of whatever framing (zone or story) is currently active.
+  // Eases back to 0 in CameraRig the instant the drag ends -- "temporarily
+  // overrides the framing, snaps back on release", never a persisted state.
+  pitchOffset: 0,
+  freeLookActive: false, // true only while a vertical drag is in progress
+  // Story mode: true the instant the user drags, letting them look at the
+  // scene from any angle WITHOUT pausing the tale (Kolobok/narration keep
+  // going) -- CameraRig just stops correcting orbit.angle back toward the
+  // story's tracked azimuth while this is true, and resumes (smoothly
+  // re-converging, not snapping) after 15s of no input.
+  lookingAway: false,
 };
 
 // STORY_SPEC §1: the story state machine's own transient (chapter index,
 // play state, timers). StoryDirector owns every field; Scene3D's gesture
-// handlers write interruptRequest/lastInputAt.
+// handlers write lastInputAt. Dragging the camera no longer interrupts the
+// tale (see orbit.lookingAway) -- only a real tap on an animal/Kolobok/izba
+// (a non-story encounter appearing) still pauses it, via the `encounter`
+// effect in StoryDirector.
 export const story = {
   mode: 'idle',          // 'idle' | 'playing' | 'paused' | 'off'
   chapter: 0,
@@ -26,7 +41,6 @@ export const story = {
   loopCount: 0,          // finales completed; every 4th loop replays the full birth
   playRequest: false,    // ▶ pressed (consumed by StoryDirector)
   pauseRequest: false,   // ❚❚ pressed (consumed by StoryDirector)
-  interruptRequest: false, // pan > 12px during story (set by Scene3D)
   lastInputAt: 0,        // ms epoch of the last user gesture/tap
 };
 
@@ -51,7 +65,9 @@ export const storyMotion = {
   framing: null,         // {radius,height,lookAtY} per-chapter camera framing
   kolobokWorldPos: [0, 0, 0], // written by Kolobok each frame; particles spawn here
   kolobokSinging: false, // mirrored out by Kolobok so the note pool can see it
+  kolobokSpeed: 0,       // 0..1 roll speed, written by Kolobok each frame (POLISH_SPEC §4 dust kick)
   teleportAngle: null,   // consume-once hard reset of Kolobok's path angle (finale black)
+  grandmaCooking: false, // birth chapter: Grandma's window silhouette kneads/shapes instead of her ambient crossing
 };
 
 // Phase 6 (WEATHER_SPEC): the live, already-BLENDED atmosphere values every
@@ -107,6 +123,10 @@ export const useSceneStore = create((set, get) => ({
   locale: detectLocale(),      // 'en' | 'ru' — resolved once at store creation
   narration: null,             // story-mode narrator/dialogue line (STORY_SPEC §1)
   storyPlaying: false,         // UI reacts: pills dim to 60%, ▶ becomes ❚❚
+  // One round finished and the loop stopped itself (not auto-looping
+  // anymore) -- the UI swaps ▶ for a restart icon while this is true.
+  // Cleared the instant a new chapter run starts (manual restart included).
+  storyCompleted: false,
   fadeBlack: false,            // finale gulp: RN overlay fades to black (out 300ms/in 900ms)
   weatherState: 'clear',       // discrete mapped state (WEATHER_SPEC §1)
 
@@ -156,6 +176,8 @@ export const useSceneStore = create((set, get) => ({
     set({ narration: lineKey ? t(lineKey, get().locale) : null }),
 
   setStoryPlaying: (storyPlaying) => set({ storyPlaying }),
+
+  setStoryCompleted: (storyCompleted) => set({ storyCompleted }),
 
   setFadeBlack: (fadeBlack) => set({ fadeBlack }),
 

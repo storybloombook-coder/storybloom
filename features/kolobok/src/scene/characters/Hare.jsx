@@ -5,6 +5,8 @@ import {
 } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
+import { makeToonMaterial } from '../materials/toonMaterial';
+import { BlobShadow } from '../BlobShadow';
 
 const FUR = '#d8d8d2';
 const BELLY = '#efeeea';
@@ -36,6 +38,12 @@ export function Hare({ mode, isActiveZone }) {
     // Tail.
     { geometry: new SphereGeometry(0.07, 8, 6), color: BELLY, position: [0, 0.24, -0.19] },
   ]), []);
+
+  const materials = useMemo(() => ({
+    body: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    ears: makeToonMaterial({ color: FUR, rimStrength: 0.35 }),
+    nose: makeToonMaterial({ color: FUR, rimStrength: 0 }),
+  }), []);
 
   const state = useRef({
     hopPhase: 0, nextHopIn: 2.5 + Math.random() * 1.5, hopT: 1, hopDone: true,
@@ -84,8 +92,9 @@ export function Hare({ mode, isActiveZone }) {
     s.sniffPhase += dt * Math.PI * 2 * 4;
     const sniffScale = 1 + Math.max(0, Math.sin(s.sniffPhase)) * 0.02;
 
-    // --- Encounter beat (ANIMATION_SPEC §4): approach 0.6, react = startled
-    // vertical hop h=0.25, retreat back to spot ---
+    // --- Encounter beat (ANIMATION_SPEC §4): approach 0.6, react = a
+    // startled ARC jump (forward burst + vertical hop together, not just
+    // straight up), retreat back to spot ---
     const isMine = encounterMotion.zoneId === 'hare';
     if (isMine && mode === 'encounter') {
       s.approachZ = 0.6 * encounterMotion.phaseT;
@@ -97,12 +106,14 @@ export function Hare({ mode, isActiveZone }) {
       s.approachZ = 0;
       s.reactT = 0;
     }
-    const reactHop = Math.sin(Math.min(s.reactT, 1) * Math.PI) * 0.25;
+    const reactPhase = Math.min(s.reactT, 1);
+    const reactHop = Math.sin(reactPhase * Math.PI) * 0.32;
+    const reactZ = Math.sin(reactPhase * Math.PI) * 0.22;
 
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
     if (rootRef.current) {
-      rootRef.current.position.z = s.approachZ;
+      rootRef.current.position.z = s.approachZ + reactZ;
       rootRef.current.scale.setScalar(pulse);
     }
     if (bodyRef.current) bodyRef.current.position.y = hopY + reactHop;
@@ -123,16 +134,13 @@ export function Hare({ mode, isActiveZone }) {
 
   return (
     <group ref={rootRef}>
-      <mesh ref={bodyRef} geometry={bodyGeometry}>
-        <meshStandardMaterial vertexColors roughness={0.85} />
-      </mesh>
-      <instancedMesh ref={earsRef} args={[undefined, undefined, 2]}>
+      <BlobShadow radiusX={0.45} radiusZ={0.45} />
+      <mesh ref={bodyRef} geometry={bodyGeometry} material={materials.body} />
+      <instancedMesh ref={earsRef} args={[undefined, undefined, 2]} material={materials.ears}>
         <capsuleGeometry args={[0.05, 0.24, 2, 6]} />
-        <meshStandardMaterial color={FUR} roughness={0.85} />
       </instancedMesh>
-      <mesh ref={noseRef} position={[0, 0.49, 0.21]}>
+      <mesh ref={noseRef} position={[0, 0.49, 0.21]} material={materials.nose}>
         <sphereGeometry args={[0.03, 6, 6]} />
-        <meshStandardMaterial color={FUR} roughness={0.85} />
       </mesh>
     </group>
   );

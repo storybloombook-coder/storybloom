@@ -30,7 +30,8 @@ Russian lines below use the traditional folk phrasing — do not "improve" them.
 ## Story mode narration (STORY_SPEC chapters)
 | key | en | ru |
 |-----|----|----|
-| story.bake1 | Grandma scraped the flour bin and baked a little round bun... | По амбару метено, по сусекам скребено — испекла бабушка колобок... |
+| story.bake1 | Grandma scraped the flour bin and mixed a little dough... | По амбару метено, по сусекам скребено — замесила бабушка тесто... |
+| story.bake1b | ...kneading and shaping it into a small round bun. | ...и скатала из него колобок. |
 | story.bake2 | ...and set him on the windowsill to cool. But Kolobok had other plans. | ...и положила на окошко студиться. Но у Колобка были свои планы. |
 | story.brag.grandma | And on he rolled — from Grandma and Grandpa he'd gotten away... | И покатился дальше — от бабушки ушёл, от дедушки ушёл... |
 | story.brag.hare | And on he rolled — from the Hare he'd gotten away... | И покатился дальше — и от зайца ушёл... |
@@ -47,9 +48,10 @@ Russian lines below use the traditional folk phrasing — do not "improve" them.
 | ui.hint | Swipe to travel · tap a friend to say hello | Проведите пальцем — и в путь · нажмите на героя |
 | ui.playTale | Play the tale | Рассказать сказку |
 | ui.pauseTale | Pause the tale | Остановить сказку |
-| ui.menu.one | Add a Book | Новая книга |
-| ui.menu.two | Create a Story | Своя история |
-| ui.menu.three | My Library | Библиотека |
+| ui.restartTale | Play the tale again | Рассказать сказку снова |
+| ui.menu.one | PLACEHOLDER_MENU_1 | PLACEHOLDER_MENU_1 |
+| ui.menu.two | PLACEHOLDER_MENU_2 | PLACEHOLDER_MENU_2 |
+| ui.menu.three | PLACEHOLDER_MENU_3 | PLACEHOLDER_MENU_3 |
 | weather.permission | Allow location so the sky above Kolobok matches yours — sunrise, clouds, even snow. | Разрешите доступ к геолокации — и небо над Колобком станет таким же, как у вас: рассвет, облака и даже снег. |
 | ui.toggle3d | Show the fairytale scene | Показать сказочную сцену |
 | ui.toggleFlat | Simple menu | Простое меню |
@@ -60,8 +62,19 @@ Russian lines below use the traditional folk phrasing — do not "improve" them.
 | egg.fish | Grandpa: "Ooh, a fine one! Back you go." | Дед: «Ух ты, хороша! Ну, плыви себе.» |
 | egg.boot | Grandpa: "A boot. Again." | Дед: «Опять сапог...» |
 | egg.goldfish | Grandpa: "A golden fish! I'll let you go, dear — no wishes needed today." | Дед: «Золотая рыбка! Отпущу тебя — нам и так хорошо.» |
+| egg.fish.maslenitsa | Grandpa: "Fish today, pancakes tonight!" | Дед: «Рыбка к блинам — самое то!» |
 
-Menu labels resolved 2026-07-18: mapped to Storybloom's three actual home-
-screen routes (add-book / create-story / library). Plaque text on the 3D
-stone renders these same keys (ART_SPEC §12) — labels stay ≤ 14 characters
-per language or the plaque texture will truncate with an ellipsis.
+## Sound, photo, holidays, badges
+| key | en | ru |
+|-----|----|----|
+| ui.soundOn | Sound on | Включить звук |
+| ui.soundOff | Sound off | Выключить звук |
+| ui.photo | Photo | Фото |
+| ui.badge.new | , {n} new | , {n} новых |
+| story.rebirth.ny | ...and baked another. Happy New Year! | ...и испекла нового. С Новым годом! |
+
+Menu labels are the only placeholders left in the whole package; the product
+owner supplies three real labels + routes (see SPEC.md "Navigation").
+Plaque text on the 3D stone renders these same keys (ART_SPEC §12) — keep
+labels ≤ 14 characters per language or the plaque texture will truncate
+with an ellipsis.

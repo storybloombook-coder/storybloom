@@ -22,9 +22,11 @@ export function buildSharedBeat({ setPhase, setLine, timeScale = 1 }) {
     { at: s(2000), call: () => { encounterMotion.singing = false; } },
     { at: s(2600), dur: s(400), update: (v) => { encounterMotion.phase = 'react'; encounterMotion.phaseT = v; } },
     { at: s(2600), call: () => setPhase('react') },
-    { at: s(3000), dur: s(300), update: (v) => { encounterMotion.phase = 'retreat'; encounterMotion.phaseT = v; encounterMotion.cameraPushT = 1 - v; } },
+    // Was 300ms -- read as a jump-cut back to place next to the approach/
+    // react beats either side of it. 700ms lets the settle actually be seen.
+    { at: s(3000), dur: s(700), update: (v) => { encounterMotion.phase = 'retreat'; encounterMotion.phaseT = v; encounterMotion.cameraPushT = 1 - v; } },
     { at: s(3000), call: () => setPhase('retreat') },
-    { at: s(3300), call: () => {} },
+    { at: s(3700), call: () => {} },
   ]);
 }
 

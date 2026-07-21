@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
+import { AdditiveBlending } from 'three';
 import {
   PATH_RADIUS, KOLOBOK_RADIUS, KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, angleDelta,
 } from '../config/zones';
@@ -7,7 +8,8 @@ import {
   orbit, encounterMotion, storyMotion, useSceneStore,
 } from '../state/sceneStore';
 import { createTimeline } from './timeline';
-import { makeDoughTexture } from './textures/proceduralTextures';
+import { makeDoughTexture, makeRadialAlphaTexture } from './textures/proceduralTextures';
+import { makeToonMaterial } from './materials/toonMaterial';
 
 // ANIMATION_SPEC §4/§5: how far Kolobok rolls forward during a beat's react
 // phase, and the extra target-angle offset it rides on top of the normal
@@ -17,11 +19,20 @@ const REACT_ROLL_BOOST = (14 * Math.PI) / 180;
 const FOLLOW_LAG = KOLOBOK_FOLLOW_LAG;
 const LEAD = KOLOBOK_LEAD;
 
+// Every face metric below was hand-tuned when KOLOBOK_RADIUS was 0.6 --
+// FACE_SCALE keeps them proportional to whatever the ball's radius actually
+// is now, instead of floating fixed-size features outside a resized ball
+// (exactly what broke when KOLOBOK_RADIUS dropped to 0.42: the eyes/cheeks
+// kept their old absolute offsets and ended up outside the smaller dough).
+const FACE_SCALE = KOLOBOK_RADIUS / 0.6;
+
 // Eye/brow placement, shared by both sides (z mirrors for left/right).
-const EYE_X = 0.5;
-const EYE_Y = 0.12;
-const EYE_Z = 0.2;
+const EYE_X = 0.5 * FACE_SCALE;
+const EYE_Y = 0.12 * FACE_SCALE;
+const EYE_Z = 0.2 * FACE_SCALE;
 const CHEEK_ANGLE = (32 * Math.PI) / 180;
+const CHEEK_RADIUS = 0.09 * FACE_SCALE;
+const CHEEK_Y = -0.02 * FACE_SCALE;
 
 // Expression poses (ANIMATION_SPEC §2) -- brow raise/tilt in local units/
 // radians, smile widen as a scale factor. Poses are targets; Kolobok()
@@ -71,6 +82,23 @@ export function Kolobok() {
 
   const sing = useSceneStore((s) => s.sing);
   const doughTexture = useMemo(() => makeDoughTexture(), []);
+  const specularTexture = useMemo(() => makeRadialAlphaTexture(), []);
+
+  // VISUAL_QUALITY_SPEC §1: one toon material per distinct surface color.
+  // Tiny features (eyes, brows, mouth) skip the rim -- not worth the extra
+  // shader variant at that scale (same call the spec makes for mushrooms/
+  // flowers/feathers).
+  const materials = useMemo(() => ({
+    dough: makeToonMaterial({ map: doughTexture, color: '#f2c14e', rimStrength: 0.35 }),
+    cheek: makeToonMaterial({ color: '#e89a5b', rimStrength: 0.35 }),
+    eyeWhite: makeToonMaterial({ color: '#faf6ec', rimStrength: 0 }),
+    eyePupil: makeToonMaterial({ color: '#3a2c1a', rimStrength: 0 }),
+    eyelid: makeToonMaterial({ color: '#f2c14e', rimStrength: 0 }),
+    brow: makeToonMaterial({ color: '#8a5a22', rimStrength: 0 }),
+    smile: makeToonMaterial({ color: '#7a4a21', rimStrength: 0 }),
+    mouthOuter: makeToonMaterial({ color: '#5c3317', rimStrength: 0 }),
+    mouthInner: makeToonMaterial({ color: '#3a1c0f', rimStrength: 0 }),
+  }), [doughTexture]);
 
   const state = useRef({
     angle: LEAD,
@@ -299,6 +327,9 @@ export function Kolobok() {
       storyMotion.kolobokWorldPos[1] = root.current.position.y;
       storyMotion.kolobokWorldPos[2] = root.current.position.z;
       storyMotion.kolobokSinging = s.singing;
+      // POLISH_SPEC §4 dust kick reads this: 0..1 roll speed (same value
+      // that already drives the squash-and-stretch below).
+      storyMotion.kolobokSpeed = speed;
     }
 
     if (dough.current) {
@@ -353,68 +384,74 @@ export function Kolobok() {
 
   return (
     <group ref={root} onClick={onTap}>
-      <mesh ref={dough} castShadow={false}>
+      <mesh ref={dough} castShadow={false} material={materials.dough}>
         <sphereGeometry args={[KOLOBOK_RADIUS, 32, 32]} />
-        <meshStandardMaterial map={doughTexture} roughness={0.8} />
+      </mesh>
+
+      {/* VISUAL_QUALITY_SPEC §1 hero pass: a thin additive overlay standing
+          in for a cheap fake specular (toon shading has no real specular
+          model). Rides on `face`, not `dough`, so it doesn't spin with the
+          rolling texture; positioned on the upper-forward side, which is
+          also the side the camera-follow framing keeps lit through most of
+          the loop -- a fixed approximation of "toward the sun" rather than
+          a full per-frame world-space recompute. */}
+      <mesh
+        position={[KOLOBOK_RADIUS * 0.7, KOLOBOK_RADIUS * 0.5, KOLOBOK_RADIUS * 0.6]}
+        scale={[0.35 * FACE_SCALE, 0.35 * FACE_SCALE, 0.01]}
+        rotation={[0, Math.atan2(0.7, 0.6), 0]}
+      >
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial map={specularTexture} transparent opacity={0.15} blending={AdditiveBlending} depthWrite={false} />
       </mesh>
 
       {/* Cheeks -- flattened spheres at +-32 degrees around the face,
           slightly proud of the dough surface. */}
-      <mesh position={[KOLOBOK_RADIUS * Math.cos(CHEEK_ANGLE) * 1.05, -0.02, KOLOBOK_RADIUS * Math.sin(CHEEK_ANGLE) * 1.05]} scale={[1, 0.6, 1]}>
-        <sphereGeometry args={[0.09, 10, 10]} />
-        <meshStandardMaterial color="#e89a5b" roughness={0.8} />
+      <mesh position={[KOLOBOK_RADIUS * Math.cos(CHEEK_ANGLE) * 1.05, CHEEK_Y, KOLOBOK_RADIUS * Math.sin(CHEEK_ANGLE) * 1.05]} scale={[1, 0.6, 1]} material={materials.cheek}>
+        <sphereGeometry args={[CHEEK_RADIUS, 10, 10]} />
       </mesh>
-      <mesh position={[KOLOBOK_RADIUS * Math.cos(CHEEK_ANGLE) * 1.05, -0.02, -KOLOBOK_RADIUS * Math.sin(CHEEK_ANGLE) * 1.05]} scale={[1, 0.6, 1]}>
-        <sphereGeometry args={[0.09, 10, 10]} />
-        <meshStandardMaterial color="#e89a5b" roughness={0.8} />
+      <mesh position={[KOLOBOK_RADIUS * Math.cos(CHEEK_ANGLE) * 1.05, CHEEK_Y, -KOLOBOK_RADIUS * Math.sin(CHEEK_ANGLE) * 1.05]} scale={[1, 0.6, 1]} material={materials.cheek}>
+        <sphereGeometry args={[CHEEK_RADIUS, 10, 10]} />
       </mesh>
 
-      <group ref={face} position={[0, 0.08, 0]}>
+      <group ref={face} position={[0, 0.08 * FACE_SCALE, 0]}>
         {/* Eyes: whites + forward-offset pupils + a hemisphere eyelid per side */}
         {[1, -1].map((side) => (
           <group key={side} position={[EYE_X, EYE_Y, EYE_Z * side]}>
-            <mesh>
-              <sphereGeometry args={[0.11, 12, 12]} />
-              <meshStandardMaterial color="#faf6ec" roughness={0.5} />
+            <mesh material={materials.eyeWhite}>
+              <sphereGeometry args={[0.11 * FACE_SCALE, 12, 12]} />
             </mesh>
-            <mesh position={[0.06, 0, 0]}>
-              <sphereGeometry args={[0.055, 10, 10]} />
-              <meshStandardMaterial color="#3a2c1a" roughness={0.4} />
+            <mesh position={[0.06 * FACE_SCALE, 0, 0]} material={materials.eyePupil}>
+              <sphereGeometry args={[0.055 * FACE_SCALE, 10, 10]} />
             </mesh>
             <mesh
               ref={side === 1 ? leftEyelid : rightEyelid}
-              position={[0, 0.02, 0]}
+              position={[0, 0.02 * FACE_SCALE, 0]}
               rotation={[-Math.PI * 0.6, 0, 0]}
+              material={materials.eyelid}
             >
-              <sphereGeometry args={[0.115, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
-              <meshStandardMaterial color="#f2c14e" roughness={0.8} />
+              <sphereGeometry args={[0.115 * FACE_SCALE, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
             </mesh>
           </group>
         ))}
 
         {/* Brows */}
-        <mesh ref={leftBrow} position={[EYE_X, EYE_Y + 0.1, EYE_Z]} rotation={[0, 0, (10 * Math.PI) / 180]}>
-          <boxGeometry args={[0.16, 0.035, 0.05]} />
-          <meshStandardMaterial color="#8a5a22" roughness={0.8} />
+        <mesh ref={leftBrow} position={[EYE_X, EYE_Y + 0.1 * FACE_SCALE, EYE_Z]} rotation={[0, 0, (10 * Math.PI) / 180]} material={materials.brow}>
+          <boxGeometry args={[0.16 * FACE_SCALE, 0.035 * FACE_SCALE, 0.05 * FACE_SCALE]} />
         </mesh>
-        <mesh ref={rightBrow} position={[EYE_X, EYE_Y + 0.1, -EYE_Z]} rotation={[0, 0, -((10 * Math.PI) / 180)]}>
-          <boxGeometry args={[0.16, 0.035, 0.05]} />
-          <meshStandardMaterial color="#8a5a22" roughness={0.8} />
+        <mesh ref={rightBrow} position={[EYE_X, EYE_Y + 0.1 * FACE_SCALE, -EYE_Z]} rotation={[0, 0, -((10 * Math.PI) / 180)]} material={materials.brow}>
+          <boxGeometry args={[0.16 * FACE_SCALE, 0.035 * FACE_SCALE, 0.05 * FACE_SCALE]} />
         </mesh>
 
         {/* Mouth: smile arc (default) + open-mouth ellipse (singing), visibility toggles */}
-        <mesh ref={smileMesh} position={[EYE_X + 0.02, EYE_Y - 0.22, 0]} rotation={[Math.PI / 2, 0, Math.PI]}>
-          <torusGeometry args={[0.13, 0.028, 8, 16, Math.PI * 0.7]} />
-          <meshStandardMaterial color="#7a4a21" roughness={0.7} />
+        <mesh ref={smileMesh} position={[EYE_X + 0.02 * FACE_SCALE, EYE_Y - 0.22 * FACE_SCALE, 0]} rotation={[Math.PI / 2, 0, Math.PI]} material={materials.smile}>
+          <torusGeometry args={[0.13 * FACE_SCALE, 0.028 * FACE_SCALE, 8, 16, Math.PI * 0.7]} />
         </mesh>
-        <group ref={openMouthMesh} position={[EYE_X + 0.03, EYE_Y - 0.2, 0]} visible={false}>
-          <mesh scale={[0.5, 0.14, 0.05]}>
-            <sphereGeometry args={[0.22, 12, 12]} />
-            <meshStandardMaterial color="#5c3317" roughness={0.7} />
+        <group ref={openMouthMesh} position={[EYE_X + 0.03 * FACE_SCALE, EYE_Y - 0.2 * FACE_SCALE, 0]} visible={false}>
+          <mesh scale={[0.5, 0.14, 0.05]} material={materials.mouthOuter}>
+            <sphereGeometry args={[0.22 * FACE_SCALE, 12, 12]} />
           </mesh>
-          <mesh position={[0.02, 0, 0]} scale={[0.35, 0.1, 0.04]}>
-            <sphereGeometry args={[0.22, 10, 10]} />
-            <meshStandardMaterial color="#3a1c0f" roughness={0.7} />
+          <mesh position={[0.02 * FACE_SCALE, 0, 0]} scale={[0.35, 0.1, 0.04]} material={materials.mouthInner}>
+            <sphereGeometry args={[0.22 * FACE_SCALE, 10, 10]} />
           </mesh>
         </group>
       </group>

@@ -5,6 +5,7 @@ import {
 } from 'three';
 import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
+import { rad } from '../config/zones';
 
 const dummy = new Object3D();
 
@@ -50,6 +51,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
+    const now = Date.now();
 
     // --- Chimney smoke: always on, +30% spawn rate when active, and the
     // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
@@ -67,6 +69,21 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       smokeGeometry.computeBoundingSphere();
     }
 
+    // --- Birth chapter: kneading/shaping motion takes over the same
+    // silhouette instead of the ambient crossing below (STORY_SPEC's birth
+    // chapter toggles this while Kolobok is still dough on the sill). ---
+    if (storyMotion.grandmaCooking) {
+      if (grandmaRef.current) {
+        grandmaRef.current.visible = true;
+        // Side-to-side kneading sway + a small bob, faster/tighter than the
+        // slow window-crossing walk so it reads as "working," not "passing by".
+        grandmaRef.current.position.x = Math.sin(now / 260) * 0.1;
+        grandmaRef.current.position.y = Math.abs(Math.sin(now / 260)) * 0.03;
+        grandmaRef.current.rotation.z = Math.sin(now / 260) * rad(6);
+      }
+      return;
+    }
+
     // --- Active-only: grandma silhouette crosses the window every 20-35s ---
     if (isActiveZone) {
       if (s.grandmaT < 0) {
@@ -79,7 +96,11 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     }
     if (grandmaRef.current) {
       grandmaRef.current.visible = s.grandmaT >= 0;
-      if (s.grandmaT >= 0) grandmaRef.current.position.x = -0.15 + s.grandmaT * 0.3;
+      if (s.grandmaT >= 0) {
+        grandmaRef.current.position.x = -0.15 + s.grandmaT * 0.3;
+        grandmaRef.current.position.y = 0;
+        grandmaRef.current.rotation.z = 0;
+      }
     }
 
     // --- Active-only: ridge bird lands, pecks x3, flies off, every ~15s ---

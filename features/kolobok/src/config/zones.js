@@ -6,7 +6,16 @@ export const CAMERA_HEIGHT = 6.5;    // camera height above ground
 export const ZONE_RADIUS = 6.2;      // landmarks sit on this ring
 export const PATH_RADIUS = 4.6;      // Kolobok rolls on this ring
 export const ISLAND_RADIUS = 8;
-export const KOLOBOK_RADIUS = 0.6;
+// Was 0.6 -- bigger than the Hare's own 0.9 height, reads as "too huge" next
+// to any animal smaller than the Bear. 0.42 keeps him clearly smaller than
+// every animal (Hare 0.9, Fox 1.3, Wolf 1.5, Bear 2.0 tall) while still a
+// substantial rolling presence.
+export const KOLOBOK_RADIUS = 0.42;
+
+// ART_SPEC §14: Grandpa's pond, on the free arc between fox and izba, rim
+// side of the path. Shared between PondAndGrandpa (the pond itself) and
+// Island (the dirt path ring's bridge gap) so the two stay in sync.
+export const POND_ANGLE_DEG = 324;
 
 // Kolobok <-> camera follow geometry, shared by BOTH follow directions
 // (free mode: Kolobok chases orbit.angle + LEAD; story mode: the camera

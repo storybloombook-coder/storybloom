@@ -5,17 +5,35 @@ import { atmosphereLive, orbit, story, useSceneStore } from '../state/sceneStore
 import { refreshWeather, weatherNow, currentWeatherState } from '../services/weather';
 import { solarPosition, phaseBlendForElevation } from '../services/sun';
 import { eggManager } from './easterEggs';
+import { quality } from '../config/devFlags';
+import { tickWind } from './wind';
+
+// VISUAL_QUALITY_SPEC §3 light rig constants. Ground tint matches Island.jsx
+// BASE_GRASS -- kept as a local literal rather than a cross-file import
+// since it's only a coarse "average ground" reference for the hemisphere's
+// ground color, not the real per-zone tint.
+const GROUND_TINT = [0x7a / 255, 0xa8 / 255, 0x5c / 255];
+const WARM_EARTH = [0x5a / 255, 0x4a / 255, 0x38 / 255];
+const HEMI_GROUND = WARM_EARTH.map((c, i) => c + (GROUND_TINT[i] - c) * 0.2);
+const FILL_COLOR = [0x8f / 255, 0xa8 / 255, 0xd8 / 255];
+const SUN_DISTANCE = 20;
 
 // Per-state scene targets (WEATHER_SPEC §2). Missing keys inherit `clear`.
 const GRAY = [0xaa / 255, 0xb4 / 255, 0xbd / 255];
+// POLISH_SPEC §2: fog/rain/snow override toward their own tighter/farther
+// envelope regardless of time of day; clear/partly/overcast/storm have no
+// fogNear/fogFar of their own here (left undefined) and fall back to
+// whatever the current PALETTES phase blend gives (see phaseFogNear/Far
+// below) -- a storm at noon and a storm at night shouldn't share one fixed
+// fog distance.
 const STATE_TARGETS = {
-  clear: { clouds: 2, cloudOp: 0.7, cloudColor: [1, 1, 1], dirMul: 1, ambAdd: 0, desat: 0, fogNear: 16, fogFar: 30 },
-  partly: { clouds: 5, cloudOp: 0.85, cloudColor: [1, 1, 1], dirMul: 1, ambAdd: 0, desat: 0, fogNear: 16, fogFar: 30 },
-  overcast: { clouds: 8, cloudOp: 0.9, cloudColor: [0.78, 0.8, 0.82], dirMul: 0.8, ambAdd: 0.05, desat: 0.2, fogNear: 16, fogFar: 30 },
+  clear: { clouds: 2, cloudOp: 0.7, cloudColor: [1, 1, 1], dirMul: 1, ambAdd: 0, desat: 0 },
+  partly: { clouds: 5, cloudOp: 0.85, cloudColor: [1, 1, 1], dirMul: 1, ambAdd: 0, desat: 0 },
+  overcast: { clouds: 8, cloudOp: 0.9, cloudColor: [0.78, 0.8, 0.82], dirMul: 0.8, ambAdd: 0.05, desat: 0.2 },
   fog: { clouds: 2, cloudOp: 0.4, cloudColor: [0.85, 0.87, 0.89], dirMul: 0.7, ambAdd: 0, desat: 0.3, fogNear: 8, fogFar: 20 },
-  rain: { clouds: 7, cloudOp: 0.9, cloudColor: [0.54, 0.58, 0.63], dirMul: 0.7, ambAdd: 0, desat: 0.3, fogNear: 16, fogFar: 30 },
-  snow: { clouds: 6, cloudOp: 0.85, cloudColor: [0.91, 0.93, 0.94], dirMul: 0.9, ambAdd: 0.1, desat: 0.15, fogNear: 16, fogFar: 30 },
-  storm: { clouds: 8, cloudOp: 0.95, cloudColor: [0.35, 0.38, 0.43], dirMul: 0.55, ambAdd: 0, desat: 0.45, fogNear: 16, fogFar: 30 },
+  rain: { clouds: 7, cloudOp: 0.9, cloudColor: [0.54, 0.58, 0.63], dirMul: 0.7, ambAdd: 0, desat: 0.3, fogNear: 13, fogFar: 25 },
+  snow: { clouds: 6, cloudOp: 0.85, cloudColor: [0.91, 0.93, 0.94], dirMul: 0.9, ambAdd: 0.1, desat: 0.15, fogNear: 11, fogFar: 22 },
+  storm: { clouds: 8, cloudOp: 0.95, cloudColor: [0.35, 0.38, 0.43], dirMul: 0.55, ambAdd: 0, desat: 0.45 },
 };
 const STATE_KEYS = Object.keys(STATE_TARGETS);
 
@@ -45,6 +63,8 @@ const P = Object.fromEntries(Object.entries(PALETTES).map(([k, v]) => [k, {
   dirInt: v.dirInt,
   ambient: v.ambient,
   window: v.window ?? 0,
+  fogNear: v.fogNear,
+  fogFar: v.fogFar,
 }]));
 
 /** Owns the scene's fog + lights and every per-frame atmosphere blend
@@ -54,8 +74,9 @@ const P = Object.fromEntries(Object.entries(PALETTES).map(([k, v]) => [k, {
 export function AtmosphereDirector() {
   const setWeatherState = useSceneStore((s) => s.setWeatherState);
   const fogRef = useRef();
-  const ambientRef = useRef();
+  const hemiRef = useRef();
   const dirRef = useRef();
+  const fillRef = useRef();
 
   const state = useRef({
     ramps: Object.fromEntries(STATE_KEYS.map((k) => [k, k === 'clear' ? 1 : 0])),
@@ -97,6 +118,7 @@ export function AtmosphereDirector() {
       s.weatherStateWas = weatherState;
       setWeatherState(weatherState);
     }
+    tickWind(weatherState, dt);
 
     // --- Solar position, once per minute when coords exist ---
     if (weatherNow.coords && now - s.lastSunAt > SUN_RECOMPUTE_MS) {
@@ -123,6 +145,9 @@ export function AtmosphereDirector() {
     let dirInt = lerp(A.dirInt, B.dirInt, blend.t);
     let ambient = lerp(A.ambient, B.ambient, blend.t);
     const windowGlow = lerp(A.window, B.window, blend.t);
+    // POLISH_SPEC §2 per-phase fog baseline, before any weather override.
+    const phaseFogNear = lerp(A.fogNear, B.fogNear, blend.t);
+    const phaseFogFar = lerp(A.fogFar, B.fogFar, blend.t);
 
     // --- Weather ramps (4s) and their weighted modifiers ---
     let rampSum = 0;
@@ -134,6 +159,14 @@ export function AtmosphereDirector() {
     const w = (sel) => {
       let acc = 0;
       STATE_KEYS.forEach((k) => { acc += s.ramps[k] * sel(STATE_TARGETS[k]); });
+      return acc / Math.max(rampSum, 0.001);
+    };
+    // fogNear/Far need a per-state FALLBACK (the phase baseline) for states
+    // that don't specify their own -- a plain `w()` selector can't express
+    // "use this state's value, or else the current phase's" per key.
+    const wFog = (key, fallback) => {
+      let acc = 0;
+      STATE_KEYS.forEach((k) => { acc += s.ramps[k] * (STATE_TARGETS[k][key] ?? fallback); });
       return acc / Math.max(rampSum, 0.001);
     };
     const desat = w((t) => t.desat);
@@ -173,8 +206,8 @@ export function AtmosphereDirector() {
     L.dirInt = lerp(L.dirInt, dirInt, t);
     L.ambient = lerp(L.ambient, ambient, t);
     L.windowGlow = lerp(L.windowGlow, windowGlow, t);
-    L.fogNear = lerp(L.fogNear, w((tt) => tt.fogNear), t);
-    L.fogFar = lerp(L.fogFar, w((tt) => tt.fogFar), t);
+    L.fogNear = lerp(L.fogNear, wFog('fogNear', phaseFogNear), t);
+    L.fogFar = lerp(L.fogFar, wFog('fogFar', phaseFogFar), t);
     L.cloudCount = w((tt) => tt.clouds);
     L.cloudOpacity = w((tt) => tt.cloudOp);
     lerp3Into(L.cloudColor, L.cloudColor, [w((tt) => tt.cloudColor[0]), w((tt) => tt.cloudColor[1]), w((tt) => tt.cloudColor[2])], t);
@@ -193,18 +226,59 @@ export function AtmosphereDirector() {
       fogRef.current.near = L.fogNear;
       fogRef.current.far = L.fogFar;
     }
-    if (ambientRef.current) ambientRef.current.intensity = L.ambient + flash * 0.8;
+    // --- VISUAL_QUALITY_SPEC §3 light rig ---
+    // day/night mix purely from the already-blended ambient value (0.30
+    // night .. 0.70 day per PALETTES) rather than a second clock lookup.
+    const nightT = Math.min(1, Math.max(0, (L.ambient - 0.30) / (0.70 - 0.30)));
+    if (hemiRef.current) {
+      hemiRef.current.color.setRGB(L.zenith[0], L.zenith[1], L.zenith[2]);
+      hemiRef.current.groundColor.setRGB(HEMI_GROUND[0], HEMI_GROUND[1], HEMI_GROUND[2]);
+      hemiRef.current.intensity = 0.25 + nightT * (0.55 - 0.25) + flash * 0.4;
+    }
     if (dirRef.current) {
       dirRef.current.intensity = L.dirInt + flash * 1.5;
-      dirRef.current.color.setRGB(L.dirLight[0], L.dirLight[1], L.dirLight[2]);
+      // "Warmed 6%": a small fixed per-channel bias rather than a lerp
+      // toward another named color -- cheap and keeps the existing
+      // palette-driven hue intact.
+      dirRef.current.color.setRGB(
+        Math.min(1, L.dirLight[0] * 1.06),
+        Math.min(1, L.dirLight[1] * 1.03),
+        L.dirLight[2] * 0.97,
+      );
+      // Real solar azimuth/elevation when location is available; else keep
+      // the original fixed greybox angle (WEATHER_SPEC's device-hour
+      // fallback has no azimuth of its own).
+      if (s.sun) {
+        const az = (s.sun.azimuth * Math.PI) / 180;
+        const el = (s.sun.elevation * Math.PI) / 180;
+        dirRef.current.position.set(
+          Math.sin(az) * Math.cos(el) * SUN_DISTANCE,
+          Math.sin(el) * SUN_DISTANCE,
+          Math.cos(az) * Math.cos(el) * SUN_DISTANCE,
+        );
+      } else {
+        dirRef.current.position.set(6, 10, 4);
+      }
+    }
+    if (fillRef.current) {
+      const fillIntensity = quality.fillLight ? (0.05 + nightT * (0.12 - 0.05)) : 0;
+      fillRef.current.intensity = fillIntensity;
+      fillRef.current.color.setRGB(FILL_COLOR[0], FILL_COLOR[1], FILL_COLOR[2]);
+      if (dirRef.current) {
+        // Opposite horizontal direction from the sun, same rough height --
+        // this is what keeps toon shadow-side faces from going flat-dark
+        // (spec: "bounce light from the sky").
+        fillRef.current.position.set(-dirRef.current.position.x, Math.abs(dirRef.current.position.y) * 0.6, -dirRef.current.position.z);
+      }
     }
   });
 
   return (
     <>
       <fog ref={fogRef} attach="fog" args={['#bfe3f2', 16, 30]} />
-      <ambientLight ref={ambientRef} intensity={0.7} />
+      <hemisphereLight ref={hemiRef} args={['#8ec4e0', '#5a4a38', 0.55]} />
       <directionalLight ref={dirRef} position={[6, 10, 4]} intensity={1.1} />
+      <directionalLight ref={fillRef} position={[-6, 6, -4]} intensity={0.12} color="#8fa8d8" />
     </>
   );
 }

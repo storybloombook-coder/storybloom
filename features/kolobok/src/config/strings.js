@@ -31,7 +31,8 @@ export const STRINGS = {
       },
     },
     story: {
-      bake1: 'Grandma scraped the flour bin and baked a little round bun...',
+      bake1: 'Grandma scraped the flour bin and mixed a little dough...',
+      bake1b: '...kneading and shaping it into a small round bun.',
       bake2: '...and set him on the windowsill to cool. But Kolobok had other plans.',
       brag: {
         grandma: "And on he rolled — from Grandma and Grandpa he'd gotten away...",
@@ -52,6 +53,7 @@ export const STRINGS = {
       hint: 'Swipe to travel · tap a friend to say hello',
       playTale: 'Play the tale',
       pauseTale: 'Pause the tale',
+      restartTale: 'Play the tale again',
       menu: {
         one: 'Add a Book',
         two: 'Create a Story',
@@ -94,7 +96,8 @@ export const STRINGS = {
       },
     },
     story: {
-      bake1: 'По амбару метено, по сусекам скребено — испекла бабушка колобок...',
+      bake1: 'По амбару метено, по сусекам скребено — замесила бабушка тесто...',
+      bake1b: '...и скатала из него колобок.',
       bake2: '...и положила на окошко студиться. Но у Колобка были свои планы.',
       brag: {
         grandma: 'И покатился дальше — от бабушки ушёл, от дедушки ушёл...',
@@ -115,6 +118,7 @@ export const STRINGS = {
       hint: 'Проведите пальцем — и в путь · нажмите на героя',
       playTale: 'Рассказать сказку',
       pauseTale: 'Остановить сказку',
+      restartTale: 'Рассказать сказку снова',
       menu: {
         one: 'Новая книга',
         two: 'Своя история',

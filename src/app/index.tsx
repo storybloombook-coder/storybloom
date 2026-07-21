@@ -33,6 +33,14 @@ export default function HomeScreen() {
           </Link>
         </View>
       </View>
+
+      <View style={styles.cornerButtonWrap}>
+        <Link href="/kolobok-preview" asChild>
+          <TactileButton style={StyleSheet.flatten([styles.cornerButton, { backgroundColor: buttonBackground }])}>
+            <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>3D</Text>
+          </TactileButton>
+        </Link>
+      </View>
     </SafeAreaView>
   );
 }
@@ -70,5 +78,23 @@ const styles = StyleSheet.create({
   buttonLabel: {
     fontSize: 17,
     fontWeight: '600',
+  },
+  cornerButtonWrap: {
+    position: 'absolute',
+    left: 16,
+    bottom: 16,
+    width: 44,
+    height: 44,
+  },
+  cornerButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cornerButtonLabel: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

@@ -1,8 +1,9 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
+import { makeToonMaterial } from './materials/toonMaterial';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -61,6 +62,13 @@ function Landmark({ zone }) {
   const a = rad(zone.angleDeg);
   const pos = [Math.sin(a) * ZONE_RADIUS, 0, Math.cos(a) * ZONE_RADIUS];
 
+  // Izba walls/roof are VISUAL_QUALITY_SPEC §1 hero surfaces (0.2 rim
+  // strength -- "buildings/stone", not "characters").
+  const izbaMaterials = useMemo(() => (zone.id === 'izba' ? {
+    walls: makeToonMaterial({ color: zone.color, rimStrength: 0.2 }),
+    roof: makeToonMaterial({ color: '#a5602f', rimStrength: 0.2 }),
+  } : null), [zone.id, zone.color]);
+
   const mode = encounter?.id === zone.id
     ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
     : 'idle';
@@ -80,13 +88,11 @@ function Landmark({ zone }) {
     <group position={pos} rotation={[0, a + Math.PI, 0]} onClick={onTap}>
       {zone.id === 'izba' ? (
         <>
-          <mesh position={[0, 0.85, 0]}>
+          <mesh position={[0, 0.85, 0]} material={izbaMaterials.walls}>
             <boxGeometry args={[1.7, 1.1, 1.3]} />
-            <meshStandardMaterial color={zone.color} roughness={0.9} />
           </mesh>
-          <mesh position={[0, 1.75, 0]} rotation={[0, Math.PI / 4, 0]}>
+          <mesh position={[0, 1.75, 0]} rotation={[0, Math.PI / 4, 0]} material={izbaMaterials.roof}>
             <coneGeometry args={[1.35, 0.9, 4]} />
-            <meshStandardMaterial color="#a5602f" roughness={0.9} />
           </mesh>
           <IzbaWindow />
         </>

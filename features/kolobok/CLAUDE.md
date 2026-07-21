@@ -15,6 +15,14 @@ based on the Kolobok fairytale. The full brief lives in:
 - `docs/STRINGS.md` — the complete EN/RU copy deck.
 - `docs/EASTER_EGGS.md` — the easter egg registry and all hidden
   interactions (incl. Grandpa fishing at the pond).
+- `docs/POLISH_SPEC.md` — Phase 8: fake shadows, fog/mist/aerial depth,
+  the wind system, reactive grass, living-frame details.
+- `docs/SOUND_SPEC.md` — Phase 9: procedural audio engine and recipes.
+- `docs/SEASONS_SPEC.md` — Phase 10: seasons and holiday props.
+- `docs/INTEGRATION_SPEC.md` — Phase 11: badge magpie, photo mode,
+  egg tally.
+- `docs/VISUAL_QUALITY_SPEC.md` — Phase 12: toon shading, rim light,
+  light rig, adaptive AA/dpr, shape warmth, global color grade.
 - `README.md` — the existing greybox baseline and its architecture contract.
 
 ## Hard constraints
@@ -26,7 +34,10 @@ based on the Kolobok fairytale. The full brief lives in:
   build. This is deliberate: the app must work with zero binary assets.
 - **Allowed dependencies only:** `three`, `@react-three/fiber`, `zustand`,
   `expo-gl`, `react-native-gesture-handler`, `react-native-reanimated`,
-  `expo-haptics`, `expo-sensors`, `expo-location`, `expo-localization`.
+  `expo-haptics`, `expo-sensors`, `expo-location`, `expo-localization`,
+  `expo-audio`, `expo-file-system`, `expo-sharing` (the last three only
+  from their phases: sound renders WAVs into cache at first launch — the
+  repo still ships zero binary assets; sharing is for photo mode only).
   Do not add drei, physics engines, tween libraries, i18n frameworks, or
   anything else without being asked.
 - **Network:** the ONLY permitted endpoint is `api.open-meteo.com`

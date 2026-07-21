@@ -12,6 +12,10 @@ import { KolobokParticles } from './KolobokParticles';
 import { AtmosphereDirector } from './AtmosphereDirector';
 import { WeatherSystems } from './WeatherSystems';
 import { PondAndGrandpa } from './PondAndGrandpa';
+import { RimLightSync } from './materials/rimLight';
+import { AdaptiveQuality } from './AdaptiveQuality';
+import { DustTrail } from './DustTrail';
+import { GoldenHourExtras } from './GoldenHourExtras';
 
 // Fog + lights + all sky/weather blending live in AtmosphereDirector
 // (WEATHER_SPEC): real solar daylight when location is available, the
@@ -19,6 +23,8 @@ import { PondAndGrandpa } from './PondAndGrandpa';
 export function KolobokScene() {
   return (
     <>
+      <AdaptiveQuality />
+      <RimLightSync />
       <AtmosphereDirector />
       <Sky />
       <BackgroundForest />
@@ -26,9 +32,11 @@ export function KolobokScene() {
       <Vegetation />
       <WeatherSystems />
       <PondAndGrandpa />
+      <GoldenHourExtras />
       <CrossroadsStone />
       <ZoneLandmarks />
       <Kolobok />
+      <DustTrail />
       <KolobokParticles />
       <CameraRig />
       <EncounterDirector />

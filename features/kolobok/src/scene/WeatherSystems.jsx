@@ -6,6 +6,10 @@ import {
 import { atmosphereLive, orbit } from '../state/sceneStore';
 import { makeRng } from './prng';
 import { SPRUCE_TOP_MATRICES } from './Vegetation';
+import { currentPhase } from '../config/atmosphere';
+import { makeRadialAlphaTexture } from './textures/proceduralTextures';
+import { wind } from './wind';
+import { ISLAND_RADIUS } from '../config/zones';
 
 const dummy = new Object3D();
 
@@ -13,6 +17,10 @@ const RAIN_COUNT = 220;
 const SNOW_COUNT = 160;
 const FIREFLY_COUNT = 30;
 const WISP_COUNT = 8;
+const MIST_COUNT = 6;
+const MIST_MOVE_INTERVAL_S = 40;
+const MIST_MOVE_EASE_S = 6;
+const RAIN_ENDED_MIST_MS = 10 * 60 * 1000;
 
 // 2x8 vertical streak sprite for rain (WEATHER_SPEC §3) -- white core
 // fading at the ends; tinted/faded by the material.
@@ -46,8 +54,30 @@ export function WeatherSystems() {
   const wispsMatRef = useRef();
   const capsRef = useRef();
   const izbaCapsRef = useRef();
+  const mistRef = useRef();
+  const mistMatRef = useRef();
 
   const streakTexture = useMemo(() => makeStreakTexture(), []);
+  const mistTexture = useMemo(() => makeRadialAlphaTexture(32), []);
+
+  // POLISH_SPEC §2 ground mist: 6 flattened planes drifting around the
+  // island rim, each with its own current/target angle so they "slowly
+  // cross-fade position" (ease toward a freshly-rolled target every ~40s)
+  // rather than snapping. rainEndedAt tracks the last moment rainT/stormT
+  // dropped below the "actively raining" threshold, for the 10-minute
+  // afterglow bump in the opacity table below.
+  const mistState = useRef((() => {
+    const rng = makeRng(240);
+    return new Array(MIST_COUNT).fill(0).map(() => {
+      const angle = rng() * Math.PI * 2;
+      const radius = ISLAND_RADIUS * (0.85 + rng() * 0.2);
+      return {
+        angle, radius, targetAngle: angle, targetRadius: radius, height: 0.15 + rng() * 0.2, nextMoveIn: rng() * MIST_MOVE_INTERVAL_S,
+      };
+    });
+  })());
+  const rainWasActive = useRef(false);
+  const rainEndedAt = useRef(0);
 
   const rainGeometry = useMemo(() => {
     const geo = new BufferGeometry();
@@ -211,6 +241,44 @@ export function WeatherSystems() {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.visible = capScale > 0.02;
     }
+
+    // --- Ground mist (POLISH_SPEC §2) ---
+    const raining = L.rainT > 0.3;
+    if (raining) rainWasActive.current = true;
+    else if (rainWasActive.current) { rainWasActive.current = false; rainEndedAt.current = now; }
+
+    let mistOpacity;
+    if (now - rainEndedAt.current < RAIN_ENDED_MIST_MS) mistOpacity = 0.20;
+    else {
+      const phase = currentPhase();
+      mistOpacity = phase === 'morning' ? 0.16 : phase === 'evening' ? 0.10 : phase === 'night' ? 0.08 : 0.04;
+    }
+
+    if (mistRef.current) {
+      const mesh = mistRef.current;
+      mistState.current.forEach((m, i) => {
+        m.nextMoveIn -= dt;
+        if (m.nextMoveIn <= 0) {
+          const rng = Math.random;
+          m.targetAngle = rng() * Math.PI * 2;
+          m.targetRadius = ISLAND_RADIUS * (0.85 + rng() * 0.2);
+          m.nextMoveIn = MIST_MOVE_INTERVAL_S * (0.8 + rng() * 0.4);
+        }
+        const ease = Math.min(1, dt / MIST_MOVE_EASE_S);
+        m.angle += (m.targetAngle - m.angle) * ease;
+        m.radius += (m.targetRadius - m.radius) * ease;
+        // Wind drift (§3): a slow tangential rotation scaled by wind
+        // strength, on top of the cross-fade above.
+        m.angle += wind.strength * 0.15 * 0.02 * dt;
+        dummy.position.set(Math.sin(m.angle) * m.radius, m.height, Math.cos(m.angle) * m.radius);
+        dummy.rotation.set(-Math.PI / 2, 0, m.angle);
+        dummy.scale.set(2.2, 0.9, 1);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mistMatRef.current) mistMatRef.current.opacity = mistOpacity;
+    }
   });
 
   return (
@@ -235,6 +303,17 @@ export function WeatherSystems() {
       <instancedMesh ref={izbaCapsRef} args={[undefined, undefined, 3]} visible={false}>
         <sphereGeometry args={[0.5, 8, 6]} />
         <meshStandardMaterial color="#f2f5f8" roughness={1} />
+      </instancedMesh>
+      <instancedMesh ref={mistRef} args={[undefined, undefined, MIST_COUNT]}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          ref={mistMatRef}
+          map={mistTexture}
+          color="#dfe6ea"
+          transparent
+          opacity={0.04}
+          depthWrite={false}
+        />
       </instancedMesh>
     </group>
   );

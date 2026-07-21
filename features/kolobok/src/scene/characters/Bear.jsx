@@ -3,6 +3,8 @@ import { useFrame } from '@react-three/fiber/native';
 import { CapsuleGeometry, Object3D, SphereGeometry } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
+import { makeToonMaterial } from '../materials/toonMaterial';
+import { BlobShadow } from '../BlobShadow';
 
 const FUR = '#8a6444';
 const MUZZLE = '#b08a62';
@@ -31,6 +33,11 @@ export function Bear({ mode, isActiveZone }) {
     { geometry: new SphereGeometry(0.1, 8, 6), color: FUR, position: [-0.19, 1.46, 0.06] },
     { geometry: new SphereGeometry(0.06, 6, 6), color: INNER_EAR, position: [-0.19, 1.46, 0.11] },
   ]), []);
+
+  const materials = useMemo(() => ({
+    body: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    arms: makeToonMaterial({ color: FUR, rimStrength: 0.35 }),
+  }), []);
 
   const state = useRef({
     rollPhase: Math.random() * Math.PI * 2,
@@ -67,8 +74,8 @@ export function Bear({ mode, isActiveZone }) {
     }
     const scratchWiggle = s.scratching ? Math.sin((s.scratchT / 1000) * Math.PI * 2 * 6) * ((12 * Math.PI) / 180) : 0;
 
-    // --- Encounter: approach 0.6, react = slow heavy swipe (arm 40deg arc
-    // over 350ms) that misses ---
+    // --- Encounter: approach 0.6, react = both arms reach forward and close
+    // inward together, like a two-handed grab, that closes on empty air ---
     const isMine = encounterMotion.zoneId === 'bear';
     if (isMine && mode === 'encounter') {
       s.approachZ = 0.6 * encounterMotion.phaseT;
@@ -80,7 +87,9 @@ export function Bear({ mode, isActiveZone }) {
       s.approachZ = 0;
       s.swipeT = 0;
     }
-    const swipeArc = Math.sin(Math.min(s.swipeT, 1) * Math.PI) * ((40 * Math.PI) / 180);
+    const grabT = Math.min(s.swipeT, 1);
+    const grabReach = Math.sin(grabT * Math.PI) * ((45 * Math.PI) / 180); // both arms swing forward together
+    const grabClose = Math.sin(grabT * Math.PI) * 0.12; // and inward, as if closing on something
 
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
@@ -94,10 +103,10 @@ export function Bear({ mode, isActiveZone }) {
       const mesh = armsRef.current;
       [1, -1].forEach((side, i) => {
         const isScratchArm = s.scratching && s.scratchSide === side;
-        const isSwipeArm = s.swipeT > 0 && side === 1;
-        const armX = isScratchArm ? scratchWiggle : isSwipeArm ? swipeArc : 0;
+        const armX = isScratchArm ? scratchWiggle : grabReach;
+        const armZ = isScratchArm ? side * 0.15 : side * Math.max(0, 0.15 - grabClose);
         dummy.position.set(0.32 * side, 0.85, 0.05);
-        dummy.rotation.set(armX, 0, side * 0.15);
+        dummy.rotation.set(armX, 0, armZ);
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);
@@ -108,14 +117,12 @@ export function Bear({ mode, isActiveZone }) {
 
   return (
     <group ref={rootRef}>
+      <BlobShadow radiusX={1.0} radiusZ={1.0} />
       <group ref={bodyRef}>
-        <mesh geometry={bodyGeometry}>
-          <meshStandardMaterial vertexColors roughness={0.9} />
-        </mesh>
+        <mesh geometry={bodyGeometry} material={materials.body} />
       </group>
-      <instancedMesh ref={armsRef} args={[undefined, undefined, 2]}>
+      <instancedMesh ref={armsRef} args={[undefined, undefined, 2]} material={materials.arms}>
         <capsuleGeometry args={[0.09, 0.4, 2, 6]} />
-        <meshStandardMaterial color={FUR} roughness={0.9} />
       </instancedMesh>
     </group>
   );

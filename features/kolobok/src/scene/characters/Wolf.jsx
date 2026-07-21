@@ -3,6 +3,8 @@ import { useFrame } from '@react-three/fiber/native';
 import { CapsuleGeometry, ConeGeometry, SphereGeometry } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
+import { makeToonMaterial } from '../materials/toonMaterial';
+import { BlobShadow } from '../BlobShadow';
 
 const FUR = '#7d8a96';
 const BELLY = '#aab4bd';
@@ -39,6 +41,11 @@ export function Wolf({ mode, isActiveZone }) {
     { geometry: new ConeGeometry(0.07, 0.16, 6), color: FUR, position: [0.1, 0.19, -0.02], rotation: [0, 0, -0.2] },
     { geometry: new ConeGeometry(0.07, 0.16, 6), color: FUR, position: [-0.1, 0.19, -0.02], rotation: [0, 0, 0.2] },
   ]), []);
+
+  const materials = useMemo(() => ({
+    body: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    head: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+  }), []);
 
   const state = useRef({
     sweepPhase: Math.random() * Math.PI * 2,
@@ -79,8 +86,9 @@ export function Wolf({ mode, isActiveZone }) {
       else howlPitch = (1 - (s.howlTimeline - 1500) / 500) * ((35 * Math.PI) / 180);
     }
 
-    // --- Encounter beat: approach 0.6, react = snap forward 0.15 + miss,
-    // head shake ±10° twice ---
+    // --- Encounter beat: approach 0.6, react = a lunging ARC jump (forward
+    // + up + down, not a flat slide) that overshoots and misses, head shake
+    // ±10° twice on landing ---
     const isMine = encounterMotion.zoneId === 'wolf';
     if (isMine && mode === 'encounter') {
       s.approachZ = 0.6 * encounterMotion.phaseT;
@@ -92,13 +100,18 @@ export function Wolf({ mode, isActiveZone }) {
       s.approachZ = 0;
       s.snapT = 0;
     }
-    const snapZ = Math.sin(Math.min(s.snapT, 1) * Math.PI) * 0.15;
-    const shakeYaw = s.snapT > 0 ? Math.sin(s.snapT * Math.PI * 4) * ((10 * Math.PI) / 180) : 0;
+    const snapPhase = Math.min(s.snapT, 1);
+    const snapZ = Math.sin(snapPhase * Math.PI) * 0.28;
+    const snapY = Math.sin(snapPhase * Math.PI) * 0.22;
+    // Head shake only once he's landed (back half of the arc), not while
+    // mid-air -- a wolf mid-leap doesn't shake its head.
+    const shakeYaw = snapPhase > 0.6 ? Math.sin((snapPhase - 0.6) / 0.4 * Math.PI * 4) * ((10 * Math.PI) / 180) : 0;
 
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
     if (rootRef.current) {
       rootRef.current.position.z = s.approachZ + snapZ;
+      rootRef.current.position.y = snapY;
       rootRef.current.scale.setScalar(pulse);
     }
     if (headGroupRef.current) {
@@ -109,13 +122,10 @@ export function Wolf({ mode, isActiveZone }) {
 
   return (
     <group ref={rootRef}>
-      <mesh geometry={bodyGeometry}>
-        <meshStandardMaterial vertexColors roughness={0.85} />
-      </mesh>
+      <BlobShadow radiusX={0.75} radiusZ={0.75} />
+      <mesh geometry={bodyGeometry} material={materials.body} />
       <group ref={headGroupRef} position={[0, 0.72, 0.22]}>
-        <mesh geometry={headGeometry}>
-          <meshStandardMaterial vertexColors roughness={0.8} />
-        </mesh>
+        <mesh geometry={headGeometry} material={materials.head} />
       </group>
     </group>
   );

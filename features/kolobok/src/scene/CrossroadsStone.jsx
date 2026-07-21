@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import * as Haptics from 'expo-haptics';
-import { BufferAttribute, BufferGeometry, Color, Object3D } from 'three';
+import { BufferAttribute, BufferGeometry, Color, Object3D, SphereGeometry } from 'three';
 import { angleDelta } from '../config/zones';
 import { orbit, useSceneStore } from '../state/sceneStore';
 import { MENU } from '../config/menu';
@@ -10,6 +10,8 @@ import { createTimeline } from './timeline';
 import { makeRng } from './prng';
 import { makeNoiseGrain } from './textures/proceduralTextures';
 import { makeLabelTexture } from './textures/bitmapFont';
+import { makeToonMaterial } from './materials/toonMaterial';
+import { jitterVertices } from './builders/vertexJitter';
 
 const dummy = new Object3D();
 const FACE_LERP_RATE = 2.5; // rad/s the stone yaws to catch up with the camera azimuth
@@ -102,6 +104,13 @@ export function CrossroadsStone() {
   const dustState = useRef({ timeline: null, y: 1 });
 
   const noiseTexture = useMemo(() => makeNoiseGrain('#8d8d85', 0.1), []);
+  const boulderMaterial = useMemo(
+    () => makeToonMaterial({ map: noiseTexture, color: '#8d8d85', rimStrength: 0.2 }),
+    [noiseTexture],
+  );
+  // VISUAL_QUALITY_SPEC §5: organic shape warmth -- a perfect sphere reads
+  // as a placeholder primitive, not a hand-carved boulder.
+  const boulderGeometry = useMemo(() => jitterVertices(new SphereGeometry(0.75, 8, 6), 0.75, 110), []);
 
   const tilts = useMemo(() => {
     const rng = makeRng(100);
@@ -166,10 +175,7 @@ export function CrossroadsStone() {
 
   return (
     <group ref={groupRef} position={[0, 0, 0]}>
-      <mesh position={[0, 0.975, 0]} scale={[1, 1.5, 0.65]}>
-        <sphereGeometry args={[0.75, 8, 6]} />
-        <meshStandardMaterial map={noiseTexture} color="#8d8d85" roughness={1} />
-      </mesh>
+      <mesh position={[0, 0.975, 0]} scale={[1, 1.5, 0.65]} material={boulderMaterial} geometry={boulderGeometry} />
 
       <instancedMesh
         args={[undefined, undefined, mossMatrices.length]}

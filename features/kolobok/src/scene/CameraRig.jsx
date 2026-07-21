@@ -4,9 +4,25 @@ import {
   ZONES, KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, nearestZone, rad, angleDelta,
 } from '../config/zones';
 import {
-  orbit, encounterMotion, storyMotion, useSceneStore,
+  orbit, encounterMotion, storyMotion, story, useSceneStore,
 } from '../state/sceneStore';
 import { createTimeline } from './timeline';
+import { polish } from '../config/devFlags';
+
+// How long a story-mode "look away" drag holds the camera off auto-follow
+// before it resumes on its own (smoothly re-converging, not snapping).
+const LOOK_AWAY_TIMEOUT_MS = 15000;
+
+// POLISH_SPEC §5 "never a static frame": idle camera breath, free mode
+// only -- suspended instantly on any input, resumes the instant it's been
+// quiet again. A view-only offset (added at the placement step below, never
+// written into orbit.angle itself) so it can't interfere with nearest-zone/
+// snap-target logic upstream.
+const BREATH_ANGLE = 0.007;
+const BREATH_ANGLE_PERIOD_S = 8;
+const BREATH_HEIGHT = 0.05;
+const BREATH_HEIGHT_PERIOD_S = 13;
+const BREATH_SUSPEND_MS = 300;
 
 // ART_SPEC §10 / ANIMATION_SPEC §4: encounter push-ins multiply ON TOP of
 // the (possibly still-easing) zone framing radius, restoring in reverse
@@ -19,6 +35,16 @@ const FRICTION = 0.94;        // per-frame velocity decay
 const SNAP_SPEED = 3.2;       // how eagerly we ease toward a zone
 const SNAP_THRESHOLD = 0.012; // below this |velocity|, soft snap kicks in
 const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transition
+
+// Free-look vertical drag: pitchOffset scales into a height nudge (bigger)
+// and an opposite lookAt-Y nudge (smaller), which is what makes it read as
+// "tilting the view" rather than just "elevator up/down" -- the camera
+// still ends up looking roughly at the same island-center pillar, just from
+// a higher/lower, more/less steep angle. Snaps back to 0 at PITCH_SNAP_RATE
+// (1/s) the instant the drag ends (orbit.freeLookActive goes false).
+const PITCH_HEIGHT_SCALE = 1.5;
+const PITCH_LOOKAT_SCALE = 0.5;
+const PITCH_SNAP_RATE = 3.0;
 
 const IZBA_FRAMING = ZONES.find((z) => z.id === 'izba').framing;
 
@@ -83,14 +109,25 @@ export function CameraRig() {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
 
     if (orbit.mode === 'story') {
-      // STORY_SPEC §1 control inversion: the camera chases Kolobok at
-      // kolobokAngle - LEAD with the same soft lag -- same math as free
-      // mode's Kolobok-chases-camera, inverted leader. Writing the result
-      // back INTO orbit.angle means an interrupt hands control to the user
-      // exactly where the camera already is: zero jump.
-      const camTarget = storyMotion.kolobokAngle - KOLOBOK_LEAD;
-      const d = angleDelta(orbit.angle, camTarget);
-      orbit.angle += d * Math.min(1, KOLOBOK_FOLLOW_LAG * dt);
+      // Dragging sets orbit.lookingAway (Scene3D) without pausing the tale --
+      // the user gets to look at the scene from any angle while Kolobok and
+      // narration keep going. Auto-follow resumes on its own 15s after the
+      // last input, easing back in via the same FOLLOW_LAG rate below rather
+      // than snapping.
+      if (orbit.lookingAway && Date.now() - story.lastInputAt > LOOK_AWAY_TIMEOUT_MS) {
+        orbit.lookingAway = false;
+      }
+      if (!orbit.lookingAway) {
+        // STORY_SPEC §1 control inversion: the camera chases Kolobok at
+        // kolobokAngle - LEAD with the same soft lag -- same math as free
+        // mode's Kolobok-chases-camera, inverted leader. Writing the result
+        // back INTO orbit.angle means resuming auto-follow (or an old-style
+        // interrupt) hands control over exactly where the camera already
+        // is: zero jump.
+        const camTarget = storyMotion.kolobokAngle - KOLOBOK_LEAD;
+        const d = angleDelta(orbit.angle, camTarget);
+        orbit.angle += d * Math.min(1, KOLOBOK_FOLLOW_LAG * dt);
+      }
       orbit.velocity = 0;
       orbit.snapTarget = null;
     } else {
@@ -137,16 +174,28 @@ export function CameraRig() {
     }
     if (f.timeline) f.timeline.tick(dt);
 
+    // 4b. Free-look vertical drag eases back to 0 the instant the drag ends
+    // -- a temporary override on top of the framing, never a persisted one.
+    if (!orbit.freeLookActive && orbit.pitchOffset !== 0) {
+      orbit.pitchOffset -= orbit.pitchOffset * Math.min(1, PITCH_SNAP_RATE * dt);
+      if (Math.abs(orbit.pitchOffset) < 0.001) orbit.pitchOffset = 0;
+    }
+
     // 5. Place camera on its orbit, always looking at the island center.
     // Encounter push-in (a 4% radius nudge while a beat's approach/react
     // is active) multiplies on top of the framing radius here.
+    const breathOn = polish.cameraBreath && orbit.mode !== 'story' && Date.now() - story.lastInputAt > BREATH_SUSPEND_MS;
+    const breathClock = Date.now() / 1000;
+    const angleBreath = breathOn ? Math.sin((breathClock * Math.PI * 2) / BREATH_ANGLE_PERIOD_S) * BREATH_ANGLE : 0;
+    const heightBreath = breathOn ? Math.sin((breathClock * Math.PI * 2) / BREATH_HEIGHT_PERIOD_S) * BREATH_HEIGHT : 0;
+
     const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
     camera.position.set(
-      Math.sin(orbit.angle) * pushedRadius,
-      f.height,
-      Math.cos(orbit.angle) * pushedRadius,
+      Math.sin(orbit.angle + angleBreath) * pushedRadius,
+      f.height + orbit.pitchOffset * PITCH_HEIGHT_SCALE + heightBreath,
+      Math.cos(orbit.angle + angleBreath) * pushedRadius,
     );
-    camera.lookAt(f.lookAtX, f.lookAtY, f.lookAtZ);
+    camera.lookAt(f.lookAtX, f.lookAtY - orbit.pitchOffset * PITCH_LOOKAT_SCALE, f.lookAtZ);
   });
 
   return null;
