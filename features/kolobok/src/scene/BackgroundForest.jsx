@@ -7,6 +7,7 @@ import { makeRng } from './prng';
 import { atmosphereLive } from '../state/sceneStore';
 
 const dummy = new Object3D();
+const rad = (deg) => (deg * Math.PI) / 180;
 
 // Live feedback: the background still read as empty with sparse 3D cones.
 // Classic trick from older 3D games -- a procedurally-generated tree
@@ -58,15 +59,19 @@ function makeTreeSpriteTexture(w = 24, h = 40) {
 // horizon as it lerps through the day. Different radii per ring also means
 // they naturally parallax against each other as the camera orbits. Counts
 // roughly 3x the old cone version -- flat sprites afford it.
+// Live feedback: as close as possible without the camera clipping through
+// flat sprites. Checked every zone/story-chapter framing radius in
+// zones.js/storyChapters.js -- the highest is 13.4 (Bear zone), so 14
+// is the tightest margin that still keeps every camera position clear.
 const RINGS = [
   {
-    count: 60, radiusMin: 17, radiusMax: 20, base: '#3a5238', k: 0.25,
+    count: 60, radiusMin: 14, radiusMax: 16, base: '#3a5238', k: 0.25,
   },
   {
-    count: 45, radiusMin: 22, radiusMax: 25, base: '#54705e', k: 0.5,
+    count: 45, radiusMin: 17, radiusMax: 19, base: '#54705e', k: 0.5,
   },
   {
-    count: 35, radiusMin: 27, radiusMax: 31, base: '#6d8578', k: 0.72,
+    count: 35, radiusMin: 20, radiusMax: 24, base: '#6d8578', k: 0.72,
   },
 ];
 const HILLS_BASE = '#46603f';
@@ -86,13 +91,13 @@ const HILLS = [
 // island's own ground so it tucks under the edge with no visible seam.
 const GROUND_BANDS = [
   {
-    rIn: 8, rOut: 15, base: '#5f7a4a', k: 0.15,
+    rIn: 8, rOut: 14, base: '#5f7a4a', k: 0.15,
   },
   {
-    rIn: 15, rOut: 23, base: '#57705a', k: 0.42,
+    rIn: 14, rOut: 20, base: '#57705a', k: 0.42,
   },
   {
-    rIn: 23, rOut: 36, base: '#5f7568', k: 0.78,
+    rIn: 20, rOut: 34, base: '#5f7568', k: 0.78,
   },
 ];
 const GROUND_Y = -0.08;
@@ -123,7 +128,13 @@ export function BackgroundForest() {
   // one instancedMesh per ring -- so `ring.count` trees cost 2*count
   // instances but still just ONE draw call.
   const ringMatrices = useMemo(() => RINGS.map((ring, ringIdx) => {
-    const rng = makeRng(90 + ringIdx * 7);
+    // Widely-separated seeds (offsets 7 apart previously) so each ring's
+    // FIRST few draws don't start correlated -- mulberry32 mixes well after
+    // several calls, but nearby seeds can echo each other's early output,
+    // which read as trees lining up radially across rings ("order"). A
+    // handful of burned draws adds more separation on top of that.
+    const rng = makeRng(400 + ringIdx * 617);
+    for (let burn = 0; burn < 5; burn += 1) rng();
     const out = [];
     for (let i = 0; i < ring.count; i++) {
       const angle = rng() * Math.PI * 2;
@@ -131,6 +142,10 @@ export function BackgroundForest() {
       const scaleXY = 1.6 + rng() * 1.6;
       const scaleY = scaleXY * (1.1 + rng() * 0.3);
       const baseYaw = rng() * Math.PI * 2;
+      // The cross's own angle varied per tree (was always exactly 90deg) --
+      // a fixed cross means every tree's two cards align identically, which
+      // from a fixed camera angle reads as rows of identically-facing trees.
+      const crossAngle = rad(70) + rng() * rad(40);
       const x = Math.sin(angle) * radius;
       const z = Math.cos(angle) * radius;
       // Plane geometry is 1.8 tall (half-height 0.9), centered at its own
@@ -142,7 +157,7 @@ export function BackgroundForest() {
       // above ground while short ones sank into it.
       const halfHeight = 0.9 * scaleY;
       const y = halfHeight - rng() * 0.15;
-      [0, Math.PI / 2].forEach((extraYaw) => {
+      [0, crossAngle].forEach((extraYaw) => {
         dummy.position.set(x, y, z);
         dummy.rotation.set(0, baseYaw + extraYaw, 0);
         dummy.scale.set(scaleXY, scaleY, 1);

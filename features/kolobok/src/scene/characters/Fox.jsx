@@ -5,6 +5,7 @@ import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion, storyMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
+import { initWetShakeState, tickWetShake } from '../wetShake';
 
 const FUR = '#d9722f';
 const CREAM = '#f2e8d8';
@@ -61,6 +62,7 @@ export function Fox({ mode, isActiveZone }) {
     tilting: false,
     tiltT: 0,
     approachZ: 0,
+    wetShake: initWetShakeState(),
   });
 
   useFrame((_, delta) => {
@@ -70,6 +72,9 @@ export function Fox({ mode, isActiveZone }) {
 
     const isMine = encounterMotion.zoneId === 'fox';
     const inEncounter = isMine && (mode === 'encounter' || mode === 'retreat');
+
+    // --- Wet shake-off (BACKLOG.md #1), idle only ---
+    const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
 
     // --- Tail: base +-14deg at 0.4Hz always; tip lags 200ms behind the
     // base. Driven as an exponential lag (time-constant 200ms) rather than
@@ -116,6 +121,7 @@ export function Fox({ mode, isActiveZone }) {
 
     if (rootRef.current) {
       rootRef.current.position.z = s.approachZ;
+      rootRef.current.rotation.z = wetShake;
       rootRef.current.scale.setScalar(pulse);
     }
     if (headGroupRef.current) {

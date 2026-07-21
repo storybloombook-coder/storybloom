@@ -7,6 +7,7 @@ import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
+import { initWetShakeState, tickWetShake } from '../wetShake';
 
 const FUR = '#d8d8d2';
 const BELLY = '#efeeea';
@@ -50,6 +51,7 @@ export function Hare({ mode, isActiveZone }) {
     earTwitch: [0, 0], nextEarTwitchIn: [1 + Math.random() * 2, 1 + Math.random() * 2], earTwitchT: [1, 1],
     sniffPhase: Math.random() * Math.PI * 2,
     approachZ: 0, reactT: 0, retreatZ: 0,
+    wetShake: initWetShakeState(),
   });
 
   useFrame((_, delta) => {
@@ -92,6 +94,9 @@ export function Hare({ mode, isActiveZone }) {
     s.sniffPhase += dt * Math.PI * 2 * 4;
     const sniffScale = 1 + Math.max(0, Math.sin(s.sniffPhase)) * 0.02;
 
+    // --- Wet shake-off (BACKLOG.md #1), idle only ---
+    const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
+
     // --- Encounter beat (ANIMATION_SPEC §4): approach 0.6, react = a
     // startled ARC jump (forward burst + vertical hop together, not just
     // straight up), retreat back to spot ---
@@ -114,6 +119,7 @@ export function Hare({ mode, isActiveZone }) {
 
     if (rootRef.current) {
       rootRef.current.position.z = s.approachZ + reactZ;
+      rootRef.current.rotation.z = wetShake;
       rootRef.current.scale.setScalar(pulse);
     }
     if (bodyRef.current) bodyRef.current.position.y = hopY + reactHop;

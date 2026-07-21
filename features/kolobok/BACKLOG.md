@@ -10,20 +10,21 @@ code as of that session -- verify they still apply before trusting them.
 
 ## Open items
 
-1. **Animal wet-shake**: when hit by rain/snow, animals (Bear/Fox/Hare/Wolf,
-   `src/scene/characters/`) should play a shake-off animation (side-to-side
-   body wiggle) while it's raining/snowing on them, throwing off water/snow
-   drops. Needs a "is it currently precipitating on me" signal -- probably
-   just `atmosphereLive.rainT`/`snowT` > threshold, gated per-animal so they
-   don't all shake in lockstep (stagger via a per-animal timer/phase).
+1. ~~**Animal wet-shake**~~ -- DONE (`src/scene/wetShake.js` shared helper +
+   wired into all four `src/scene/characters/*.jsx`, idle-only, staggered
+   per-animal, triggers on `atmosphereLive.rainT`/`snowT` > 0.3). Not yet
+   verified live against REAL rain (only smoke-tested) -- force
+   `weatherNow.force = 'rain'` (services/weather.js) to check on device.
 
-2. **Tree grab/release spring**: trees (`src/scene/Vegetation.jsx`) should be
-   "firmly attached at the base" but grabbable-feeling -- when
-   pulled/released they spring. This may already be partly covered by the
-   Kolobok<->tree collision spring-back (base-anchored pivot + sideways
-   push, see `applyCollisionMatrix`) -- re-check on device whether that
-   reads as "grab and release" or whether a genuine tap-and-drag interaction
-   is wanted here instead.
+2. ~~**Tree grab/release spring**~~ -- DONE, but scoped down from a live
+   continuous drag to press-to-pull/release-to-spring: React Native's
+   pointer-event model doesn't guarantee continuous tracking once a finger
+   moves off a small instanced-mesh hitbox (no web-style pointer capture),
+   so `onTreeGrab`/`onTreeRelease` in `src/scene/Vegetation.jsx` pull the
+   tree toward the initial touch point on press, hold it there, and spring
+   it back on release -- reuses the exact same `springEnvelope` math as the
+   Kolobok-collision reaction. Verify on device it actually reads as
+   "grabbable" (tap-hold a birch/spruce, release).
 
 3. **Stronger rain + puddles**: `src/scene/WeatherSystems.jsx` rain system
    (`RAIN_COUNT`, streak sprites) -- increase density/visual weight, and add

@@ -162,11 +162,14 @@ const SPRUCE_OCCUPIED = SPRUCE_PLANTS.map((p) => {
 });
 
 function InstancedPart({
-  count, matrices, colors, children, onMesh,
+  count, matrices, colors, children, onMesh, onPointerDown, onPointerUp, onPointerLeave,
 }) {
   return (
     <instancedMesh
       args={[undefined, undefined, count]}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerLeave}
       ref={(mesh) => {
         if (!mesh) return;
         matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
@@ -214,8 +217,51 @@ export function Vegetation() {
     () => spruce.map((p) => { const [x, , z] = pointOnCircle(p.radius, p.angle); return [x, z]; }),
     [spruce],
   );
-  const birchBend = useRef(birch.map(() => ({ t: -1, ax: 0, az: 0 })));
-  const spruceBend = useRef(spruce.map(() => ({ t: -1, ax: 0, az: 0 })));
+  const birchBend = useRef(birch.map(() => ({
+    t: -1, ax: 0, az: 0, held: false, releaseAmp: 1,
+  })));
+  const spruceBend = useRef(spruce.map(() => ({
+    t: -1, ax: 0, az: 0, held: false, releaseAmp: 1,
+  })));
+
+  // BACKLOG.md #2: grab a tree directly (independent of Kolobok) and it
+  // springs back on release. React Native's pointer-event model can't
+  // reliably track a drag once the finger moves off a small instanced-mesh
+  // hitbox (no pointer-capture guarantee like the web), so this is
+  // press-pulls-in-that-direction / release-springs-back rather than a
+  // continuous live-follow drag -- reuses the exact same spring math as
+  // the Kolobok collision below (`springEnvelope`), just entered at
+  // `t = PUSH_RISE_S` to skip straight to the decay phase (the tree is
+  // already at peak pull the instant you grab it, no rise-in needed).
+  const grabbedRef = useRef(null); // { type: 'birch'|'spruce', idx }
+  const onTreeGrab = (type) => (e) => {
+    e.stopPropagation();
+    const count = type === 'birch' ? birch.length : spruce.length;
+    const idx = e.instanceId % count;
+    const bendArr = type === 'birch' ? birchBend.current : spruceBend.current;
+    const worldXZArr = type === 'birch' ? birchWorldXZ : spruceWorldXZ;
+    const b = bendArr[idx];
+    const dx = e.point.x - worldXZArr[idx][0];
+    const dz = e.point.z - worldXZArr[idx][1];
+    const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
+    b.held = true;
+    b.ax = dx / len;
+    b.az = dz / len;
+    b.t = -1;
+    grabbedRef.current = { type, idx };
+  };
+  const onTreeRelease = () => {
+    const g = grabbedRef.current;
+    if (!g) return;
+    const bendArr = g.type === 'birch' ? birchBend.current : spruceBend.current;
+    const b = bendArr[g.idx];
+    if (b) {
+      b.held = false;
+      b.releaseAmp = 1;
+      b.t = PUSH_RISE_S;
+    }
+    grabbedRef.current = null;
+  };
 
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
@@ -226,23 +272,36 @@ export function Vegetation() {
     birch.forEach((plant, i) => {
       const b = birchBend.current[i];
       const [x, z] = birchWorldXZ[i];
-      if (b.t < 0) {
-        // Direction FROM Kolobok THROUGH the tree, continuing outward --
-        // "push away from Kolobok", i.e. the direction that opens space
-        // for him to keep rolling through.
-        const dx = x - kx;
-        const dz = z - kz;
-        if (dx * dx + dz * dz >= TREE_HIT_RADIUS * TREE_HIT_RADIUS) return;
-        const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
-        b.t = 0;
-        b.ax = dx / len;
-        b.az = dz / len;
+      let pushDist = 0;
+      let tiltAngle = 0;
+      let active = false;
+      if (b.held) {
+        pushDist = PUSH_MAX * 1.3;
+        tiltAngle = BEND_MAX_TILT * 1.3;
+        active = true;
+      } else {
+        if (b.t < 0) {
+          // Direction FROM Kolobok THROUGH the tree, continuing outward --
+          // "push away from Kolobok", i.e. the direction that opens space
+          // for him to keep rolling through.
+          const dx = x - kx;
+          const dz = z - kz;
+          if (dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS) {
+            const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
+            b.t = 0; b.ax = dx / len; b.az = dz / len; b.releaseAmp = 1;
+          }
+        }
+        if (b.t >= 0) {
+          b.t += dt;
+          const settled = b.t >= BEND_DURATION;
+          const spring = settled ? 0 : springEnvelope(b.t);
+          pushDist = PUSH_MAX * b.releaseAmp * spring;
+          tiltAngle = BEND_MAX_TILT * b.releaseAmp * spring;
+          active = true;
+          if (settled) b.t = -1;
+        }
       }
-      b.t += dt;
-      const settled = b.t >= BEND_DURATION;
-      const spring = settled ? 0 : springEnvelope(b.t);
-      const pushDist = PUSH_MAX * spring;
-      const tiltAngle = BEND_MAX_TILT * spring;
+      if (!active) return;
       if (birchTrunkRef.current) {
         applyCollisionMatrix(birchTrunkRef.current, i, plant, [0, 0.8, 0], [1, 1, 1], pushDist, tiltAngle, b.ax, b.az);
       }
@@ -251,7 +310,6 @@ export function Vegetation() {
         applyCollisionMatrix(birchCanopyRef.current, i + birch.length, plant, [-0.1, 1.85, 0.08], [0.7, 0.6125, 0.7], pushDist, tiltAngle, b.ax, b.az);
       }
       birchTouched = true;
-      if (settled) b.t = -1;
     });
     if (birchTouched) {
       if (birchTrunkRef.current) birchTrunkRef.current.instanceMatrix.needsUpdate = true;
@@ -262,27 +320,39 @@ export function Vegetation() {
     spruce.forEach((plant, i) => {
       const b = spruceBend.current[i];
       const [x, z] = spruceWorldXZ[i];
-      if (b.t < 0) {
-        const dx = x - kx;
-        const dz = z - kz;
-        if (dx * dx + dz * dz >= TREE_HIT_RADIUS * TREE_HIT_RADIUS) return;
-        const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
-        b.t = 0;
-        b.ax = dx / len;
-        b.az = dz / len;
+      let pushDist = 0;
+      let tiltAngle = 0;
+      let active = false;
+      if (b.held) {
+        pushDist = PUSH_MAX * 1.3;
+        tiltAngle = BEND_MAX_TILT * 1.3;
+        active = true;
+      } else {
+        if (b.t < 0) {
+          const dx = x - kx;
+          const dz = z - kz;
+          if (dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS) {
+            const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
+            b.t = 0; b.ax = dx / len; b.az = dz / len; b.releaseAmp = 1;
+          }
+        }
+        if (b.t >= 0) {
+          b.t += dt;
+          const settled = b.t >= BEND_DURATION;
+          const spring = settled ? 0 : springEnvelope(b.t);
+          pushDist = PUSH_MAX * b.releaseAmp * spring;
+          tiltAngle = BEND_MAX_TILT * b.releaseAmp * spring;
+          active = true;
+          if (settled) b.t = -1;
+        }
       }
-      b.t += dt;
-      const settled = b.t >= BEND_DURATION;
-      const spring = settled ? 0 : springEnvelope(b.t);
-      const pushDist = PUSH_MAX * spring;
-      const tiltAngle = BEND_MAX_TILT * spring;
+      if (!active) return;
       if (spruceRef.current) {
         applyCollisionMatrix(spruceRef.current, i, plant, [0, 0.35, 0], [0.55, 0.7, 0.55], pushDist, tiltAngle, b.ax, b.az);
         applyCollisionMatrix(spruceRef.current, i + spruce.length, plant, [0, 0.72, 0], [0.4, 0.6, 0.4], pushDist, tiltAngle, b.ax, b.az);
         applyCollisionMatrix(spruceRef.current, i + spruce.length * 2, plant, [0, 1.05, 0], [0.26, 0.5, 0.26], pushDist, tiltAngle, b.ax, b.az);
       }
       spruceTouched = true;
-      if (settled) b.t = -1;
     });
     if (spruceTouched && spruceRef.current) spruceRef.current.instanceMatrix.needsUpdate = true;
   });
@@ -486,18 +556,43 @@ export function Vegetation() {
   return (
     <group>
       {/* Birch: trunk (own draw, different geometry) + both canopy blobs
-          merged into one instancedMesh since they share a geometry */}
-      <InstancedPart count={birch.length} matrices={birchTrunkM} onMesh={(m) => { birchTrunkRef.current = m; }}>
+          merged into one instancedMesh since they share a geometry.
+          BACKLOG.md #2: grabbable on either mesh (trunk or canopy) --
+          instanceId is per-mesh, so onTreeGrab('birch') maps it back to the
+          logical tree index (mod birch.length) inside the handler. */}
+      <InstancedPart
+        count={birch.length}
+        matrices={birchTrunkM}
+        onMesh={(m) => { birchTrunkRef.current = m; }}
+        onPointerDown={onTreeGrab('birch')}
+        onPointerUp={onTreeRelease}
+        onPointerLeave={onTreeRelease}
+      >
         <cylinderGeometry args={[0.07, 0.08, 1.6, 7]} />
         <meshStandardMaterial map={birchTexture} roughness={0.9} />
       </InstancedPart>
-      <InstancedPart count={birchCanopyM.length} matrices={birchCanopyM} onMesh={(m) => { birchCanopyRef.current = m; }}>
+      <InstancedPart
+        count={birchCanopyM.length}
+        matrices={birchCanopyM}
+        onMesh={(m) => { birchCanopyRef.current = m; }}
+        onPointerDown={onTreeGrab('birch')}
+        onPointerUp={onTreeRelease}
+        onPointerLeave={onTreeRelease}
+      >
         <sphereGeometry args={[0.4, 8, 8]} />
         <meshStandardMaterial map={birchCanopyTexture} roughness={0.9} />
       </InstancedPart>
 
       {/* Spruce: all 3 cone tiers of all trees in one merged instancedMesh */}
-      <InstancedPart count={spruceAllM.length} matrices={spruceAllM} colors={spruceAllColors} onMesh={(m) => { spruceRef.current = m; }}>
+      <InstancedPart
+        count={spruceAllM.length}
+        matrices={spruceAllM}
+        colors={spruceAllColors}
+        onMesh={(m) => { spruceRef.current = m; }}
+        onPointerDown={onTreeGrab('spruce')}
+        onPointerUp={onTreeRelease}
+        onPointerLeave={onTreeRelease}
+      >
         <coneGeometry args={[1, 1, 8]} />
         <meshStandardMaterial roughness={0.9} />
       </InstancedPart>

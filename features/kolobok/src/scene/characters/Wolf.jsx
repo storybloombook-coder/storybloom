@@ -5,6 +5,7 @@ import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
+import { initWetShakeState, tickWetShake } from '../wetShake';
 
 const FUR = '#7d8a96';
 const BELLY = '#aab4bd';
@@ -54,6 +55,7 @@ export function Wolf({ mode, isActiveZone }) {
     howling: false,
     shakeT: 1,
     approachZ: 0, snapT: 0,
+    wetShake: initWetShakeState(),
   });
 
   useFrame((_, delta) => {
@@ -64,6 +66,9 @@ export function Wolf({ mode, isActiveZone }) {
     // --- Slow head sweep ±25° over 4s ---
     s.sweepPhase += dt * (Math.PI * 2) / 4;
     const sweepYaw = Math.sin(s.sweepPhase) * ((25 * Math.PI) / 180);
+
+    // --- Wet shake-off (BACKLOG.md #1), idle only ---
+    const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
 
     // --- Howl every ~12s: muzzle up 35° over 600ms, hold 900ms, down 500ms ---
     if (mode === 'idle') {
@@ -112,6 +117,7 @@ export function Wolf({ mode, isActiveZone }) {
     if (rootRef.current) {
       rootRef.current.position.z = s.approachZ + snapZ;
       rootRef.current.position.y = snapY;
+      rootRef.current.rotation.z = wetShake;
       rootRef.current.scale.setScalar(pulse);
     }
     if (headGroupRef.current) {

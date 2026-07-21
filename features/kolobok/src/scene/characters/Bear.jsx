@@ -5,6 +5,7 @@ import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
+import { initWetShakeState, tickWetShake } from '../wetShake';
 
 const FUR = '#8a6444';
 const MUZZLE = '#b08a62';
@@ -46,6 +47,7 @@ export function Bear({ mode, isActiveZone }) {
     scratchT: 0,
     scratchSide: 1,
     approachZ: 0, swipeT: 0,
+    wetShake: initWetShakeState(),
   });
 
   useFrame((_, delta) => {
@@ -56,6 +58,9 @@ export function Bear({ mode, isActiveZone }) {
     // --- Weight shift: body roll +-4 deg at 0.25Hz ---
     s.rollPhase += dt * Math.PI * 2 * 0.25;
     const roll = Math.sin(s.rollPhase) * ((4 * Math.PI) / 180);
+
+    // --- Wet shake-off (BACKLOG.md #1), idle only ---
+    const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
 
     // --- Every ~10s, raise one arm and scratch: +-12deg at 6Hz for 900ms ---
     if (mode === 'idle') {
@@ -95,6 +100,7 @@ export function Bear({ mode, isActiveZone }) {
 
     if (rootRef.current) {
       rootRef.current.position.z = s.approachZ;
+      rootRef.current.rotation.z = wetShake;
       rootRef.current.scale.setScalar(pulse);
     }
     if (bodyRef.current) bodyRef.current.rotation.z = roll;
