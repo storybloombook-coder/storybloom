@@ -81,6 +81,7 @@ export function Kolobok() {
   const openMouthMesh = useRef();
 
   const sing = useSceneStore((s) => s.sing);
+  const encounter = useSceneStore((s) => s.encounter);
   const doughTexture = useMemo(() => makeDoughTexture(), []);
   const specularTexture = useMemo(() => makeRadialAlphaTexture(), []);
 
@@ -377,6 +378,12 @@ export function Kolobok() {
 
   const onTap = (e) => {
     e.stopPropagation();
+    // BACKLOG.md #10: same guard as ZoneLandmarks.jsx -- don't re-trigger/
+    // overwrite an encounter already running on 'kolobok' (most importantly
+    // the tale's own finale beats, which set `encounter.story === true`
+    // here too), and this no longer needs to pause the story either way
+    // (StoryDirector's interrupt effect was removed).
+    if (encounter?.id === 'kolobok') return;
     startHop(state.current);
     startSing(state.current);
     sing();

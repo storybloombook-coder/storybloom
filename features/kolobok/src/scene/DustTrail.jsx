@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { BufferAttribute, BufferGeometry } from 'three';
 import { storyMotion } from '../state/sceneStore';
+import { wind } from './wind';
 
 // POLISH_SPEC §4 dust kick: while Kolobok's roll speed exceeds 0.2, spawn
 // 2 puffs/s behind him (derived from his own frame-to-frame position delta
@@ -62,6 +63,13 @@ export function DustTrail() {
       if (p.t <= FADE_S) {
         p.t += dt;
         anyAlive = true;
+        // POLISH_SPEC §4 "blown by the wind" -- same wind.direction-scaled
+        // drift convention as GoldenHourExtras.jsx's pollen, accumulated
+        // onto the puff's own tracked x/z each frame (not just a one-shot
+        // offset), so it visibly rides the wind over its short lifetime
+        // rather than only rising straight up in place.
+        p.x += wind.direction[0] * wind.strength * 0.12 * dt;
+        p.z += wind.direction[2] * wind.strength * 0.12 * dt;
         positions.setXYZ(i, p.x, p.y + (p.t / FADE_S) * RISE, p.z);
       } else {
         positions.setXYZ(i, 0, -10, 0);

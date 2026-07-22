@@ -6,6 +6,7 @@ import {
 import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
+import { wind } from './wind';
 
 const dummy = new Object3D();
 
@@ -63,7 +64,19 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         if (p.t > 1) { p.t = 0; p.drift = Math.random() * Math.PI * 2; }
         const rise = p.t * 1.5;
         const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
-        positions.setXYZ(i, chimneyPos[0] + sway, chimneyPos[1] + rise, chimneyPos[2] + sway * 0.6);
+        // Live feedback: "the wind should gently rustle... the smoke" --
+        // same wind.direction-scaled drift convention as GoldenHourExtras'
+        // pollen/DustTrail's puffs, growing with rise (t) so the smoke
+        // visibly leans further downwind the higher it climbs, same as
+        // real chimney smoke, layered on top of the existing flutter sway.
+        const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
+        const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
+        positions.setXYZ(
+          i,
+          chimneyPos[0] + sway + windDriftX,
+          chimneyPos[1] + rise,
+          chimneyPos[2] + sway * 0.6 + windDriftZ,
+        );
       });
       positions.needsUpdate = true;
       smokeGeometry.computeBoundingSphere();

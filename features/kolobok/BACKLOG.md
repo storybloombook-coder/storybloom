@@ -40,66 +40,98 @@ code as of that session -- verify they still apply before trusting them.
    settle-back-to-izba-angle steps (`at: 6600+COOKING_DELTA` block) for a
    sign/direction mismatch.
 
-5. **Fox-catch VFX**: when Kolobok is eaten, add rays of light radiating
-   outward (~4 Kolobok-radii reach) plus a smoke puff where he was, smoke
-   dissipating after a few seconds. Lives in `foxCatchSteps()` in
-   `src/scene/storyChapters.js`, around the gulp/fade beat.
+5. ~~**Fox-catch VFX**~~ -- DONE (`src/scene/KolobokParticles.jsx`: light-ray
+   instancedMesh + smoke `points`, triggered via `storyMotion.catchBurstId`
+   bumped at the gulp beat in `foxCatchSteps()`, `src/scene/storyChapters.js`).
+   Rays originate from Kolobok's position, 8-10 per burst at randomized
+   angles (re-rolled each trigger, not evenly spaced). Confirmed on device.
 
-6. **Willow instead of birch in water**: a willow variant (drooping canopy)
-   growing AT the pond's edge, replacing/supplementing a birch there.
-   Probably a new tree-part builder in `src/scene/PondAndGrandpa.jsx` or a
-   willow-specific geometry added to `Vegetation.jsx`'s birch builder,
-   positioned at the pond rim.
+6. ~~**Willow instead of birch in water**~~ -- DONE (`src/scene/PondAndGrandpa.jsx`
+   `willowGeometry`: trunk + squashed canopy sphere + 12 seeded drooping
+   fronds, own mesh/draw call so it can carry its own vertex colors
+   independent of `matteGeometry`). Placed at local `[1.9, 0, 0.75]`,
+   roughly opposite Grandpa's stump, just outside the water rim's max
+   wobble radius. Confirmed on device.
 
-7. **Grass over the bridge/road seam**: where the wooden bridge
-   (`src/scene/PondAndGrandpa.jsx`, `bridgeParts`) meets the dirt path
-   (`src/scene/Island.jsx`, path ring gap), the seam should be covered with
-   grass so it doesn't read as a hard cut.
+7. ~~**Grass over the bridge/road seam**~~ -- DONE (`src/scene/Island.jsx`:
+   moss clumps, not grass tufts -- live feedback preferred rounded mossy
+   bushes). Two systems: `usePathEdgeMossMatrices` hugs both edges of the
+   path ring all the way around the island (skipping the bridge-gap arc),
+   and `useBridgeSeamMossMatrices` spans the path's FULL width right at the
+   two seam angles where the bridge deck meets the path. Confirmed on
+   device.
+   - **Bonus fix, found while testing this**: the distant background
+     treeline (`src/scene/BackgroundForest.jsx` `makeTreeSpriteTexture`)
+     was reported upside-down. After a lot of thrashing on the wrong
+     theory (`texture.flipY`, `PlaneGeometry`-UV mapping, row-reversal --
+     none of which were it), the actual fix was much simpler: revert the
+     pixel-buffer index to the original `o = (y * w + x) * 4` -- the bug
+     had been introduced by an earlier edit, not present in the true
+     original code. Confirmed fixed on device.
 
-8. **Collision should persist while overlapping, not fire once**: tree
-   collision (`src/scene/Vegetation.jsx`, birch/spruce bend-state) currently
-   triggers once on entry and runs its own fixed-duration spring regardless
-   of whether Kolobok is still touching it. Change to: reaction continues
-   /re-triggers for as long as the objects are still intersecting, only
-   settling once they've actually separated.
+8. ~~**Collision should persist while overlapping, not fire once**~~ -- DONE
+   (`src/scene/Vegetation.jsx`, birch + spruce blocks). While overlapping,
+   holds at full push (direction re-tracked every frame) instead of
+   running a fixed-duration spring that could settle to zero mid-overlap;
+   the spring-back/settle only starts once they've actually separated.
+   Confirmed on device.
 
-9. **Crossroads stone rework** (bigger item, see also the parked "signpost"
-   idea below): boulder should be bigger/heavier at its base (like a real
-   boulder, not a uniform blob) -- `src/scene/CrossroadsStone.jsx`
-   `boulderGeometry`. The three menu plaques should sit in carved grooves at
-   three height levels on a STATIONARY stone; the plaques/buttons themselves
-   move in a circular path behind the camera as they "rotate" through
-   view, with dust spilling from the grooves/joints as they move. This is a
-   substantial redesign of `CrossroadsStone.jsx`'s current model (stone
-   itself yaws to face the camera; this would flip it to stone-static,
-   buttons-orbiting).
+9. ~~**Crossroads stone rework**~~ -- DONE for now, user said "keep it as is,
+   move to the next item" (`src/scene/CrossroadsStone.jsx`, several live-
+   feedback rounds). Landed: stone is STATIC (no longer yaws to face the
+   camera); the three plaques live in their own rotating `plaqueGroupRef`
+   column that chases the camera instead; each plaque is a curved
+   cylinder-wall panel (not a flat box) sized to its own radius via a
+   lathe-style `RADIUS_PROFILE` (wide bulge near the base, narrower waist,
+   narrower still near the top -- base is deliberately wider than the
+   middle, per live feedback); grooves are recessed directly into the
+   boulder's own geometry (not a floating ring) with a dark accent torus
+   sitting slightly BEHIND each plaque's radius; dust spills continuously
+   while the column is actively rotating, not just on tap; labels widened
+   (176px texture) to stop clipping ("Create a Story" was showing as "EATE
+   A STO"); buttons sized +50% per request. Not pixel-perfect against the
+   reference boulder photo the user shared, but confirmed acceptable to
+   move on -- revisit proportions/contrast later if it comes up again.
 
-10. **Tap-to-interrupt only when not already in dialogue**: tapping a
-    character should never interrupt the autoplaying tale -- it should only
-    play a tap/greeting animation, and ONLY when that character isn't
-    currently mid-encounter-dialogue. Related to the recent
-    `orbit.lookingAway` camera change (dragging no longer pauses the story);
-    this is the equivalent fix for TAPS specifically. Check
-    `EncounterDirector.jsx` / `StoryDirector.jsx`'s encounter-interrupt
-    effect (`if (encounter && !encounter.story && story.mode === 'playing')
-    stopStory('paused')`) -- likely needs to become "play a quick tap
-    reaction, don't stopStory" when a tale is already playing.
+10. ~~**Tap-to-interrupt only when not already in dialogue**~~ -- DONE.
+    `StoryDirector.jsx`'s encounter-interrupt effect no longer calls
+    `stopStory('paused')` at all -- a tap's own encounter beat (still the
+    normal approach/react/greeting reaction) now plays underneath the
+    autoplaying tale, which keeps ticking (narration still wins the shared
+    bubble slot over `encounter.line`, so no visual clash). `ZoneLandmarks.jsx`
+    and `Kolobok.jsx`'s own tap handlers both gained a guard
+    (`if (encounter?.id === zone.id) return;`) so tapping a character
+    that's already mid-dialogue -- including the tale's OWN scripted visit
+    to that same zone (`encounter.story === true`) -- is a no-op instead of
+    overwriting/desyncing it. Confirmed on device: tapped an animal mid-
+    narration, story kept playing (narration text + pause button unchanged).
 
-11. **Kolobok dust kick** -- DONE this session (`src/scene/DustTrail.jsx`,
-    POLISH_SPEC §4). Re-verify on device it actually reads as "blown by the
-    wind" (currently the puffs just rise+fade, no wind-drift lateral
-    motion applied -- consider adding `wind.direction`-scaled drift to
-    match the ground-mist/pollen convention).
+11. ~~**Kolobok dust kick**~~ -- DONE, confirmed on device (`src/scene/DustTrail.jsx`
+    POLISH_SPEC §4). Puffs now drift with `wind.direction`/`wind.strength`
+    (same convention as GoldenHourExtras' pollen) instead of just rising
+    in place. Live feedback also asked for the wind to visibly affect
+    trees and chimney smoke too -- both added in the same pass:
+    `Vegetation.jsx`'s birch/spruce now sway ambiently via `windSway()`
+    (`TREE_SWAY_AMPLITUDE`, much smaller than grass's) whenever not
+    actively being pushed by Kolobok, and `ZoneAmbience.jsx`'s chimney
+    smoke leans downwind as it rises (drift scales with `p.t`, same
+    `wind.direction`/`wind.strength` convention). Confirmed on device.
 
-12. **Trees must not grow out of the road**: placement (`scatterAngles` /
-    `scatterNonOverlappingTrees` in `src/scene/builders/placement.js`) needs
-    a keep-clear band around `PATH_RADIUS` (currently only checks distance
-    from landmark centers, not from the path ring itself) -- trunks
-    shouldn't spawn ON the path, though overhanging canopy/branches across
-    it are fine.
+12. ~~**Trees must not grow out of the road**~~ -- DONE. `placement.js`'s
+    `scatterNonOverlappingTrees` now rejects any candidate radius within
+    `PATH_HALF_WIDTH + 0.15` of `PATH_RADIUS` (both now shared constants
+    from `zones.js`, along with a new `POND_RADIUS`, so Island.jsx's own
+    ring geometry can't drift out of sync with the keep-clear check).
+    Also added a pond keep-clear (a spruce had spawned right at the
+    water's edge) and, per live feedback, THREE deliberate hand-placed
+    exceptions in `Vegetation.jsx`'s `SPRUCE_PLANTS`: two "roadside"
+    spruces (different sizes) positioned to overlap the path just enough
+    that Kolobok reliably brushes/pushes them, and one "pondside" spruce
+    near the willow, just off the water's edge. Confirmed on device.
 
-13. **Grass density**: increase `GRASS_COUNT` (`src/scene/Vegetation.jsx`,
-    currently 80) further.
+13. ~~**Grass density**~~ -- DONE. `GRASS_COUNT` 80 -> 112, flower count
+    16 -> 23 (`src/scene/Vegetation.jsx`) per live feedback "grass with
+    flowers a little thicker". Confirmed on device.
 
 14. **Kolobok eyelids look wrong**: currently read as "protruding sticks"
     rather than arched lids. `src/scene/Kolobok.jsx` eyelid mesh is a

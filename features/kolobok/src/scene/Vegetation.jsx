@@ -3,7 +3,9 @@ import { useFrame } from '@react-three/fiber/native';
 import {
   Color, ConeGeometry, Object3D, Quaternion, Vector3,
 } from 'three';
-import { ISLAND_RADIUS, rad, pointOnCircle } from '../config/zones';
+import {
+  ISLAND_RADIUS, rad, pointOnCircle, PATH_RADIUS,
+} from '../config/zones';
 import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement';
 import { makeRng } from './prng';
 import { makeStripes, makeNoiseGrain, makeSpeckle } from './textures/proceduralTextures';
@@ -27,12 +29,17 @@ const offsetTmp = new Vector3();
 // offset 90deg off from the intended lean -- fixed below (axis = (dirZ, 0,
 // -dirX), not (dirX, 0, dirZ)).
 const TREE_HIT_RADIUS = 0.55;
-const PUSH_MAX = 0.35;       // sideways slide distance at peak, world units
+// Live feedback: the reaction read as too harsh/intense -- push+tilt both
+// scaled down, and a squash-and-stretch (STRETCH_Y/STRETCH_XZ below) added
+// for a snappier, more organic "boing" instead of a rigid slide-and-tilt.
+const PUSH_MAX = 0.22;       // sideways slide distance at peak, world units
 const PUSH_RISE_S = 0.12;    // seconds to reach peak push
-const BEND_MAX_TILT = rad(14); // tied to the same spring value as the push
+const BEND_MAX_TILT = rad(9); // tied to the same spring value as the push
 const BEND_DECAY = 6;
 const BEND_FREQ = 2.5;
 const BEND_DURATION = 1.1; // seconds until the spring is fully settled
+const STRETCH_Y = 0.16;   // +16% taller at peak spring intensity
+const STRETCH_XZ = 0.08;  // -8% thinner at peak, so volume feels conserved
 
 /** 0..1 envelope: quick linear rise to 1 over PUSH_RISE_S, then a decaying
  *  cosine clipped at 0 (never swings past center back toward Kolobok --
@@ -51,9 +58,12 @@ function springEnvelope(t) {
  *  combined orientation (yaw + tilt) that becomes the part's own rotation,
  *  which is what makes trunk and canopy swing together as one hinged
  *  plant instead of each independently floating at a repositioned point.
+ *  `intensity` (0..1, how "deep" into the spring this frame is) drives a
+ *  squash-and-stretch on top of the slide+tilt -- taller/thinner at peak,
+ *  back to normal at rest -- for a snappier, less rigid-feeling bend.
  *  Writes straight into `mesh` at `index` rather than returning a matrix,
  *  since this runs every frame for whichever trees are mid-spring. */
-function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushDist, tiltAngle, dirX, dirZ) {
+function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushDist, tiltAngle, dirX, dirZ, intensity = 0) {
   const [baseX, , baseZ] = pointOnCircle(plant.radius, plant.angle);
 
   dummy.rotation.set(0, plant.yaw, 0); // auto-syncs dummy.quaternion
@@ -64,7 +74,13 @@ function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushD
     tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, tiltAngle);
     dummy.quaternion.premultiply(tiltQuatTmp);
   }
-  offsetTmp.set(localOffset[0] * plant.scale, localOffset[1] * plant.scale, localOffset[2] * plant.scale);
+  const stretchY = 1 + intensity * STRETCH_Y;
+  const stretchXZ = 1 - intensity * STRETCH_XZ;
+  offsetTmp.set(
+    localOffset[0] * plant.scale,
+    localOffset[1] * plant.scale * stretchY,
+    localOffset[2] * plant.scale,
+  );
   offsetTmp.applyQuaternion(dummy.quaternion);
 
   dummy.position.set(
@@ -73,28 +89,35 @@ function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushD
     baseZ + dirZ * pushDist + offsetTmp.z,
   );
   dummy.scale.set(
-    plant.scale * localScale[0],
-    plant.scale * localScale[1],
-    plant.scale * localScale[2],
+    plant.scale * localScale[0] * stretchXZ,
+    plant.scale * localScale[1] * stretchY,
+    plant.scale * localScale[2] * stretchXZ,
   );
   dummy.updateMatrix();
   mesh.setMatrixAt(index, dummy.matrix);
 }
 
 // POLISH_SPEC §4 grass tufts + bend-away (also applies to flowers).
-const GRASS_COUNT = 80;
+// BACKLOG.md #13 / live feedback "grass with flowers a little thicker":
+// was 80.
+const GRASS_COUNT = 112;
 const GRASS_BEND_RADIUS = 0.55;
 const GRASS_BEND_MAX_TILT = rad(28);
 const GRASS_BEND_DECAY = 9;
 const GRASS_BEND_FREQ = 3.2; // gives the "slight overshoot" on the spring back
 const GRASS_BEND_DURATION = 0.4; // 400ms, per spec
 const GRASS_SWAY_AMPLITUDE = rad(14);
+// Live feedback: "the wind should gently rustle the trees" -- trees are
+// heavy/rooted, so a MUCH smaller amplitude than grass's, riding the same
+// windSway() phase-offset rule (POLISH_SPEC §3) so a gust visibly rolls
+// across the whole stand rather than every tree swaying in lockstep.
+const TREE_SWAY_AMPLITUDE = rad(2.2);
 const FLOWER_BEND_RADIUS = 0.55; // flowers share the same reaction as grass
 
 /** 3 crossed thin cones -- a cheap "tuft" silhouette that reads from any
  *  angle without a billboard. White base color: instanceColor (set per-
  *  instance below) is the only tint, so it comes through unmodified. */
-function makeGrassTuftGeometry() {
+export function makeGrassTuftGeometry() {
   return mergeColoredParts([0, 60, 120].map((deg) => ({
     geometry: new ConeGeometry(0.015, 0.18, 4),
     color: '#ffffff',
@@ -148,9 +171,35 @@ const TREE_CANOPY_R = { birch: 0.42, spruce: 0.58 };
 const SPRUCE_PLANTS = (() => {
   const rng = makeRng(20);
   const occupied = [];
-  return scatterNonOverlappingTrees(rng, 14, ['wolf', 'bear'], {
+  const scattered = scatterNonOverlappingTrees(rng, 14, ['wolf', 'bear'], {
     radiusMin: ISLAND_RADIUS * 0.35, radiusMax: ISLAND_RADIUS * 0.88, scaleMin: 0.75, scaleMax: 1.15,
   }, TREE_CANOPY_R.spruce, occupied);
+  // Live feedback: a couple of hand-placed spruces ("Christmas trees"),
+  // different sizes, deliberately overlapping the path by ~20% of
+  // TREE_HIT_RADIUS so Kolobok reliably brushes and pushes them as he
+  // rolls past -- the opposite of the keep-clear rule scatterNonOverlapping
+  // Trees enforces for the rest of the forest, so these bypass it
+  // entirely and are placed directly. Angles sit mid-arc between zones
+  // (clear of both the 16deg landmark keep-clear and the pond at 324deg).
+  // Live feedback: moved 15% further from the road (offset from PATH_RADIUS
+  // scaled by 1.15 -- was 0.28/0.3) -- still comfortably under
+  // TREE_HIT_RADIUS(0.55) so Kolobok still brushes/pushes them, just a
+  // little less deep into the road itself.
+  const roadside = [
+    { angle: rad(36), radius: PATH_RADIUS - 0.28 * 1.15, scale: 0.85, yaw: rng() * Math.PI * 2 },
+    { angle: rad(108), radius: PATH_RADIUS + 0.3 * 1.15, scale: 1.2, yaw: rng() * Math.PI * 2 },
+  ];
+  // Live feedback: a spruce near the pond's willow, just off the water's
+  // edge (not overlapping it) -- also a hand-placed exception to the
+  // pond keep-clear rule, same reasoning as the roadside pair above.
+  // Willow sits at local [1.9,0,0.75] inside the pond group (position
+  // POND_POS, rotation POND_ANGLE+PI) -- worked out as world radius ~5.2,
+  // angle ~303deg from island center; this sits a little further out/
+  // around from it at radius 5.4, angle 306deg.
+  const pondside = [
+    { angle: rad(306), radius: 5.4, scale: 1.0, yaw: rng() * Math.PI * 2 },
+  ];
+  return [...scattered, ...roadside, ...pondside];
 })();
 export const SPRUCE_TOP_MATRICES = SPRUCE_PLANTS.map((p) => matrixAt(p, [0, 1.32, 0], [0.2, 0.1, 0.2]));
 
@@ -265,6 +314,7 @@ export function Vegetation() {
 
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
+    const clock = Date.now() / 1000;
     const kx = storyMotion.kolobokWorldPos[0];
     const kz = storyMotion.kolobokWorldPos[2];
 
@@ -276,38 +326,61 @@ export function Vegetation() {
       let tiltAngle = 0;
       let active = false;
       if (b.held) {
-        pushDist = PUSH_MAX * 1.3;
-        tiltAngle = BEND_MAX_TILT * 1.3;
+        pushDist = PUSH_MAX * 1.15;
+        tiltAngle = BEND_MAX_TILT * 1.15;
         active = true;
       } else {
-        if (b.t < 0) {
-          // Direction FROM Kolobok THROUGH the tree, continuing outward --
-          // "push away from Kolobok", i.e. the direction that opens space
-          // for him to keep rolling through.
-          const dx = x - kx;
-          const dz = z - kz;
-          if (dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS) {
-            const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
-            b.t = 0; b.ax = dx / len; b.az = dz / len; b.releaseAmp = 1;
-          }
-        }
-        if (b.t >= 0) {
+        // Direction FROM Kolobok THROUGH the tree, continuing outward --
+        // "push away from Kolobok", i.e. the direction that opens space
+        // for him to keep rolling through.
+        const dx = x - kx;
+        const dz = z - kz;
+        const overlapping = dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS;
+        if (overlapping) {
+          // BACKLOG.md #8: hold at full push for as long as they're still
+          // intersecting, instead of firing a fixed-duration spring that
+          // could settle back to zero (tree passing back through Kolobok)
+          // while still overlapping. Direction is re-tracked every frame
+          // so the lean follows him if he moves while still touching.
+          // `t` only rises up to PUSH_RISE_S here and is clamped there --
+          // springEnvelope(PUSH_RISE_S) is a steady 1 (full push), and it
+          // only continues past that (into the decay curve) once he's
+          // actually clear, below.
+          const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
+          b.ax = dx / len; b.az = dz / len;
+          b.t = Math.min(PUSH_RISE_S, (b.t < 0 ? 0 : b.t) + dt);
+          const spring = springEnvelope(b.t);
+          pushDist = PUSH_MAX * spring;
+          tiltAngle = BEND_MAX_TILT * spring;
+          active = true;
+        } else if (b.t >= 0) {
           b.t += dt;
           const settled = b.t >= BEND_DURATION;
           const spring = settled ? 0 : springEnvelope(b.t);
-          pushDist = PUSH_MAX * b.releaseAmp * spring;
-          tiltAngle = BEND_MAX_TILT * b.releaseAmp * spring;
+          pushDist = PUSH_MAX * spring;
+          tiltAngle = BEND_MAX_TILT * spring;
           active = true;
           if (settled) b.t = -1;
         }
       }
-      if (!active) return;
+      // Live feedback: "the wind should gently rustle the trees" -- when
+      // not actively being pushed by Kolobok, sway ambiently with the wind
+      // instead of sitting frozen (same windSway phase-offset rule as the
+      // grass below, just a much smaller amplitude -- see TREE_SWAY_AMPLITUDE).
+      let dirX = b.ax;
+      let dirZ = b.az;
+      if (!active) {
+        tiltAngle = windSway(x, z, clock, TREE_SWAY_AMPLITUDE);
+        dirX = wind.direction[0];
+        dirZ = wind.direction[2];
+      }
+      const intensity = pushDist / PUSH_MAX;
       if (birchTrunkRef.current) {
-        applyCollisionMatrix(birchTrunkRef.current, i, plant, [0, 0.8, 0], [1, 1, 1], pushDist, tiltAngle, b.ax, b.az);
+        applyCollisionMatrix(birchTrunkRef.current, i, plant, [0, 0.8, 0], [1, 1, 1], pushDist, tiltAngle, dirX, dirZ, intensity);
       }
       if (birchCanopyRef.current) {
-        applyCollisionMatrix(birchCanopyRef.current, i, plant, [0.05, 1.7, 0], [1, 0.8, 1], pushDist, tiltAngle, b.ax, b.az);
-        applyCollisionMatrix(birchCanopyRef.current, i + birch.length, plant, [-0.1, 1.85, 0.08], [0.7, 0.6125, 0.7], pushDist, tiltAngle, b.ax, b.az);
+        applyCollisionMatrix(birchCanopyRef.current, i, plant, [0.05, 1.7, 0], [1, 0.8, 1], pushDist, tiltAngle, dirX, dirZ, intensity);
+        applyCollisionMatrix(birchCanopyRef.current, i + birch.length, plant, [-0.1, 1.85, 0.08], [0.7, 0.6125, 0.7], pushDist, tiltAngle, dirX, dirZ, intensity);
       }
       birchTouched = true;
     });
@@ -324,33 +397,46 @@ export function Vegetation() {
       let tiltAngle = 0;
       let active = false;
       if (b.held) {
-        pushDist = PUSH_MAX * 1.3;
-        tiltAngle = BEND_MAX_TILT * 1.3;
+        pushDist = PUSH_MAX * 1.15;
+        tiltAngle = BEND_MAX_TILT * 1.15;
         active = true;
       } else {
-        if (b.t < 0) {
-          const dx = x - kx;
-          const dz = z - kz;
-          if (dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS) {
-            const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
-            b.t = 0; b.ax = dx / len; b.az = dz / len; b.releaseAmp = 1;
-          }
-        }
-        if (b.t >= 0) {
+        // BACKLOG.md #8: see the matching birch block above for why this
+        // holds at full push while overlapping instead of a fixed spring.
+        const dx = x - kx;
+        const dz = z - kz;
+        const overlapping = dx * dx + dz * dz < TREE_HIT_RADIUS * TREE_HIT_RADIUS;
+        if (overlapping) {
+          const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
+          b.ax = dx / len; b.az = dz / len;
+          b.t = Math.min(PUSH_RISE_S, (b.t < 0 ? 0 : b.t) + dt);
+          const spring = springEnvelope(b.t);
+          pushDist = PUSH_MAX * spring;
+          tiltAngle = BEND_MAX_TILT * spring;
+          active = true;
+        } else if (b.t >= 0) {
           b.t += dt;
           const settled = b.t >= BEND_DURATION;
           const spring = settled ? 0 : springEnvelope(b.t);
-          pushDist = PUSH_MAX * b.releaseAmp * spring;
-          tiltAngle = BEND_MAX_TILT * b.releaseAmp * spring;
+          pushDist = PUSH_MAX * spring;
+          tiltAngle = BEND_MAX_TILT * spring;
           active = true;
           if (settled) b.t = -1;
         }
       }
-      if (!active) return;
+      // Ambient wind sway when not being pushed (see the birch block above).
+      let dirX = b.ax;
+      let dirZ = b.az;
+      if (!active) {
+        tiltAngle = windSway(x, z, clock, TREE_SWAY_AMPLITUDE);
+        dirX = wind.direction[0];
+        dirZ = wind.direction[2];
+      }
+      const intensity = pushDist / PUSH_MAX;
       if (spruceRef.current) {
-        applyCollisionMatrix(spruceRef.current, i, plant, [0, 0.35, 0], [0.55, 0.7, 0.55], pushDist, tiltAngle, b.ax, b.az);
-        applyCollisionMatrix(spruceRef.current, i + spruce.length, plant, [0, 0.72, 0], [0.4, 0.6, 0.4], pushDist, tiltAngle, b.ax, b.az);
-        applyCollisionMatrix(spruceRef.current, i + spruce.length * 2, plant, [0, 1.05, 0], [0.26, 0.5, 0.26], pushDist, tiltAngle, b.ax, b.az);
+        applyCollisionMatrix(spruceRef.current, i, plant, [0, 0.35, 0], [0.55, 0.7, 0.55], pushDist, tiltAngle, dirX, dirZ, intensity);
+        applyCollisionMatrix(spruceRef.current, i + spruce.length, plant, [0, 0.72, 0], [0.4, 0.6, 0.4], pushDist, tiltAngle, dirX, dirZ, intensity);
+        applyCollisionMatrix(spruceRef.current, i + spruce.length * 2, plant, [0, 1.05, 0], [0.26, 0.5, 0.26], pushDist, tiltAngle, dirX, dirZ, intensity);
       }
       spruceTouched = true;
     });
@@ -372,7 +458,8 @@ export function Vegetation() {
   }, []);
   const flower = useMemo(() => {
     const rng = makeRng(50);
-    return makePlants(rng, 16, ['hare'], {
+    // "grass with flowers a little thicker" -- was 16.
+    return makePlants(rng, 23, ['hare'], {
       radiusMin: ISLAND_RADIUS * 0.4, radiusMax: ISLAND_RADIUS * 0.8, scaleMin: 0.8, scaleMax: 1.3,
     });
   }, []);

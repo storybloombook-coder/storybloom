@@ -78,6 +78,14 @@ function Landmark({ zone }) {
     // The egg registry sees the tap first (fox 5-tap catch); if an egg
     // consumed it, the normal encounter is skipped (EASTER_EGGS.md §1).
     if (eggManager.tap(zone.id)) return;
+    // BACKLOG.md #10: don't re-trigger/overwrite an encounter already
+    // running on this exact zone -- most importantly, if the AUTOPLAYING
+    // TALE is the one currently visiting this zone (`encounter.story ===
+    // true`), starting a fresh non-story encounter here would overwrite
+    // that shared store field and desync EncounterDirector's beat from
+    // the story's own composite timeline. Tapping while already
+    // mid-dialogue here is just a no-op, not a re-trigger.
+    if (encounter?.id === zone.id) return;
     startEncounter(zone);
   };
 

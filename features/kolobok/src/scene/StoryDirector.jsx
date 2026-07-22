@@ -121,15 +121,15 @@ export function StoryDirector() {
     st.setStoryPlaying(true);
   };
 
-  // Interrupt-on-user-encounter: a NON-story encounter appearing while the
-  // story plays is a scene tap (animal, Kolobok, izba) -- hand control back
-  // and let that interactive beat run (STORY_SPEC §1 "the tap starts its
-  // normal interactive encounter").
+  // BACKLOG.md #10: a tap on a character/animal/izba (a non-story encounter
+  // appearing) used to pause the whole autoplaying tale here. Taps should
+  // never interrupt it any more -- they just play that character's own
+  // quick reaction/greeting beat (ZoneLandmarks/Kolobok already guard
+  // against re-triggering one that's already mid-dialogue) while the tale
+  // keeps ticking underneath; `narration` still wins the shared bubble
+  // slot over `encounter.line` (Scene3D.jsx), so there's no visual clash.
   useEffect(() => {
     story.lastInputAt = Date.now();
-    if (encounter && !encounter.story && story.mode === 'playing') {
-      stopStory('paused');
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [encounter]);
 

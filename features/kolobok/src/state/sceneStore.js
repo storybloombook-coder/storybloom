@@ -59,6 +59,7 @@ export const storyMotion = {
   expression: null,      // 'sly'|'happy'|'startled'|'neutral'|null (edge-detected)
   noteBurstId: 0,        // increment to request 3 hum notes (road chapters)
   dustBurstId: 0,        // increment to request a 6-particle dust puff
+  catchBurstId: 0,       // increment to request the fox-catch light-rays + smoke burst (BACKLOG.md #5)
   windowGlow: 0,         // izba window emissive boost (birth/rebirth beats)
   smokeBoost: 1,         // chimney smoke rate multiplier
   foxHeadPitch: 0,       // finale toss: fox head tilts back

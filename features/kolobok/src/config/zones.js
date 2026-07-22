@@ -5,6 +5,10 @@ export const ORBIT_RADIUS = 13;      // camera distance from island center
 export const CAMERA_HEIGHT = 6.5;    // camera height above ground
 export const ZONE_RADIUS = 6.2;      // landmarks sit on this ring
 export const PATH_RADIUS = 4.6;      // Kolobok rolls on this ring
+// Half the dirt path ring's rendered width (Island.jsx's ring geometry
+// spans PATH_RADIUS +/- this) -- shared so placement.js's tree keep-clear
+// (BACKLOG.md #12) always matches whatever's actually drawn there.
+export const PATH_HALF_WIDTH = 0.35;
 export const ISLAND_RADIUS = 8;
 // Was 0.6 -- bigger than the Hare's own 0.9 height, reads as "too huge" next
 // to any animal smaller than the Bear. 0.42 keeps him clearly smaller than
@@ -13,9 +17,11 @@ export const ISLAND_RADIUS = 8;
 export const KOLOBOK_RADIUS = 0.42;
 
 // ART_SPEC §14: Grandpa's pond, on the free arc between fox and izba, rim
-// side of the path. Shared between PondAndGrandpa (the pond itself) and
-// Island (the dirt path ring's bridge gap) so the two stay in sync.
+// side of the path. Shared between PondAndGrandpa (the pond itself),
+// Island (the dirt path ring's bridge gap), and placement.js (tree
+// keep-clear, BACKLOG.md #12/#13) so all three stay in sync.
 export const POND_ANGLE_DEG = 324;
+export const POND_RADIUS = 5.6;
 
 // Kolobok <-> camera follow geometry, shared by BOTH follow directions
 // (free mode: Kolobok chases orbit.angle + LEAD; story mode: the camera

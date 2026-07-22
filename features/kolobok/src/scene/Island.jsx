@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
-import { BufferAttribute, CircleGeometry, CylinderGeometry, Object3D } from 'three';
 import {
-  ISLAND_RADIUS, PATH_RADIUS, ZONES, rad, angleDelta, POND_ANGLE_DEG,
+  BufferAttribute, Color, CircleGeometry, CylinderGeometry, Object3D,
+} from 'three';
+import {
+  ISLAND_RADIUS, PATH_RADIUS, PATH_HALF_WIDTH, ZONES, rad, angleDelta, POND_ANGLE_DEG,
 } from '../config/zones';
 import { makeRng } from './prng';
 import { makeSpeckle } from './textures/proceduralTextures';
@@ -123,10 +125,111 @@ function usePebbleMatrices() {
   }, []);
 }
 
+// BACKLOG.md #7: the dirt path ring stops PATH_GAP_HALF_DEG(20) short of the
+// pond angle on each side, but the wooden bridge deck (PondAndGrandpa.jsx)
+// only spans BRIDGE_ARC_HALF_DEG(17) -- a bare 3deg strip of plain ground
+// between where each surface ends reads as a hard seam. Cover it, and the
+// path's edges everywhere else too (live feedback, pointing at the path
+// edges near the crossroads: "by edges I mean here and here"), with small
+// rounded moss clumps (3 flattened spheres per clump, same clustered-
+// spheres technique as Vegetation.jsx's foreground bushes, just smaller/
+// flatter and mossier-colored) hugging just outside the path ring's inner
+// and outer edges (PATH_RADIUS +/- 0.35), all the way around -- skipping
+// the bridge-gap arc itself, which has no path edge to hug there.
+const PATH_MOSS_CLUMPS = 26;
+const MOSS_SPHERES_PER_CLUMP = 3;
+function usePathEdgeMossMatrices() {
+  return useMemo(() => {
+    const rng = makeRng(90);
+    const dummy = new Object3D();
+    const matrices = [];
+    let placed = 0;
+    let guard = 0;
+    while (placed < PATH_MOSS_CLUMPS && guard < 400) {
+      guard += 1;
+      const angleDeg = rng() * 360;
+      const gapDist = Math.abs(angleDelta(rad(angleDeg), rad(POND_ANGLE_DEG)));
+      if (gapDist < rad(BRIDGE_GAP_HALF_DEG + 3)) continue; // bridge gap: no path edge there
+      const clumpAngle = rad(angleDeg);
+      // Alternate which edge (inner/outer) each clump sits just outside of,
+      // rather than scattering across the road itself.
+      const edgeSide = rng() < 0.5 ? -1 : 1;
+      const clumpR = PATH_RADIUS + edgeSide * (0.38 + rng() * 0.16);
+      const cx = Math.sin(clumpAngle) * clumpR;
+      const cz = Math.cos(clumpAngle) * clumpR;
+      for (let i = 0; i < MOSS_SPHERES_PER_CLUMP; i++) {
+        const jitterAngle = rng() * Math.PI * 2;
+        const jitterR = rng() * 0.12;
+        const sxz = 0.75 + rng() * 0.35;
+        const sy = 0.42 + rng() * 0.16;
+        dummy.position.set(cx + Math.cos(jitterAngle) * jitterR, sy * 0.16, cz + Math.sin(jitterAngle) * jitterR);
+        dummy.rotation.set(0, rng() * Math.PI, 0);
+        dummy.scale.set(sxz, sy, sxz);
+        dummy.updateMatrix();
+        matrices.push(dummy.matrix.clone());
+      }
+      placed += 1;
+    }
+    return matrices;
+  }, []);
+}
+function usePathEdgeMossColors(count) {
+  return useMemo(() => {
+    const rng = makeRng(91);
+    const c1 = new Color('#4f6f38');
+    const c2 = new Color('#6a8a48');
+    return new Array(count).fill(0).map(() => c1.clone().lerp(c2, rng()));
+  }, [count]);
+}
+
+// Live feedback (screenshot-annotated): the actual ask was the LINE where
+// the bridge deck's edge meets the path's edge (the hard cut), not the
+// path's edges in general -- a dedicated cluster spanning the path's FULL
+// width right at each of the two seam angles (the midpoint between where
+// the bridge deck ends and the path resumes, same as PondAndGrandpa.jsx's
+// BRIDGE_ARC_HALF_DEG/BRIDGE_GAP_HALF_DEG straddle), layered on top of the
+// edge-hugging ring above so the crossing itself reads as covered.
+const BRIDGE_SEAM_CLUMPS_PER_SIDE = 3;
+function useBridgeSeamMossMatrices() {
+  return useMemo(() => {
+    const rng = makeRng(190);
+    const dummy = new Object3D();
+    const matrices = [];
+    [-1, 1].forEach((side) => {
+      const center = POND_ANGLE_DEG + side * (BRIDGE_GAP_HALF_DEG - 1.5);
+      for (let c = 0; c < BRIDGE_SEAM_CLUMPS_PER_SIDE; c++) {
+        const clumpAngle = rad(center + (rng() * 2 - 1) * 2.5);
+        const clumpR = PATH_RADIUS + (rng() * 2 - 1) * 0.42; // full path width, not just the edges
+        const cx = Math.sin(clumpAngle) * clumpR;
+        const cz = Math.cos(clumpAngle) * clumpR;
+        for (let i = 0; i < MOSS_SPHERES_PER_CLUMP; i++) {
+          const jitterAngle = rng() * Math.PI * 2;
+          const jitterR = rng() * 0.12;
+          const sxz = 0.75 + rng() * 0.35;
+          const sy = 0.42 + rng() * 0.16;
+          dummy.position.set(cx + Math.cos(jitterAngle) * jitterR, sy * 0.16, cz + Math.sin(jitterAngle) * jitterR);
+          dummy.rotation.set(0, rng() * Math.PI, 0);
+          dummy.scale.set(sxz, sy, sxz);
+          dummy.updateMatrix();
+          matrices.push(dummy.matrix.clone());
+        }
+      }
+    });
+    return matrices;
+  }, []);
+}
+
 export function Island() {
   const groundGeo = useGroundGeometry();
   const pathTexture = useMemo(() => makeSpeckle('#c2a06b', '#a5825a', 128, 0.08), []);
   const pebbleMatrices = usePebbleMatrices();
+  const pathEdgeMossMatrices = usePathEdgeMossMatrices();
+  const bridgeSeamMossMatrices = useBridgeSeamMossMatrices();
+  const pathMossMatrices = useMemo(
+    () => [...pathEdgeMossMatrices, ...bridgeSeamMossMatrices],
+    [pathEdgeMossMatrices, bridgeSeamMossMatrices],
+  );
+  const pathMossColors = usePathEdgeMossColors(pathMossMatrices.length);
   // VISUAL_QUALITY_SPEC §5: jitter the skirt so its rim doesn't read as a
   // perfect lathed cylinder edge.
   const skirtGeo = useMemo(
@@ -149,7 +252,7 @@ export function Island() {
       {/* Kolobok's dirt path ring, speckled, with scattered pebbles -- gapped
           where the bridge crosses Grandpa's pond (see PATH_GAP_ constants). */}
       <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[PATH_RADIUS - 0.35, PATH_RADIUS + 0.35, 64, 1, PATH_GAP_THETA_START, PATH_GAP_THETA_LENGTH]} />
+        <ringGeometry args={[PATH_RADIUS - PATH_HALF_WIDTH, PATH_RADIUS + PATH_HALF_WIDTH, 64, 1, PATH_GAP_THETA_START, PATH_GAP_THETA_LENGTH]} />
         <meshStandardMaterial map={pathTexture} roughness={1} />
       </mesh>
       <instancedMesh
@@ -162,6 +265,21 @@ export function Island() {
       >
         <sphereGeometry args={[0.05, 6, 6]} />
         <meshStandardMaterial color="#9c9c94" roughness={0.9} />
+      </instancedMesh>
+
+      {/* Moss clumps hugging the path's edges, all the way around (BACKLOG.md #7) */}
+      <instancedMesh
+        args={[undefined, undefined, pathMossMatrices.length]}
+        ref={(mesh) => {
+          if (!mesh) return;
+          pathMossMatrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+          mesh.instanceMatrix.needsUpdate = true;
+          pathMossColors.forEach((c, i) => mesh.setColorAt(i, c));
+          if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        }}
+      >
+        <sphereGeometry args={[0.16, 8, 6]} />
+        <meshStandardMaterial roughness={1} />
       </instancedMesh>
     </group>
   );

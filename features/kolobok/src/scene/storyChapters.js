@@ -30,7 +30,24 @@ export const ZONE_ANGLE = Object.fromEntries(ZONES.map((z) => [z.id, rad(z.angle
 // before the next road chapter so the roll-off never backtracks.
 const BIRTH_STAGE = rad(30);
 const SILL_POS = [0, 1.05, 5.2];
-const IZBA_PATH_POS = [Math.sin(0) * PATH_RADIUS, PATH_Y, Math.cos(0) * PATH_RADIUS];
+// BACKLOG.md #4 fix: this was hardcoded to angle 0 while EVERYTHING else in
+// the birth/rebirth sequence (startAngle, the teleport before rebirth, the
+// final "ease back to izba" step) consistently treats Kolobok as being at
+// izba + BIRTH_STAGE (30deg) until the very end. Kolobok's own internal
+// angle silently chases storyMotion.kolobokAngle (pinned to BIRTH_STAGE)
+// the ENTIRE time he's sitting on the sill/mid-jump with posOverride
+// active -- so by the time posOverride clears, his internal angle has
+// already converged to ~30deg while this constant kept rendering the jump
+// as if he were landing at angle 0. The instant posOverride released, the
+// render source switched from "pinned at angle 0" to "s.angle (~30deg)",
+// an immediate jump forward -- which the subsequent intentional 1400ms
+// ease of kolobokAngle back down to 0 then read as snapping back sharply.
+// Landing at the SAME staged angle everything else already assumes makes
+// the handoff continuous; the later ease-to-0 step is what turns it into
+// an actual visible roll back to the true izba angle, not a hidden jump.
+const IZBA_PATH_POS = [
+  Math.sin(BIRTH_STAGE) * PATH_RADIUS, PATH_Y, Math.cos(BIRTH_STAGE) * PATH_RADIUS,
+];
 
 // Per-chapter camera framings. Radii/heights start from STORY_SPEC §2's
 // table, tightened after live review (2026-07-19): during encounter
@@ -189,7 +206,14 @@ export function foxCatchSteps(ctx, at0 = 0) {
     },
     // Gulp: scale to 0, screen fades to black (RN overlay, 300ms).
     { at: at0 + 600, dur: 300, update: (t) => { storyMotion.scale = 1 - t; } },
-    { at: at0 + 600, call: () => { ctx.setFadeBlack(true); ctx.onGulp?.(); } },
+    {
+      at: at0 + 600,
+      call: () => {
+        ctx.setFadeBlack(true);
+        ctx.onGulp?.();
+        storyMotion.catchBurstId += 1;
+      },
+    },
     { at: at0 + 1100, call: () => ctx.setNarration('story.snap') },
     // While black: reset everything to the izba (staged like the birth so
     // the rebirth pop is framed clear of the roofline).

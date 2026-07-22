@@ -9,11 +9,12 @@ import { SPRUCE_TOP_MATRICES } from './Vegetation';
 import { currentPhase } from '../config/atmosphere';
 import { makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { wind } from './wind';
-import { ISLAND_RADIUS } from '../config/zones';
+import { ISLAND_RADIUS, ZONES, POND_ANGLE_DEG } from '../config/zones';
 
 const dummy = new Object3D();
 
-const RAIN_COUNT = 220;
+// Live feedback: rain wasn't heavy enough. Was 220.
+const RAIN_COUNT = 380;
 const SNOW_COUNT = 160;
 const FIREFLY_COUNT = 30;
 const WISP_COUNT = 8;
@@ -21,6 +22,38 @@ const MIST_COUNT = 6;
 const MIST_MOVE_INTERVAL_S = 40;
 const MIST_MOVE_EASE_S = 6;
 const RAIN_ENDED_MIST_MS = 10 * 60 * 1000;
+
+// BACKLOG.md #3 puddles: a handful of fixed spots (seeded once, not
+// per-frame), kept clear of zone landmarks and the pond. A single shared
+// "wetness" value (fills fast while raining, drains slowly after) drives
+// every puddle's opacity together -- simpler than per-puddle timers and
+// looks natural enough at only 6 instances.
+const PUDDLE_COUNT = 6;
+const PUDDLE_FILL_RATE = 4;   // per second, while raining
+const PUDDLE_DRAIN_RATE = 0.3; // per second, once rain stops
+function angularDistDeg(a, b) {
+  let d = Math.abs(a - b) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+const PUDDLE_SPOTS = (() => {
+  const rng = makeRng(260);
+  const out = [];
+  let guard = 0;
+  while (out.length < PUDDLE_COUNT && guard < 300) {
+    guard += 1;
+    const angleDeg = rng() * 360;
+    const radius = 1.4 + rng() * 3.2; // inside the path ring (PATH_RADIUS 4.6)
+    const tooCloseToZone = ZONES.some((z) => angularDistDeg(angleDeg, z.angleDeg) < 30);
+    const tooCloseToPond = angularDistDeg(angleDeg, POND_ANGLE_DEG) < 35;
+    if (tooCloseToZone || tooCloseToPond) continue;
+    const angleRad = (angleDeg * Math.PI) / 180;
+    out.push({
+      x: Math.sin(angleRad) * radius, z: Math.cos(angleRad) * radius, scale: 0.35 + rng() * 0.35,
+    });
+  }
+  return out;
+})();
 
 // 2x8 vertical streak sprite for rain (WEATHER_SPEC §3) -- white core
 // fading at the ends; tinted/faded by the material.
@@ -56,9 +89,18 @@ export function WeatherSystems() {
   const izbaCapsRef = useRef();
   const mistRef = useRef();
   const mistMatRef = useRef();
+  const puddleMatRef = useRef();
+  const wetness = useRef(0);
 
   const streakTexture = useMemo(() => makeStreakTexture(), []);
   const mistTexture = useMemo(() => makeRadialAlphaTexture(32), []);
+  const puddleMatrices = useMemo(() => PUDDLE_SPOTS.map((p) => {
+    dummy.position.set(p.x, 0.015, p.z);
+    dummy.rotation.set(-Math.PI / 2, 0, 0);
+    dummy.scale.set(p.scale, p.scale, 1);
+    dummy.updateMatrix();
+    return dummy.matrix.clone();
+  }), []);
 
   // POLISH_SPEC §2 ground mist: 6 flattened planes drifting around the
   // island rim, each with its own current/target angle so they "slowly
@@ -279,12 +321,19 @@ export function WeatherSystems() {
       mesh.instanceMatrix.needsUpdate = true;
       if (mistMatRef.current) mistMatRef.current.opacity = mistOpacity;
     }
+
+    // --- Puddles (BACKLOG.md #3): fill fast while raining, drain slowly
+    // after -- one shared wetness value, not per-puddle timers. ---
+    const rainSignal = Math.min(1, L.rainT);
+    const wetRate = rainSignal > wetness.current ? PUDDLE_FILL_RATE : PUDDLE_DRAIN_RATE;
+    wetness.current += (rainSignal - wetness.current) * Math.min(1, wetRate * dt);
+    if (puddleMatRef.current) puddleMatRef.current.opacity = wetness.current * 0.55;
   });
 
   return (
     <group>
       <points ref={rainRef} geometry={rainGeometry} visible={false}>
-        <pointsMaterial map={streakTexture} color="#aebfd0" size={0.05} transparent opacity={0.55} depthWrite={false} />
+        <pointsMaterial map={streakTexture} color="#aebfd0" size={0.07} transparent opacity={0.65} depthWrite={false} />
       </points>
       <points ref={snowRef} geometry={snowGeometry} visible={false}>
         <pointsMaterial color="#ffffff" size={0.08} transparent opacity={0.9} depthWrite={false} />
@@ -313,6 +362,29 @@ export function WeatherSystems() {
           transparent
           opacity={0.04}
           depthWrite={false}
+        />
+      </instancedMesh>
+      {/* Puddles (BACKLOG.md #3): static positions/matrices, only opacity
+          animates (see wetness above) -- low roughness reads as standing
+          water without needing a real reflection. */}
+      <instancedMesh
+        args={[undefined, undefined, PUDDLE_COUNT]}
+        ref={(mesh) => {
+          if (!mesh) return;
+          puddleMatrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+          mesh.instanceMatrix.needsUpdate = true;
+        }}
+      >
+        <circleGeometry args={[1, 20]} />
+        <meshStandardMaterial
+          ref={puddleMatRef}
+          color="#6f8590"
+          roughness={0.2}
+          transparent
+          opacity={0}
+          depthWrite={false}
+          polygonOffset
+          polygonOffsetFactor={-1}
         />
       </instancedMesh>
     </group>

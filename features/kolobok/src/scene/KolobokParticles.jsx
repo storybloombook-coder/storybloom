@@ -1,7 +1,10 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { BufferAttribute, BufferGeometry } from 'three';
+import {
+  AdditiveBlending, BufferAttribute, BufferGeometry, Object3D,
+} from 'three';
 import { storyMotion } from '../state/sceneStore';
+import { KOLOBOK_RADIUS } from '../config/zones';
 
 // Song notes (ART_SPEC §9): 6 points above Kolobok while singing, rising
 // and fading over 1.2s, white. Also serves the road chapters' hum bursts
@@ -15,9 +18,28 @@ const NOTE_LIFE = 1.2;
 const DUST_COUNT = 6;
 const DUST_LIFE = 0.5;
 
+// BACKLOG.md #5 fox-catch VFX: rays of light radiating out to 4 Kolobok-
+// radii, plus a smoke puff, both triggered once via storyMotion.catchBurstId
+// (same burst-counter convention as notes/dust above) right at the gulp.
+// Ray count and direction are re-rolled per burst (8-10 rays, random angles)
+// so the burst doesn't read as a mechanical evenly-spaced starburst.
+const RAY_COUNT_MIN = 8;
+const RAY_COUNT_MAX = 10;
+const RAY_CAPACITY = RAY_COUNT_MAX;
+const RAY_LENGTH = KOLOBOK_RADIUS * 4;
+const RAY_GROW_S = 0.15;
+const RAY_LIFE = 0.5;
+const CATCH_SMOKE_COUNT = 16;
+const CATCH_SMOKE_LIFE = 2.6;
+
+const dummy = new Object3D();
+
 export function KolobokParticles() {
   const notesRef = useRef();
   const dustRef = useRef();
+  const raysRef = useRef();
+  const raysMatRef = useRef();
+  const catchSmokeRef = useRef();
 
   const noteGeometry = useMemo(() => {
     const geo = new BufferGeometry();
@@ -29,6 +51,11 @@ export function KolobokParticles() {
     geo.setAttribute('position', new BufferAttribute(new Float32Array(DUST_COUNT * 3), 3));
     return geo;
   }, []);
+  const catchSmokeGeometry = useMemo(() => {
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(CATCH_SMOKE_COUNT * 3), 3));
+    return geo;
+  }, []);
 
   const state = useRef({
     notes: new Array(NOTE_COUNT).fill(0).map(() => ({ t: 2, dx: 0, dz: 0 })), // t > life = dead
@@ -37,6 +64,12 @@ export function KolobokParticles() {
     burstQueue: 0,
     dust: new Array(DUST_COUNT).fill(0).map(() => ({ t: 2, dx: 0, dz: 0 })),
     dustBurstWas: 0,
+    catchBurstWas: 0,
+    rayT: RAY_LIFE + 1,
+    rayOrigin: [0, 0, 0],
+    rayCount: 0,
+    rayAngles: new Array(RAY_CAPACITY).fill(0),
+    catchSmoke: new Array(CATCH_SMOKE_COUNT).fill(0).map(() => ({ t: CATCH_SMOKE_LIFE + 1, dx: 0, dz: 0 })),
   });
 
   useFrame((_, delta) => {
@@ -108,6 +141,86 @@ export function KolobokParticles() {
       dustGeometry.computeBoundingSphere();
       dustRef.current.visible = anyAlive;
     }
+
+    // --- Fox-catch burst: light rays + smoke (BACKLOG.md #5) ---
+    if (storyMotion.catchBurstId !== s.catchBurstWas) {
+      s.catchBurstWas = storyMotion.catchBurstId;
+      s.rayT = 0;
+      s.rayOrigin = [kx, ky, kz];
+      s.rayCount = RAY_COUNT_MIN + Math.floor(Math.random() * (RAY_COUNT_MAX - RAY_COUNT_MIN + 1));
+      for (let i = 0; i < RAY_CAPACITY; i += 1) {
+        s.rayAngles[i] = Math.random() * Math.PI * 2;
+      }
+      s.catchSmoke.forEach((p) => {
+        p.t = 0;
+        const a = Math.random() * Math.PI * 2;
+        p.dx = Math.cos(a) * (0.05 + Math.random() * 0.15);
+        p.dz = Math.sin(a) * (0.05 + Math.random() * 0.15);
+      });
+    }
+
+    if (raysRef.current) {
+      const mesh = raysRef.current;
+      const alive = s.rayT <= RAY_LIFE;
+      if (alive) {
+        s.rayT += dt;
+        const growT = Math.min(1, s.rayT / RAY_GROW_S);
+        const len = growT * RAY_LENGTH;
+        for (let i = 0; i < RAY_CAPACITY; i += 1) {
+          if (i >= s.rayCount) {
+            // Unused slot this burst: park it with zero scale (invisible).
+            dummy.position.set(s.rayOrigin[0], s.rayOrigin[1] - 10, s.rayOrigin[2]);
+            dummy.rotation.set(0, 0, 0);
+            dummy.scale.set(0.001, 1, 1);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+            continue;
+          }
+          const rayAngle = s.rayAngles[i];
+          const dx = Math.sin(rayAngle);
+          const dz = Math.cos(rayAngle);
+          dummy.position.set(
+            s.rayOrigin[0] + dx * (len / 2),
+            s.rayOrigin[1],
+            s.rayOrigin[2] + dz * (len / 2),
+          );
+          dummy.rotation.set(0, rayAngle, 0);
+          dummy.scale.set(Math.max(0.001, len), 1, 1);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+      mesh.visible = alive;
+      if (raysMatRef.current) raysMatRef.current.opacity = alive ? Math.max(0, 1 - s.rayT / RAY_LIFE) : 0;
+    }
+
+    if (catchSmokeRef.current) {
+      const positions = catchSmokeGeometry.attributes.position;
+      let anyAlive = false;
+      s.catchSmoke.forEach((p, i) => {
+        if (p.t <= CATCH_SMOKE_LIFE) {
+          anyAlive = true;
+          p.t += dt;
+          const f = p.t / CATCH_SMOKE_LIFE;
+          positions.setXYZ(
+            i,
+            s.rayOrigin[0] + p.dx * (0.3 + f * 0.6),
+            s.rayOrigin[1] + f * 0.9,
+            s.rayOrigin[2] + p.dz * (0.3 + f * 0.6),
+          );
+        } else {
+          positions.setXYZ(i, 0, -10, 0);
+        }
+      });
+      positions.needsUpdate = true;
+      catchSmokeGeometry.computeBoundingSphere();
+      catchSmokeRef.current.visible = anyAlive;
+      if (anyAlive) {
+        const youngest = Math.min(...s.catchSmoke.map((p) => p.t));
+        catchSmokeRef.current.material.opacity = 0.5 * Math.max(0, 1 - youngest / CATCH_SMOKE_LIFE);
+      }
+    }
   });
 
   return (
@@ -117,6 +230,20 @@ export function KolobokParticles() {
       </points>
       <points ref={dustRef} geometry={dustGeometry} visible={false}>
         <pointsMaterial color="#c8c4bc" size={0.07} transparent opacity={0.7} depthWrite={false} />
+      </points>
+      <instancedMesh ref={raysRef} args={[undefined, undefined, RAY_CAPACITY]} visible={false}>
+        <planeGeometry args={[1, 0.06]} />
+        <meshBasicMaterial
+          ref={raysMatRef}
+          color="#fff2c4"
+          transparent
+          opacity={0}
+          blending={AdditiveBlending}
+          depthWrite={false}
+        />
+      </instancedMesh>
+      <points ref={catchSmokeRef} geometry={catchSmokeGeometry} visible={false}>
+        <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.5} depthWrite={false} />
       </points>
     </group>
   );

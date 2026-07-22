@@ -5,7 +5,7 @@ import {
   CylinderGeometry, DoubleSide, Matrix4, Object3D, Quaternion, SphereGeometry, Vector3,
 } from 'three';
 import {
-  rad, pointOnCircle, POND_ANGLE_DEG, PATH_RADIUS,
+  rad, pointOnCircle, POND_ANGLE_DEG, POND_RADIUS, PATH_RADIUS,
 } from '../config/zones';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { eggMotion, eggManager } from './easterEggs';
@@ -17,7 +17,7 @@ const dummy = new Object3D();
 // ART_SPEC §14: pond at 324 deg, radius 5.6 (the free arc between fox and
 // izba, rim side of the path).
 const POND_ANGLE = rad(POND_ANGLE_DEG);
-const POND_POS = pointOnCircle(5.6, POND_ANGLE);
+const POND_POS = pointOnCircle(POND_RADIUS, POND_ANGLE);
 
 const RECAST_INTERVAL = 30;
 const RIPPLE_COUNT = 3;
@@ -125,6 +125,38 @@ export function PondAndGrandpa() {
       placed += 1;
     }
     return parts;
+  }, []);
+
+  // BACKLOG.md #6: a willow at the pond's edge (drooping canopy), replacing
+  // the birch-in-water idea -- its own mesh/draw call (not merged into
+  // matteGeometry) since it needs several DIFFERENT vertex colors
+  // (trunk/canopy/fronds) and mergeColoredParts only bakes ONE flat color
+  // per part list entry. Fronds are thin cylinders leaning outward+down
+  // from the canopy at random (seeded) azimuths -- rotation.x tilts a
+  // vertical cylinder toward local +Z, rotation.y then yaws that lean to
+  // the desired azimuth (same sin/cos-around-Y convention as the rest of
+  // the scene), so each frond droops out and down like real willow branches.
+  const WILLOW_CANOPY_Y = 0.62;
+  const willowGeometry = useMemo(() => {
+    const rng = makeRng(777);
+    const parts = [
+      { geometry: new CylinderGeometry(0.05, 0.08, 0.5, 7), color: '#6b5d46', position: [0, 0.25, 0], rotation: [0, 0, rad(6)] },
+      { geometry: new SphereGeometry(0.3, 8, 6), color: '#8fae5c', position: [0.02, WILLOW_CANOPY_Y, 0], scale: [1.2, 0.8, 1.2] },
+    ];
+    const FROND_COUNT = 12;
+    for (let i = 0; i < FROND_COUNT; i++) {
+      const angle = (i / FROND_COUNT) * Math.PI * 2 + rng() * 0.5;
+      const len = 0.5 + rng() * 0.3;
+      const tilt = rad(58) + rng() * rad(18); // mostly downward droop
+      const rIn = 0.16 + rng() * 0.08;
+      parts.push({
+        geometry: new CylinderGeometry(0.01, 0.018, len, 4),
+        color: '#9bb06a',
+        position: [Math.sin(angle) * rIn, WILLOW_CANOPY_Y - 0.08, Math.cos(angle) * rIn],
+        rotation: [tilt, angle, 0],
+      });
+    }
+    return mergeColoredParts(parts);
   }, []);
 
   // Wooden arc bridge: stepped planks following the path's own curve (not a
@@ -444,6 +476,15 @@ export function PondAndGrandpa() {
       </mesh>
       <mesh geometry={matteGeometry}>
         <meshStandardMaterial vertexColors roughness={0.9} side={DoubleSide} />
+      </mesh>
+
+      {/* Willow, roughly opposite Grandpa's stump so it clears him/the
+          reeds/the beach arc -- BACKLOG.md #6. Live feedback: moved further
+          out from the water's edge, into the open ground between the
+          pond's rim and the island's own outer edge (was right at the
+          rim, local radius ~2.04; now ~3.0, same angular direction). */}
+      <mesh geometry={willowGeometry} position={[2.8, 0, 1.1]} rotation={[0, rad(15), 0]}>
+        <meshStandardMaterial vertexColors roughness={0.85} side={DoubleSide} />
       </mesh>
 
       {/* Grandpa on his stump, facing the water */}

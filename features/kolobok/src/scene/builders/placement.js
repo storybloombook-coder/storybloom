@@ -2,7 +2,24 @@
 // (ART_SPEC §5): bias each species to its home zone's arc, let some
 // fraction land anywhere, and never within keepClearDeg of a landmark.
 
-import { ZONES, rad, angleDelta, pointOnCircle } from '../../config/zones';
+import {
+  ZONES, rad, angleDelta, pointOnCircle, PATH_RADIUS, PATH_HALF_WIDTH, POND_ANGLE_DEG, POND_RADIUS,
+} from '../../config/zones';
+
+// BACKLOG.md #12: trunks shouldn't spawn ON the dirt path ring (overhanging
+// canopy across it is fine -- this only gates the TRUNK's own footprint,
+// not the full canopy-collision radius above). A little wider than the
+// path's own rendered half-width so bark doesn't touch the edge either.
+const PATH_TRUNK_KEEP_CLEAR = PATH_HALF_WIDTH + 0.15;
+
+// Live feedback: a spruce ("Christmas tree") had spawned right at the
+// pond's edge -- the scatter rule only ever checked distance from the
+// ZONES landmarks, never from the pond itself (it isn't one). Water's own
+// rim wobbles out to ~1.98 at its widest, plus the willow/reeds/beach
+// around it, so keep tree TRUNKS clear of a generous circle around the
+// pond's world position too.
+const POND_POS = pointOnCircle(POND_RADIUS, rad(POND_ANGLE_DEG));
+const POND_TREE_KEEP_CLEAR = 2.6;
 
 /**
  * Returns `count` angles (degrees, [0,360)) biased toward `homeZoneIds`'
@@ -74,8 +91,11 @@ export function scatterNonOverlappingTrees(rng, count, homeZoneIds, opts, canopy
     if (tooCloseToLandmark) continue;
 
     const radius = radiusMin + rng() * (radiusMax - radiusMin);
+    if (Math.abs(radius - PATH_RADIUS) < PATH_TRUNK_KEEP_CLEAR) continue;
     const scale = scaleMin + rng() * (scaleMax - scaleMin);
     const [x, , z] = pointOnCircle(radius, angleRad);
+    const distToPond = Math.hypot(x - POND_POS[0], z - POND_POS[2]);
+    if (distToPond < POND_TREE_KEEP_CLEAR) continue;
     const myR = canopyRadius * scale;
 
     const collides = occupied.some((o) => {
