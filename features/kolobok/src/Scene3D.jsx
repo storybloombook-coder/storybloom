@@ -82,7 +82,15 @@ export function Scene3D({ onNavigate }) {
   // toward the story's tracked azimuth (Kolobok/narration keep going
   // regardless); CameraRig itself clears the flag and resumes the auto-
   // follow after 15s of no input (story.lastInputAt below).
+  // Camera panning is single-finger drag. minDistance(4) means a stationary
+  // touch (a tap) never activates the pan, so single taps still fall through
+  // to the Canvas's own pointer handling to reach Kolobok/plaques/animals --
+  // only an actual drag past that small threshold moves the camera. Kept low
+  // so the drag engages promptly instead of feeling sticky at the start.
   const pan = Gesture.Pan()
+    .minPointers(1)
+    .maxPointers(1)
+    .minDistance(4)
     .runOnJS(true)
     .onBegin(() => { orbit.freeLookActive = true; })
     .onChange((e) => {
@@ -109,6 +117,17 @@ export function Scene3D({ onNavigate }) {
     if (storyPlaying) story.pauseRequest = true;
     else story.playRequest = true;
   };
+
+  // Eye-toggle button: orbit.cameraFollow is transient (read every frame by
+  // CameraRig/Kolobok, not a store field), so it needs its own local state
+  // purely to re-render the icon/tint -- this component is the only writer.
+  const [cameraFollow, setCameraFollow] = useState(orbit.cameraFollow);
+  const onToggleFollow = () => {
+    orbit.cameraFollow = !orbit.cameraFollow;
+    setCameraFollow(orbit.cameraFollow);
+  };
+
+  const onMainMenu = () => requestNavigation('/');
 
   const active = ZONES.find((z) => z.id === activeZone);
   // Story narration wins the bubble slot; interactive dialogue otherwise.
@@ -181,6 +200,34 @@ export function Scene3D({ onNavigate }) {
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
+      </Pressable>
+
+      {/* Eye toggle: identical 40x40 circle, stacked directly above the
+          play/pause button. ON (default) = Kolobok chases the camera and it
+          soft-snaps onto zones, same as always; OFF = a genuinely detached
+          free camera (CameraRig.jsx skips the zone soft-snap, Kolobok.jsx
+          freezes his own angle) -- dimmed background is the only visual
+          state change, same eye glyph either way. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={cameraFollow ? t('ui.disableFollow', locale) : t('ui.enableFollow', locale)}
+        onPress={onToggleFollow}
+        style={[styles.storyButton, styles.followButton, !cameraFollow && styles.followButtonOff]}
+        hitSlop={8}
+      >
+        <Text style={styles.storyButtonText}>👁</Text>
+      </Pressable>
+
+      {/* Main-menu button: identical 40x40 circle, mirrored to the play/
+          pause button on the opposite side of the screen. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('ui.mainMenu', locale)}
+        onPress={onMainMenu}
+        style={[styles.storyButton, styles.menuButton]}
+        hitSlop={8}
+      >
+        <Text style={styles.storyButtonText}>☰</Text>
       </Pressable>
 
       {/* Finale fade-to-black overlay; never intercepts touches. */}
@@ -293,6 +340,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
+  followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
+  followButtonOff: { backgroundColor: 'rgba(255,255,255,0.4)' },
+  menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
   fadeOverlay: { backgroundColor: '#000000' },
   vignetteAnchor: { position: 'absolute', width: 0, height: 0 },
 });

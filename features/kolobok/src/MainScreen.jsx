@@ -1,19 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  StyleSheet, View, Text, Pressable, AccessibilityInfo, StatusBar, Platform,
-} from 'react-native';
+import { StyleSheet, View, AccessibilityInfo } from 'react-native';
 import { FlatMenu } from './FlatMenu';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useSceneStore } from './state/sceneStore';
-import { t } from './config/strings';
-
-// Plain `top: 12` renders (and, worse, is TOUCHABLE) partly underneath the
-// Android status bar -- confirmed on-device via uiautomator: the button's
-// own bounds sat inside the status bar's screen region and taps there were
-// unreliable. `StatusBar.currentHeight` is Android-only (undefined on iOS,
-// which insets differently); no new dependency needed since
-// react-native-safe-area-context isn't in this package's allowed list.
-const TOGGLE_TOP = (Platform.OS === 'android' ? StatusBar.currentHeight ?? 24 : 0) + 12;
 
 /** SPEC.md "Scene modes": the ONLY file in this package that knows both
  *  branches exist. Flat is pure RN (FlatMenu.jsx); 3D lives in Scene3D.jsx,
@@ -51,7 +40,8 @@ export function MainScreen({
     });
     return () => { cancelled = true; };
     // Intentionally once: this is a one-time initial default, not a live
-    // subscription -- the explicit toggle button is what changes mode after.
+    // subscription -- there's no manual toggle to change it after (the
+    // hamburger button was removed per live feedback).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -59,8 +49,6 @@ export function MainScreen({
     onSceneError?.(error);
     setSceneMode('flat');
   };
-
-  const toggleMode = () => setSceneMode(sceneMode === '3d' ? 'flat' : '3d');
 
   const Scene3D = useMemo(() => {
     if (sceneMode !== '3d') return null;
@@ -77,34 +65,10 @@ export function MainScreen({
       ) : (
         <FlatMenu onNavigate={onNavigate} locale={locale} />
       )}
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={sceneMode === '3d' ? t('ui.toggleFlat', locale) : t('ui.toggle3d', locale)}
-        onPress={toggleMode}
-        style={[styles.toggle, { top: TOGGLE_TOP }]}
-        hitSlop={8}
-      >
-        <Text style={styles.toggleText}>{sceneMode === '3d' ? '☰' : '3D'}</Text>
-      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f6e7c8' },
-  toggle: {
-    position: 'absolute',
-    // top comes from TOGGLE_TOP (status-bar-aware) via the inline style
-    // array where this is used. Right-12 is the "top-right corner" per
-    // SPEC.md "Scene modes".
-    right: 12,
-    minWidth: 44,
-    minHeight: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toggleText: { fontSize: 15, fontWeight: '700', color: '#2e2a22' },
 });

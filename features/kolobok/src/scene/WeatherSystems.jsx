@@ -10,6 +10,7 @@ import { currentPhase } from '../config/atmosphere';
 import { makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { wind } from './wind';
 import { ISLAND_RADIUS, ZONES, POND_ANGLE_DEG } from '../config/zones';
+import { POTHOLE_SPOTS, POTHOLE_PUDDLE_Y } from './Island';
 
 const dummy = new Object3D();
 
@@ -98,6 +99,19 @@ export function WeatherSystems() {
     dummy.position.set(p.x, 0.015, p.z);
     dummy.rotation.set(-Math.PI / 2, 0, 0);
     dummy.scale.set(p.scale, p.scale, 1);
+    dummy.updateMatrix();
+    return dummy.matrix.clone();
+  }), []);
+  // BACKLOG.md #16: potholes (Island.jsx) fill the same way regular
+  // puddles do -- reusing the identical shared `wetness` ramp below rather
+  // than a second timer, since it's the same "fills fast in rain, drains
+  // slowly after" behavior, just sized/positioned to each crater exactly
+  // (POTHOLE_PUDDLE_Y sits a hair above the crater's carved floor).
+  const potholePuddleMatRef = useRef();
+  const potholePuddleMatrices = useMemo(() => POTHOLE_SPOTS.map((p) => {
+    dummy.position.set(p.x, POTHOLE_PUDDLE_Y, p.z);
+    dummy.rotation.set(-Math.PI / 2, 0, 0);
+    dummy.scale.set(p.r * 0.85, p.r * 0.85, 1);
     dummy.updateMatrix();
     return dummy.matrix.clone();
   }), []);
@@ -328,6 +342,7 @@ export function WeatherSystems() {
     const wetRate = rainSignal > wetness.current ? PUDDLE_FILL_RATE : PUDDLE_DRAIN_RATE;
     wetness.current += (rainSignal - wetness.current) * Math.min(1, wetRate * dt);
     if (puddleMatRef.current) puddleMatRef.current.opacity = wetness.current * 0.55;
+    if (potholePuddleMatRef.current) potholePuddleMatRef.current.opacity = wetness.current * 0.55;
   });
 
   return (
@@ -378,6 +393,29 @@ export function WeatherSystems() {
         <circleGeometry args={[1, 20]} />
         <meshStandardMaterial
           ref={puddleMatRef}
+          color="#6f8590"
+          roughness={0.2}
+          transparent
+          opacity={0}
+          depthWrite={false}
+          polygonOffset
+          polygonOffsetFactor={-1}
+        />
+      </instancedMesh>
+
+      {/* Pothole puddles (BACKLOG.md #16): same look/behavior as the puddles
+          above, just sized/positioned to each Island.jsx crater exactly. */}
+      <instancedMesh
+        args={[undefined, undefined, potholePuddleMatrices.length]}
+        ref={(mesh) => {
+          if (!mesh) return;
+          potholePuddleMatrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+          mesh.instanceMatrix.needsUpdate = true;
+        }}
+      >
+        <circleGeometry args={[1, 20]} />
+        <meshStandardMaterial
+          ref={potholePuddleMatRef}
           color="#6f8590"
           roughness={0.2}
           transparent

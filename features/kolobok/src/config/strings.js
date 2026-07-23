@@ -59,8 +59,9 @@ export const STRINGS = {
         two: 'Create a Story',
         three: 'My Library',
       },
-      toggle3d: 'Show the fairytale scene',
-      toggleFlat: 'Simple menu',
+      enableFollow: 'Follow Kolobok',
+      disableFollow: 'Free the camera',
+      mainMenu: 'Main menu',
     },
     weather: {
       permission: "Allow location so the sky above Kolobok matches yours — sunrise, clouds, even snow.",
@@ -124,8 +125,9 @@ export const STRINGS = {
         two: 'Своя история',
         three: 'Библиотека',
       },
-      toggle3d: 'Показать сказочную сцену',
-      toggleFlat: 'Простое меню',
+      enableFollow: 'Следовать за Колобком',
+      disableFollow: 'Свободная камера',
+      mainMenu: 'Главное меню',
     },
     weather: {
       permission: 'Разрешите доступ к геолокации — и небо над Колобком станет таким же, как у вас: рассвет, облака и даже снег.',

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
-  ZONES, KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, nearestZone, rad, angleDelta,
+  KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, nearestZone, angleDelta,
 } from '../config/zones';
 import {
   orbit, encounterMotion, storyMotion, story, useSceneStore,
@@ -9,9 +9,10 @@ import {
 import { createTimeline } from './timeline';
 import { polish } from '../config/devFlags';
 
-// How long a story-mode "look away" drag holds the camera off auto-follow
-// before it resumes on its own (smoothly re-converging, not snapping).
-const LOOK_AWAY_TIMEOUT_MS = 15000;
+// After the user stops steering the camera, how long before it counts as
+// "idle" again and eases back to auto-following Kolobok + dialogues (smoothly
+// re-converging via KOLOBOK_FOLLOW_LAG, not snapping). Tunable.
+const IDLE_RESUME_MS = 3000;
 
 // POLISH_SPEC §5 "never a static frame": idle camera breath, free mode
 // only -- suspended instantly on any input, resumes the instant it's been
@@ -32,9 +33,16 @@ const BREATH_SUSPEND_MS = 300;
 const ENCOUNTER_PUSH_IN = 0.04;
 
 const FRICTION = 0.94;        // per-frame velocity decay
-const SNAP_SPEED = 3.2;       // how eagerly we ease toward a zone
-const SNAP_THRESHOLD = 0.012; // below this |velocity|, soft snap kicks in
+const SNAP_SPEED = 3.2;       // how eagerly we ease toward an explicit snap target
 const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transition
+
+// User free-orbit framing. A swipe orbits a PIVOT and never moves Kolobok:
+//   eye ON  -> orbit Kolobok's live world position up close (inspect him)
+//   eye OFF -> orbit the stone / island center, pulled back to survey it all
+// Only applies while the user has the camera (orbit.mode !== 'story'); the
+// autoplaying tale keeps its own scripted per-chapter framing.
+const USER_KOLOBOK_ORBIT = { radius: 5.5, height: 3.2, lookAtY: 0.8 };
+const USER_STONE_ORBIT = { radius: 13, height: 6, lookAtY: 1.4 };
 
 // Free-look vertical drag: pitchOffset scales into a height nudge (bigger)
 // and an opposite lookAt-Y nudge (smaller), which is what makes it read as
@@ -46,24 +54,50 @@ const PITCH_HEIGHT_SCALE = 1.5;
 const PITCH_LOOKAT_SCALE = 0.5;
 const PITCH_SNAP_RATE = 3.0;
 
-const IZBA_FRAMING = ZONES.find((z) => z.id === 'izba').framing;
+// Live feedback (matched against an on-device screenshot the user liked):
+// on scene mount, hold a static establishing shot on the crossroads stone
+// with the izba roof in the foreground below it -- the SAME framing/lookAt
+// storyChapters.js's birth chapter already uses (FRAMING.birth there), so
+// there's no jump at all once the tale's own later beats take over.
+const STONE_INTRO_FRAMING = {
+  radius: 12, height: 5.2, lookAtY: 1.6, lookAt: [0, 1.2, 4.2],
+};
+// Live feedback: hold this exact shot for a full 7s no matter what --
+// NOT just until story.mode leaves 'idle'. It used to be gated on that,
+// but story.mode (and orbit.mode) flip to 'story' the instant the tale
+// autoplays (~1.5s in, see StoryDirector's LAUNCH_IDLE_MS), which let this
+// file's own OTHER branch below start easing orbit.angle toward Kolobok's
+// birth-stage angle immediately -- the shot visibly started swinging away
+// after ~1.5s instead of holding. A direct drag/nav-tap still cuts the
+// hold short (see kolobokStarted below), since the user is now actively
+// steering and shouldn't be locked out.
+const INTRO_HOLD_MS = 12000;
+// Live feedback: "move it slowly to the kolobok when it starts moving" --
+// longer than the usual snappy 800/900ms zone/story ease, since this one
+// pan is the whole point of the intro rather than an incidental cut.
+const INTRO_HANDOFF_MS = 3000;
 
 export function CameraRig() {
-  const lastActive = useRef('izba');
+  // null (not 'izba') until the intro hand-off sets it explicitly (see
+  // below), so step 4 doesn't see a "zone changed" edge of its own during
+  // the hold and fire a second, faster retarget on top of the intro's.
+  const lastActive = useRef(null);
+  const introActive = useRef(true);
+  const introMountedAt = useRef(Date.now());
   const setActiveZone = useSceneStore((s) => s.setActiveZone);
 
   // Live camera framing (radius/height/lookAtY), eased toward whichever
   // zone is active (ART_SPEC §10: 800ms easeInOutSine per transition) --
   // or, in story mode, toward the chapter's own framing (STORY_SPEC §2's
   // per-chapter radii; the same easing does the §1 "camera glides to the
-  // chapter's start framing" resume beat for free). Pre-seeded at izba's
-  // framing so mounting doesn't pop in from zero.
+  // chapter's start framing" resume beat for free). Pre-seeded at the
+  // stone-intro framing so mounting doesn't pop in from zero.
   const framing = useRef({
-    radius: IZBA_FRAMING.radius,
-    height: IZBA_FRAMING.height,
-    lookAtX: 0,
-    lookAtY: IZBA_FRAMING.lookAtY,
-    lookAtZ: 0,
+    radius: STONE_INTRO_FRAMING.radius,
+    height: STONE_INTRO_FRAMING.height,
+    lookAtX: STONE_INTRO_FRAMING.lookAt[0],
+    lookAtY: STONE_INTRO_FRAMING.lookAt[1],
+    lookAtZ: STONE_INTRO_FRAMING.lookAt[2],
     from: null,
     to: null,
     timeline: null,
@@ -108,47 +142,70 @@ export function CameraRig() {
     // accumulator).
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
 
-    if (orbit.mode === 'story') {
-      // Dragging sets orbit.lookingAway (Scene3D) without pausing the tale --
-      // the user gets to look at the scene from any angle while Kolobok and
-      // narration keep going. Auto-follow resumes on its own 15s after the
-      // last input, easing back in via the same FOLLOW_LAG rate below rather
-      // than snapping.
-      if (orbit.lookingAway && Date.now() - story.lastInputAt > LOOK_AWAY_TIMEOUT_MS) {
-        orbit.lookingAway = false;
+    // Stone-intro hold: keep the camera static on STONE_INTRO_FRAMING for a
+    // full INTRO_HOLD_MS, regardless of the autoplaying tale's own timing --
+    // only a direct drag/nav-tap (the user actively steering) cuts it short.
+    if (introActive.current) {
+      const holdDone = Date.now() - introMountedAt.current >= INTRO_HOLD_MS;
+      const userInteracted = orbit.freeLookActive || orbit.velocity !== 0 || orbit.snapTarget !== null;
+      const kolobokStarted = holdDone || userInteracted;
+      if (!kolobokStarted) {
+        camera.position.set(
+          Math.sin(orbit.angle) * framing.current.radius,
+          framing.current.height,
+          Math.cos(orbit.angle) * framing.current.radius,
+        );
+        camera.lookAt(framing.current.lookAtX, framing.current.lookAtY, framing.current.lookAtZ);
+        return;
       }
-      if (!orbit.lookingAway) {
-        // STORY_SPEC §1 control inversion: the camera chases Kolobok at
-        // kolobokAngle - LEAD with the same soft lag -- same math as free
-        // mode's Kolobok-chases-camera, inverted leader. Writing the result
-        // back INTO orbit.angle means resuming auto-follow (or an old-style
-        // interrupt) hands control over exactly where the camera already
-        // is: zero jump.
-        const camTarget = storyMotion.kolobokAngle - KOLOBOK_LEAD;
-        const d = angleDelta(orbit.angle, camTarget);
-        orbit.angle += d * Math.min(1, KOLOBOK_FOLLOW_LAG * dt);
-      }
-      orbit.velocity = 0;
-      orbit.snapTarget = null;
-    } else {
-      // 1. Explicit snap request (nav button pressed)
-      if (orbit.snapTarget !== null) {
-        const d = angleDelta(orbit.angle, orbit.snapTarget);
-        orbit.angle += d * Math.min(1, SNAP_SPEED * dt * 1.6);
-        orbit.velocity = 0;
-        if (Math.abs(d) < 0.005) orbit.snapTarget = null;
-      } else {
-        // 2. Gesture inertia
-        orbit.angle += orbit.velocity;
-        orbit.velocity *= FRICTION;
+      introActive.current = false;
+      // Hand off explicitly here, at INTRO_HANDOFF_MS, rather than letting
+      // step 4 below do its usual fast 800/900ms zone/story ease -- this one
+      // pan should read as deliberate, not a snappy cut. Marking lastActive/
+      // storyKey already-in-sync stops step 4 from ALSO retargeting (at the
+      // normal fast speed) on this same frame. If the tale just started,
+      // storyMotion.framing is already FRAMING.birth -- identical to
+      // STONE_INTRO_FRAMING -- so this is a no-op non-transition until the
+      // birth chapter's own later beats change the framing, as scripted.
+      const zoneNow = nearestZone(orbit.angle);
+      const target = storyMotion.framing || zoneNow.framing;
+      retargetFraming(framing.current, target, INTRO_HANDOFF_MS);
+      lastActive.current = zoneNow.id;
+      framing.current.storyKey = storyMotion.framing || null;
+    }
 
-        // 3. Soft snap: once nearly still, settle onto the nearest zone
-        if (Math.abs(orbit.velocity) < SNAP_THRESHOLD) {
-          const zone = nearestZone(orbit.angle);
-          const d = angleDelta(orbit.angle, rad(zone.angleDeg));
-          orbit.angle += d * Math.min(1, SNAP_SPEED * dt);
-        }
-      }
+    // Is the user actively steering the camera right now? (finger down, or
+    // within IDLE_RESUME_MS of the last drag input.) This -- NOT story vs
+    // user mode -- selects the camera's behavior for both the angle update
+    // here and the placement in step 5:
+    //   steering -> orbit a fixed pivot per the eye toggle (Kolobok / stone),
+    //               ignoring dialogues.
+    //   idle     -> auto-follow Kolobok AND focus dialogues.
+    const steering = orbit.freeLookActive
+      || Date.now() - story.lastInputAt < IDLE_RESUME_MS;
+
+    if (orbit.snapTarget !== null) {
+      // Explicit snap request (nav button) always wins.
+      const d = angleDelta(orbit.angle, orbit.snapTarget);
+      orbit.angle += d * Math.min(1, SNAP_SPEED * dt * 1.6);
+      orbit.velocity = 0;
+      if (Math.abs(d) < 0.005) orbit.snapTarget = null;
+    } else if (steering) {
+      // User owns the azimuth: the drag already wrote orbit.angle; here we
+      // just coast the release fling to rest.
+      orbit.angle += orbit.velocity;
+      orbit.velocity *= FRICTION;
+    } else {
+      // Idle: auto-follow Kolobok. Ease orbit.angle so he stays framed
+      // (kolobokAngle - LEAD), derived from his LIVE world position so it
+      // works whether the tale is driving him or he's parked. Writing the
+      // result back INTO orbit.angle means the next drag hands over exactly
+      // where the camera already is: zero jump.
+      const kAngle = Math.atan2(storyMotion.kolobokWorldPos[0], storyMotion.kolobokWorldPos[2]);
+      const camTarget = kAngle - KOLOBOK_LEAD;
+      const d = angleDelta(orbit.angle, camTarget);
+      orbit.angle += d * Math.min(1, KOLOBOK_FOLLOW_LAG * dt);
+      orbit.velocity = 0;
     }
 
     // 4. Publish active zone + framing retargets, BEFORE using
@@ -181,21 +238,42 @@ export function CameraRig() {
       if (Math.abs(orbit.pitchOffset) < 0.001) orbit.pitchOffset = 0;
     }
 
-    // 5. Place camera on its orbit, always looking at the island center.
-    // Encounter push-in (a 4% radius nudge while a beat's approach/react
-    // is active) multiplies on top of the framing radius here.
+    // 5. Place the camera.
     const breathOn = polish.cameraBreath && orbit.mode !== 'story' && Date.now() - story.lastInputAt > BREATH_SUSPEND_MS;
     const breathClock = Date.now() / 1000;
     const angleBreath = breathOn ? Math.sin((breathClock * Math.PI * 2) / BREATH_ANGLE_PERIOD_S) * BREATH_ANGLE : 0;
     const heightBreath = breathOn ? Math.sin((breathClock * Math.PI * 2) / BREATH_HEIGHT_PERIOD_S) * BREATH_HEIGHT : 0;
+    const pitchH = orbit.pitchOffset * PITCH_HEIGHT_SCALE;
+    const pitchLook = orbit.pitchOffset * PITCH_LOOKAT_SCALE;
 
-    const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
-    camera.position.set(
-      Math.sin(orbit.angle + angleBreath) * pushedRadius,
-      f.height + orbit.pitchOffset * PITCH_HEIGHT_SCALE + heightBreath,
-      Math.cos(orbit.angle + angleBreath) * pushedRadius,
-    );
-    camera.lookAt(f.lookAtX, f.lookAtY - orbit.pitchOffset * PITCH_LOOKAT_SCALE, f.lookAtZ);
+    if (steering) {
+      // Actively steering: orbit a FIXED pivot per the eye toggle, and
+      // deliberately ignore dialogue framing/push-in (dialogues are followed
+      // ONLY when idle, per the camera spec).
+      //   eye ON  -> pivot on Kolobok's LIVE world position (circle him)
+      //   eye OFF -> pivot on the stone / island center, pulled back to survey
+      const o = orbit.cameraFollow ? USER_KOLOBOK_ORBIT : USER_STONE_ORBIT;
+      const pivotX = orbit.cameraFollow ? storyMotion.kolobokWorldPos[0] : 0;
+      const pivotZ = orbit.cameraFollow ? storyMotion.kolobokWorldPos[2] : 0;
+      camera.position.set(
+        pivotX + Math.sin(orbit.angle + angleBreath) * o.radius,
+        o.height + pitchH + heightBreath,
+        pivotZ + Math.cos(orbit.angle + angleBreath) * o.radius,
+      );
+      camera.lookAt(pivotX, o.lookAtY - pitchLook, pivotZ);
+    } else {
+      // Idle: follow Kolobok + dialogues. The framing (f) already tracks the
+      // active zone / story chapter (step 4); the encounter push-in (a 4%
+      // radius nudge during a beat) rides on top, so dialogue beats pull the
+      // camera in -- only here, never while steering.
+      const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
+      camera.position.set(
+        Math.sin(orbit.angle + angleBreath) * pushedRadius,
+        f.height + pitchH + heightBreath,
+        Math.cos(orbit.angle + angleBreath) * pushedRadius,
+      );
+      camera.lookAt(f.lookAtX, f.lookAtY - pitchLook, f.lookAtZ);
+    }
   });
 
   return null;

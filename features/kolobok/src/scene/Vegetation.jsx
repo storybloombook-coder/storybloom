@@ -12,6 +12,8 @@ import { makeStripes, makeNoiseGrain, makeSpeckle } from './textures/proceduralT
 import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { windSway, wind } from './wind';
+import { polish } from '../config/devFlags';
+import { getSharedTexture } from './BlobShadow';
 
 const dummy = new Object3D();
 const tiltAxisTmp = new Vector3();
@@ -161,6 +163,24 @@ function matrixAt(plant, localOffset = [0, 0, 0], localScale = [1, 1, 1]) {
 // slightly since two touching canopies still read as "the same tree".
 const TREE_CANOPY_R = { birch: 0.42, spruce: 0.58 };
 
+// BACKLOG.md #15: flat blob shadows under the foreground trees (Kolobok/
+// animals/landmarks already have them via BlobShadow.jsx -- trees didn't).
+// Radii are smaller than the canopy footprint itself (TREE_CANOPY_R above),
+// since a shadow reads better hugging the trunk base than matching the full
+// leaf-spread. Ground-anchored and static: the collision lean/tilt pivots
+// from the tree's own ground point (see applyCollisionMatrix), so the shadow
+// underneath it never needs to move even while the tree is mid-spring.
+const BIRCH_SHADOW_R = 0.3;
+const SPRUCE_SHADOW_R = 0.42;
+
+function shadowMatrixAt(x, z, radius) {
+  dummy.position.set(x, 0.02, z);
+  dummy.rotation.set(-Math.PI / 2, 0, 0);
+  dummy.scale.set(radius * 2, radius * 2, 1);
+  dummy.updateMatrix();
+  return dummy.matrix.clone();
+}
+
 // Spruce transforms live at module scope (pure + deterministic via the
 // seeded PRNG) so WeatherSystems' snow caps can reuse the exact top-tier
 // matrices without recomputing placement (WEATHER_SPEC §4 "instanced,
@@ -204,8 +224,9 @@ const SPRUCE_PLANTS = (() => {
 export const SPRUCE_TOP_MATRICES = SPRUCE_PLANTS.map((p) => matrixAt(p, [0, 1.32, 0], [0.2, 0.1, 0.2]));
 
 // Spruce's footprint, so birch (below, generated per-component-mount) never
-// lands where a spruce already claimed the ground.
-const SPRUCE_OCCUPIED = SPRUCE_PLANTS.map((p) => {
+// lands where a spruce already claimed the ground. Also exported so
+// Island.jsx's pothole placement (BACKLOG.md #16) can steer clear of trees.
+export const SPRUCE_OCCUPIED = SPRUCE_PLANTS.map((p) => {
   const [x, , z] = pointOnCircle(p.radius, p.angle);
   return { x, z, r: TREE_CANOPY_R.spruce * p.scale };
 });
@@ -616,6 +637,16 @@ export function Vegetation() {
     [spruceColors],
   );
 
+  const shadowTexture = useMemo(() => getSharedTexture(), []);
+  const birchShadowM = useMemo(
+    () => birch.map((p, i) => shadowMatrixAt(birchWorldXZ[i][0], birchWorldXZ[i][1], BIRCH_SHADOW_R * p.scale)),
+    [birch, birchWorldXZ],
+  );
+  const spruceShadowM = useMemo(
+    () => spruce.map((p, i) => shadowMatrixAt(spruceWorldXZ[i][0], spruceWorldXZ[i][1], SPRUCE_SHADOW_R * p.scale)),
+    [spruce, spruceWorldXZ],
+  );
+
   const bushPositions = useMemo(() => {
     const rng = makeRng(31);
     const out = [];
@@ -642,6 +673,41 @@ export function Vegetation() {
 
   return (
     <group>
+      {/* BACKLOG.md #15: flat blob shadows under birch/spruce, same shared
+          radial-alpha texture + look as BlobShadow.jsx's other users
+          (Kolobok/animals/landmarks), just instanced since there are dozens
+          of trees -- one draw call per tree type instead of one per tree.
+          Static matrices (ground-anchored, computed once above), so no
+          per-frame update is needed even while a tree is mid-collision-lean. */}
+      {polish.shadows && (
+        <>
+          <instancedMesh
+            args={[undefined, undefined, birchShadowM.length]}
+            renderOrder={1}
+            ref={(mesh) => {
+              if (!mesh) return;
+              birchShadowM.forEach((m, i) => mesh.setMatrixAt(i, m));
+              mesh.instanceMatrix.needsUpdate = true;
+            }}
+          >
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={shadowTexture} color="#1e1a14" transparent opacity={0.276} depthWrite={false} />
+          </instancedMesh>
+          <instancedMesh
+            args={[undefined, undefined, spruceShadowM.length]}
+            renderOrder={1}
+            ref={(mesh) => {
+              if (!mesh) return;
+              spruceShadowM.forEach((m, i) => mesh.setMatrixAt(i, m));
+              mesh.instanceMatrix.needsUpdate = true;
+            }}
+          >
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={shadowTexture} color="#1e1a14" transparent opacity={0.276} depthWrite={false} />
+          </instancedMesh>
+        </>
+      )}
+
       {/* Birch: trunk (own draw, different geometry) + both canopy blobs
           merged into one instancedMesh since they share a geometry.
           BACKLOG.md #2: grabbable on either mesh (trunk or canopy) --

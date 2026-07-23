@@ -10,21 +10,12 @@ code as of that session -- verify they still apply before trusting them.
 
 ## Open items
 
-1. ~~**Animal wet-shake**~~ -- DONE (`src/scene/wetShake.js` shared helper +
-   wired into all four `src/scene/characters/*.jsx`, idle-only, staggered
-   per-animal, triggers on `atmosphereLive.rainT`/`snowT` > 0.3). Not yet
-   verified live against REAL rain (only smoke-tested) -- force
-   `weatherNow.force = 'rain'` (services/weather.js) to check on device.
+1. ~~**Animal wet-shake**~~ -- DONE, confirmed on device against real rain.
 
-2. ~~**Tree grab/release spring**~~ -- DONE, but scoped down from a live
-   continuous drag to press-to-pull/release-to-spring: React Native's
-   pointer-event model doesn't guarantee continuous tracking once a finger
-   moves off a small instanced-mesh hitbox (no web-style pointer capture),
-   so `onTreeGrab`/`onTreeRelease` in `src/scene/Vegetation.jsx` pull the
-   tree toward the initial touch point on press, hold it there, and spring
-   it back on release -- reuses the exact same `springEnvelope` math as the
-   Kolobok-collision reaction. Verify on device it actually reads as
-   "grabbable" (tap-hold a birch/spruce, release).
+2. ~~**Tree grab/release spring**~~ -- DONE, scoped down from a live
+   continuous drag to press-to-pull/release-to-spring (see below for why).
+   Confirmed "okay-ish" on device -- user flagged it may get revisited later
+   but not blocking, move on for now.
 
 3. **Stronger rain + puddles**: `src/scene/WeatherSystems.jsx` rain system
    (`RAIN_COUNT`, streak sprites) -- increase density/visual weight, and add
@@ -139,19 +130,37 @@ code as of that session -- verify they still apply before trusting them.
     an actual arch/brow-ridge shape reworked, likely a flatter curved arc
     profile rather than a hemisphere slice.
 
-15. **Tree shadows**: blob shadows exist for Kolobok/animals/landmarks
-    (`src/scene/BlobShadow.jsx`, POLISH_SPEC §1) but NOT for
-    birch/spruce -- add blob shadows under the foreground trees too.
+15. ~~**Tree shadows**~~ -- DONE. `Vegetation.jsx` gained two instanced flat
+    blob shadows (birch + spruce, one draw call each), ground-anchored and
+    static (the collision lean pivots from the tree's own ground point, so
+    the shadow never needs to move even mid-spring), sharing BlobShadow.jsx's
+    texture/look via a newly-exported `getSharedTexture()`. Live feedback:
+    all shadows bumped 15% deeper (`BlobShadow.jsx` default opacity
+    0.28->0.322, tree shadows 0.24->0.276) -- one shared bump since
+    BlobShadow.jsx is every other shadow's single source of truth. Also
+    added a Kolobok-specific ground shadow (he had none): pinned to world Y
+    ~0.02 every frame (counteracts root's own idle-bob/roll-bounce/hop/sing-
+    bob Y so it doesn't float with him), shrinks/fades slightly at hop apex
+    for a contact-shadow feel, hidden during posOverride story beats
+    (windowsill/snout) where there's no ordinary ground below. Confirmed on
+    device.
 
 16. **A few random potholes + small hills**: sparse terrain variation on
     the main island ground (`src/scene/Island.jsx`), weather-reactive
     (e.g., potholes fill with water/reflect during rain, dust/dry look
     otherwise). Keep it sparse ("just a few"), not a full terrain system.
 
-17. **Reeds shouldn't press into the bridge**: reed placement
-    (`src/scene/PondAndGrandpa.jsx`, `reedParts`) needs to keep clear of the
-    bridge's footprint (around `BRIDGE_ARC_HALF_DEG`/local Z near the path
-    crossing), same idea as the existing Grandpa-stump keep-clear check.
+17. **Reeds shouldn't press into the bridge** -- IMPLEMENTED (awaiting
+    on-device confirmation; device was loading a stale bundle at time of
+    change). `src/scene/PondAndGrandpa.jsx`: precomputed `BRIDGE_LOCAL_POINTS`
+    (the bridge centerline sampled in pond-local space via the existing
+    `bridgeWorldToLocal`, same points `bridgeParts` uses) and added a
+    keep-clear in `reedParts` -- a candidate reed is rejected if it lands
+    within `BRIDGE_CLEARANCE` (0.6) of any bridge point in the local XZ
+    plane, same shape as the existing Grandpa-stump reject. Placement guard
+    raised 60 -> 120 so the extra rejection doesn't thin out the reed count.
+    Smoke-tested (`expo export`) + lint clean. `BRIDGE_CLEARANCE` is the knob
+    if reeds end up too far from / too close to the deck.
 
 ## Parked (explicitly "for later, not now")
 

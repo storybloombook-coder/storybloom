@@ -44,6 +44,22 @@ const bridgeWorldToLocal = (worldAngle, worldRadius) => new Vector3(
   Math.cos(worldAngle) * worldRadius,
 ).applyMatrix4(POND_GROUP_INVERSE);
 
+// Bridge centerline sampled in POND-LOCAL space (the same points bridgeParts
+// builds its planks from), precomputed so reed placement can keep clear of
+// the bridge's footprint -- BACKLOG #17, reeds were poking up through the
+// deck. A reed is rejected if it lands within BRIDGE_CLEARANCE of any of
+// these points in the local XZ plane.
+const BRIDGE_CLEARANCE = 0.6;
+const BRIDGE_LOCAL_POINTS = (() => {
+  const pts = [];
+  for (let i = 0; i < BRIDGE_SEGMENTS; i++) {
+    const t = i / (BRIDGE_SEGMENTS - 1);
+    const worldAngle = rad(POND_ANGLE_DEG + (-BRIDGE_ARC_HALF_DEG + t * BRIDGE_ARC_HALF_DEG * 2));
+    pts.push(bridgeWorldToLocal(worldAngle, PATH_RADIUS));
+  }
+  return pts;
+})();
+
 // A shared, seeded irregular-radius profile so the water and its matte rim
 // nest consistently (same wobble, rim just scaled a bit bigger) instead of
 // two independently-random circles that wouldn't line up -- a real pond
@@ -103,14 +119,17 @@ export function PondAndGrandpa() {
 
   // Reeds/cane scattered around the shore (8-12, up from the old fixed 2) --
   // seeded so placement is stable across reloads, keeping clear of Grandpa's
-  // stump (~207 deg local, atan2(-0.6,-1.15)) so nothing pokes through him.
+  // stump (~207 deg local, atan2(-0.6,-1.15)) AND the bridge deck (BACKLOG
+  // #17) so nothing pokes up through either.
   const reedParts = useMemo(() => {
     const rng = makeRng(141);
     const GRANDPA_ANGLE = Math.atan2(-0.6, -1.15);
     const parts = [];
     let placed = 0;
     let guard = 0;
-    while (placed < 10 && guard < 60) {
+    // Guard raised (60 -> 120) so the extra bridge rejection below doesn't
+    // starve the placement count.
+    while (placed < 10 && guard < 120) {
       guard += 1;
       const angle = rng() * Math.PI * 2;
       let d = Math.abs(angle - GRANDPA_ANGLE);
@@ -119,6 +138,15 @@ export function PondAndGrandpa() {
       const r = 1.05 + rng() * 0.55;
       const x = Math.cos(angle) * r;
       const z = Math.sin(angle) * r;
+      // BACKLOG #17: skip anything sitting on/under the bridge deck.
+      let underBridge = false;
+      for (let i = 0; i < BRIDGE_LOCAL_POINTS.length; i++) {
+        const bp = BRIDGE_LOCAL_POINTS[i];
+        const dx = x - bp.x;
+        const dz = z - bp.z;
+        if (dx * dx + dz * dz < BRIDGE_CLEARANCE * BRIDGE_CLEARANCE) { underBridge = true; break; }
+      }
+      if (underBridge) continue;
       const h = 0.32 + rng() * 0.28;
       parts.push({ geometry: new CylinderGeometry(0.018, 0.018, h, 5), color: '#5d8a3f', position: [x, h / 2, z] });
       parts.push({ geometry: new ConeGeometry(0.035, 0.11, 5), color: '#5d8a3f', position: [x, h + 0.035, z] });
@@ -478,12 +506,10 @@ export function PondAndGrandpa() {
         <meshStandardMaterial vertexColors roughness={0.9} side={DoubleSide} />
       </mesh>
 
-      {/* Willow, roughly opposite Grandpa's stump so it clears him/the
-          reeds/the beach arc -- BACKLOG.md #6. Live feedback: moved further
-          out from the water's edge, into the open ground between the
-          pond's rim and the island's own outer edge (was right at the
-          rim, local radius ~2.04; now ~3.0, same angular direction). */}
-      <mesh geometry={willowGeometry} position={[2.8, 0, 1.1]} rotation={[0, rad(15), 0]}>
+      {/* Willow -- BACKLOG.md #6. Live feedback: moved again, marked directly
+          on a screenshot -- between the water's edge and the grass on the
+          side away from the bridge/stump, roughly level with the beach arc. */}
+      <mesh geometry={willowGeometry} position={[0.5, 0, 1.9]} rotation={[0, rad(15), 0]}>
         <meshStandardMaterial vertexColors roughness={0.85} side={DoubleSide} />
       </mesh>
 

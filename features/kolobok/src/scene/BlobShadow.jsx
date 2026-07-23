@@ -6,7 +6,7 @@ import { polish } from '../config/devFlags';
 // (tinted per-instance via the material's `color`, so this is the only
 // texture object ever created for the whole feature).
 let sharedTexture;
-function getSharedTexture() {
+export function getSharedTexture() {
   if (!sharedTexture) sharedTexture = makeRadialAlphaTexture(64);
   return sharedTexture;
 }
@@ -16,8 +16,9 @@ function getSharedTexture() {
  *  Kolobok, whose blob animates with his hop/roll -- see Kolobok.jsx) just
  *  render one of these as a child of whatever group already tracks their
  *  owner's position. */
+// Live feedback: shadows should read 15% deeper/darker -- 0.28 * 1.15.
 export function BlobShadow({
-  radiusX = 0.5, radiusZ = 0.5, opacity = 0.28, y = 0.02,
+  radiusX = 0.5, radiusZ = 0.5, opacity = 0.322, y = 0.02,
 }) {
   const texture = useMemo(() => getSharedTexture(), []);
   if (!polish.shadows) return null;

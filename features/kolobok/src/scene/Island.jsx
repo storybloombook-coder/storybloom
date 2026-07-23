@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import {
-  BufferAttribute, Color, CircleGeometry, CylinderGeometry, Object3D,
+  BufferAttribute, BufferGeometry, Color, CylinderGeometry, Object3D,
 } from 'three';
 import {
   ISLAND_RADIUS, PATH_RADIUS, PATH_HALF_WIDTH, ZONES, rad, angleDelta, POND_ANGLE_DEG,
@@ -8,6 +8,7 @@ import {
 import { makeRng } from './prng';
 import { makeSpeckle } from './textures/proceduralTextures';
 import { jitterVertices } from './builders/vertexJitter';
+import { SPRUCE_OCCUPIED } from './Vegetation';
 
 const BASE_GRASS = [0x7a / 255, 0xa8 / 255, 0x5c / 255];
 
@@ -35,9 +36,6 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
-/** Vertex-colored ground disc (ART_SPEC §6): base grass everywhere, blended
- *  toward each zone's tint within its 36° arc (smoothstep over angular
- *  distance), plus a little per-vertex value noise for a hand-painted feel. */
 // VISUAL_QUALITY_SPEC §5 ground blending: a handful of fixed random-phase
 // sine pairs, summed, give smooth spatial "clumps" (soft blobs roughly
 // 1.5-2.5 units across) without a real Perlin implementation. Computed once
@@ -56,21 +54,65 @@ function clumpNoise01(x, z) {
   return 0.5 + 0.5 * (sum / CLUMP_WAVES.length);
 }
 
+// A filled disc built as concentric rings in the local XY plane -- same
+// plane and outline CircleGeometry produced, but densely subdivided so the
+// interior actually HAS vertices. CircleGeometry(r, N) is only a triangle
+// fan: one center vertex + N rim vertices, nothing in between, so per-vertex
+// terrain displacement (hills/potholes) and per-vertex dirt tinting had
+// nothing in the interior to act on and silently did nothing. Ring/segment
+// counts are chosen so vertex spacing stays well under the smallest pothole
+// radius, giving every feature enough vertices to shape smoothly.
+function makeRadialDisc(radius, rings, segments) {
+  const geo = new BufferGeometry();
+  const verts = [];
+  verts.push(0, 0, 0); // center vertex
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const rr = (ring / rings) * radius;
+    for (let s = 0; s < segments; s += 1) {
+      const a = (s / segments) * Math.PI * 2;
+      verts.push(Math.cos(a) * rr, Math.sin(a) * rr, 0);
+    }
+  }
+  const idx = [];
+  // Innermost fan: center to first ring.
+  for (let s = 0; s < segments; s += 1) {
+    const a = 1 + s;
+    const b = 1 + ((s + 1) % segments);
+    idx.push(0, a, b);
+  }
+  // Ring-to-ring quads (two triangles each).
+  for (let ring = 1; ring < rings; ring += 1) {
+    const base = 1 + (ring - 1) * segments;
+    const next = 1 + ring * segments;
+    for (let s = 0; s < segments; s += 1) {
+      const s1 = (s + 1) % segments;
+      const a = base + s;
+      const b = base + s1;
+      const c = next + s;
+      const d = next + s1;
+      idx.push(a, c, d, a, d, b);
+    }
+  }
+  geo.setAttribute('position', new BufferAttribute(new Float32Array(verts), 3));
+  geo.setIndex(idx);
+  return geo;
+}
+
 function useGroundGeometry() {
   return useMemo(() => {
-    const geo = new CircleGeometry(ISLAND_RADIUS, 64);
+    const geo = makeRadialDisc(ISLAND_RADIUS, 56, 340);
     const pos = geo.attributes.position;
     const colors = new Float32Array(pos.count * 3);
     const rng = makeRng(60);
     const tints = ZONES.map((z) => ({ angle: rad(z.angleDeg), rgb: hexToUnit(z.groundTint) }));
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
-      // CircleGeometry is built flat in the local XY plane; the mesh below
-      // rotates -90° around X to lay it on the ground. That rotation sends
-      // local Y to world -Z (world Z = -local Y), not +Z -- get this backwards
-      // and the whole tint pattern mirrors relative to where the landmarks
-      // actually are (matches pointOnCircle's sin/cos convention everywhere
-      // else in the scene once negated).
+      // The disc is built flat in the local XY plane (see makeRadialDisc); the
+      // mesh below rotates -90 around X to lay it on the ground. That rotation
+      // sends local Y to world -Z (world Z = -local Y), not +Z -- get this
+      // backwards and the whole tint pattern mirrors relative to where the
+      // landmarks actually are (matches pointOnCircle's sin/cos convention
+      // everywhere else in the scene once negated).
       const z = -pos.getY(i);
       const angle = Math.atan2(x, z);
       let [r, g, b] = BASE_GRASS;
@@ -96,14 +138,129 @@ function useGroundGeometry() {
         g = g + (secondClosest.rgb[1] - g) * clump;
         b = b + (secondClosest.rgb[2] - b) * clump;
       }
+      // BACKLOG.md #16: darken toward exposed dirt inside a pothole's
+      // radius -- live feedback: they need to read as darker than the
+      // grass around them (not just a subtle geometric dip) to stand out.
+      const potholeF = potholeFactorAt(x, z);
+      if (potholeF > 0) {
+        const soil = [0.24, 0.18, 0.13]; // dark exposed-earth tone
+        r = r + (soil[0] - r) * potholeF;
+        g = g + (soil[1] - g) * potholeF;
+        b = b + (soil[2] - b) * potholeF;
+      }
       const noise = (rng() * 2 - 1) * 0.05;
       colors[i * 3] = Math.min(1, Math.max(0, r + noise));
       colors[i * 3 + 1] = Math.min(1, Math.max(0, g + noise));
       colors[i * 3 + 2] = Math.min(1, Math.max(0, b + noise));
+      pos.setZ(i, hillBumpAt(x, z) - potholeF * POTHOLE_DEPTH);
     }
     geo.setAttribute('color', new BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
     return geo;
   }, []);
+}
+
+// BACKLOG.md #16: a handful of sparse terrain features -- gentle grass
+// hills and shallow potholes, both scattered in OPEN grass only (never on
+// the path/pond, clear of zone landmarks, clear of each other, and clear
+// of spruce trees via the exported SPRUCE_OCCUPIED footprint -- live
+// feedback: potholes must not land on the road or overlap other objects).
+// Both are built flat in the ground disc's own local XY plane, which
+// shares the identical `rotation={[-Math.PI/2,0,0]}` used everywhere else
+// in this file and sends local Z to world Y (see useGroundGeometry's own
+// `z = -pos.getY(i)` comment for the matching X/Z half of this same
+// rotation) -- so displacing a vertex's local Z is exactly "raise/lower
+// the ground here".
+// Live feedback: 5 more of each (9 total apiece). The old band (5.45-7.0,
+// 25deg/30deg zone/pond keep-clear) left only ~4 narrow ~22deg corridors
+// between zone arcs -- just barely enough room for the original 4+4 (one
+// per corridor). Fitting 9+9 without silently under-filling the random-
+// rejection sampler (it fails quietly, not with an error) needs a bigger
+// eligible area, not smaller features -- widened radial band + loosened
+// keep-clear angles below, individual hill/pothole sizes unchanged.
+const HILL_COUNT = 9;
+const HILL_RADIUS = 1.1;
+const HILL_HEIGHT = 0.16;
+const POTHOLE_COUNT = 9;
+const POTHOLE_RADIUS = 0.4;
+const POTHOLE_DEPTH = 0.09;
+// Open-grass band: outside the path ring by a clear margin, inside the
+// outer treeline -- same band the hills use, so the two mutual keep-clear
+// checks below are between comparable-sized features.
+const OPEN_BAND_MIN_R = PATH_RADIUS + PATH_HALF_WIDTH + 0.4;
+const OPEN_BAND_MAX_R = 7.4;
+
+function tooCloseToLandmarks(angleRad) {
+  const tooCloseToZone = ZONES.some((z) => Math.abs(angleDelta(angleRad, rad(z.angleDeg))) < rad(18));
+  const tooCloseToPond = Math.abs(angleDelta(angleRad, rad(POND_ANGLE_DEG))) < rad(22);
+  return tooCloseToZone || tooCloseToPond;
+}
+
+const HILL_SPOTS = (() => {
+  const rng = makeRng(96);
+  const out = [];
+  let guard = 0;
+  while (out.length < HILL_COUNT && guard < 6000) {
+    guard += 1;
+    const angleDeg = rng() * 360;
+    const angleRad = rad(angleDeg);
+    if (tooCloseToLandmarks(angleRad)) continue;
+    const radius = OPEN_BAND_MIN_R + rng() * (OPEN_BAND_MAX_R - OPEN_BAND_MIN_R);
+    const x = Math.sin(angleRad) * radius;
+    const z = Math.cos(angleRad) * radius;
+    const r = HILL_RADIUS * (0.85 + rng() * 0.3);
+    if (SPRUCE_OCCUPIED.some((s) => Math.hypot(x - s.x, z - s.z) < r + s.r + 0.3)) continue;
+    out.push({ x, z, r });
+  }
+  return out;
+})();
+
+// Exported so WeatherSystems.jsx can drop a matching puddle disc exactly in
+// each crater's floor once it rains (same idea as Vegetation.jsx exporting
+// SPRUCE_TOP_MATRICES for the snow-cap system).
+export const POTHOLE_SPOTS = (() => {
+  const rng = makeRng(97);
+  const out = [];
+  let guard = 0;
+  while (out.length < POTHOLE_COUNT && guard < 8000) {
+    guard += 1;
+    const angleDeg = rng() * 360;
+    const angleRad = rad(angleDeg);
+    if (tooCloseToLandmarks(angleRad)) continue;
+    const radius = OPEN_BAND_MIN_R + rng() * (OPEN_BAND_MAX_R - OPEN_BAND_MIN_R);
+    const x = Math.sin(angleRad) * radius;
+    const z = Math.cos(angleRad) * radius;
+    const r = POTHOLE_RADIUS * (0.75 + rng() * 0.4);
+    if (HILL_SPOTS.some((h) => Math.hypot(x - h.x, z - h.z) < r + h.r + 0.3)) continue;
+    if (SPRUCE_OCCUPIED.some((s) => Math.hypot(x - s.x, z - s.z) < r + s.r + 0.3)) continue;
+    out.push({ x, z, r });
+  }
+  return out;
+})();
+// Ground disc sits at world Y=0 (before its own hill/pothole displacement);
+// at a crater's exact center the ground dips POTHOLE_DEPTH below that, so a
+// puddle disc floats a hair above the crater floor (avoids z-fighting)
+// rather than sitting at the flat, undipped ground height.
+export const POTHOLE_PUDDLE_Y = -POTHOLE_DEPTH + 0.006;
+
+function hillBumpAt(x, z) {
+  let h = 0;
+  for (const hill of HILL_SPOTS) {
+    const d = Math.hypot(x - hill.x, z - hill.z);
+    if (d < hill.r) h += Math.cos((d / hill.r) * (Math.PI / 2)) * HILL_HEIGHT;
+  }
+  return h;
+}
+// 0 outside every pothole, up to 1 at a crater's exact center -- shared by
+// both the height dip AND the color darkening below, so the visual "hole"
+// and the actual geometric dip always agree on where the crater is.
+function potholeFactorAt(x, z) {
+  let f = 0;
+  for (const hole of POTHOLE_SPOTS) {
+    const d = Math.hypot(x - hole.x, z - hole.z);
+    if (d < hole.r) f = Math.max(f, Math.cos((d / hole.r) * (Math.PI / 2)));
+  }
+  return f;
 }
 
 function usePebbleMatrices() {
