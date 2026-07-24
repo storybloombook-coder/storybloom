@@ -17,6 +17,39 @@ const AMBIENCE = {
   izba: IzbaAmbience, hare: HareAmbience, wolf: WolfAmbience, bear: BearAmbience, fox: FoxAmbience,
 };
 
+/** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
+ *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
+ *  at chimneyPos ([0.55, 1.95, 0.15], its own default) but nothing was ever
+ *  there to visibly emit them from. Base embeds into the roof cone's own
+ *  slope at that XZ (roof center [0,1.75,0], radius 1.35, height 0.9 ->
+ *  surface height there is ~1.82; base sits a bit lower, at 1.65, so it's
+ *  solidly buried rather than floating just above the surface); top sits
+ *  right at the smoke's own spawn Y (1.95) so smoke reads as coming out of
+ *  the opening, not out of thin air above it or from inside a solid pipe. */
+function IzbaChimney({ material }) {
+  return (
+    <mesh position={[0.55, 1.8, 0.15]} material={material}>
+      <cylinderGeometry args={[0.055, 0.065, 0.3, 8]} />
+    </mesh>
+  );
+}
+
+/** The izba's door -- live feedback: "make a door in the wall opposite the
+ *  window". Same flat-plane-on-the-surface convention as IzbaWindow, on the
+ *  -z wall (mirrors the window's +0.66 face offset) since the group's own
+ *  a+PI yaw makes +z the center-facing side and -z the outward-facing back.
+ *  Bottom aligned with the wall box's own bottom edge (position.y 0.85,
+ *  half-height 0.55 -> bottom at 0.3) rather than world Y=0, so it reads as
+ *  sitting on the same base the wall itself already does. */
+function IzbaDoor() {
+  return (
+    <mesh position={[0, 0.675, -0.66]}>
+      <planeGeometry args={[0.4, 0.75]} />
+      <meshStandardMaterial color="#4a2f1c" roughness={0.75} />
+    </mesh>
+  );
+}
+
 /** The izba's window pane, on the CENTER-facing wall (local +z after the
  *  landmark group's a+PI yaw): the story camera watches the birth/rebirth
  *  beats from KOLOBOK_LEAD around the ring, which sees this side. Emissive
@@ -67,6 +100,7 @@ function Landmark({ zone }) {
   const izbaMaterials = useMemo(() => (zone.id === 'izba' ? {
     walls: makeToonMaterial({ color: zone.color, rimStrength: 0.2 }),
     roof: makeToonMaterial({ color: '#a5602f', rimStrength: 0.2 }),
+    chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
   } : null), [zone.id, zone.color]);
 
   const mode = encounter?.id === zone.id
@@ -102,7 +136,9 @@ function Landmark({ zone }) {
           <mesh position={[0, 1.75, 0]} rotation={[0, Math.PI / 4, 0]} material={izbaMaterials.roof}>
             <coneGeometry args={[1.35, 0.9, 4]} />
           </mesh>
+          <IzbaChimney material={izbaMaterials.chimney} />
           <IzbaWindow />
+          <IzbaDoor />
         </>
       ) : (
         <Character mode={mode} isActiveZone={isActive} />
