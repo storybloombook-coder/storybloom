@@ -114,7 +114,14 @@ export function Fox({ mode, isActiveZone }) {
 
     // --- Encounter (ANIMATION_SPEC §5): glide 0.5 toward path, no hop ---
     if (isMine && mode === 'encounter') {
-      s.approachZ = 0.5 * encounterMotion.phaseT;
+      // Only ramp during 'approach' -- the shared beat REUSES phaseT for
+      // its 'react' step too (resetting 0->1 again), so recomputing
+      // approachZ from it unconditionally through the whole 'encounter'
+      // mode snapped the fox all the way back to 0 the instant react
+      // began (fox has no arc-jump like the others to mask it, so this
+      // read as an outright teleport). Holding steady here at whatever
+      // approach left it (normally 0.5) fixes that.
+      if (encounterMotion.phase === 'approach') s.approachZ = 0.5 * encounterMotion.phaseT;
     } else if (isMine && mode === 'retreat') {
       s.approachZ = 0.5 * (1 - encounterMotion.phaseT);
     } else if (!isMine) {

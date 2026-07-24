@@ -104,7 +104,14 @@ export function Hare({ mode, isActiveZone }) {
     // straight up), retreat back to spot ---
     const isMine = encounterMotion.zoneId === 'hare';
     if (isMine && mode === 'encounter') {
-      s.approachZ = 0.6 * encounterMotion.phaseT;
+      // Only ramp during 'approach' -- the shared beat REUSES phaseT for
+      // its 'react' step too (resetting 0->1 again), so recomputing
+      // approachZ from it unconditionally through the whole 'encounter'
+      // mode snapped the hare back to 0 the instant react began, before
+      // reactZ's own arc had ramped up to cover it. Holding steady here
+      // (at whatever approach left it, normally 0.6) lets reactZ's arc be
+      // the only thing that moves on top of it during react.
+      if (encounterMotion.phase === 'approach') s.approachZ = 0.6 * encounterMotion.phaseT;
       s.reactT = encounterMotion.phase === 'react' ? encounterMotion.phaseT : 0;
     } else if (isMine && mode === 'retreat') {
       s.approachZ = 0.6 * (1 - encounterMotion.phaseT);

@@ -40,8 +40,13 @@ export function tickGreetWave(s, dt, isMine, mode) {
   }
   s.t += dt;
   if (s.t > GREET_WAVE_DURATION) {
+    // Deliberately NOT resetting s.waved here: 'encounter' mode covers both
+    // the approach AND react phases (only retreat gets its own mode
+    // string), which together last longer than GREET_WAVE_DURATION. If
+    // this cleared the latch, the trigger check above would immediately
+    // re-arm and fire a SECOND wave within the same encounter. s.waved
+    // only clears above, once the encounter has genuinely ended.
     s.t = -1;
-    s.waved = false;
     return 0;
   }
   return Math.sin((s.t / GREET_WAVE_DURATION) * Math.PI);

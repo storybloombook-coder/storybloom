@@ -100,7 +100,14 @@ export function Bear({ mode, isActiveZone }) {
     // inward together, like a two-handed grab, that closes on empty air ---
     const isMine = encounterMotion.zoneId === 'bear';
     if (isMine && mode === 'encounter') {
-      s.approachZ = 0.6 * encounterMotion.phaseT;
+      // Only ramp during 'approach' -- the shared beat REUSES phaseT for
+      // its 'react' step too (resetting 0->1 again), so recomputing
+      // approachZ from it unconditionally through the whole 'encounter'
+      // mode snapped the bear back to 0 the instant react began, before
+      // the grab's own reach had ramped up to cover it. Holding steady
+      // here (at whatever approach left it, normally 0.6) keeps the grab
+      // reach as the only thing moving during react.
+      if (encounterMotion.phase === 'approach') s.approachZ = 0.6 * encounterMotion.phaseT;
       s.swipeT = encounterMotion.phase === 'react' ? encounterMotion.phaseT : 0;
     } else if (isMine && mode === 'retreat') {
       s.approachZ = 0.6 * (1 - encounterMotion.phaseT);
