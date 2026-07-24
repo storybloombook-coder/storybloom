@@ -44,6 +44,14 @@ const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transiti
 const USER_KOLOBOK_ORBIT = { radius: 5.5, height: 3.2, lookAtY: 0.8 };
 const USER_STONE_ORBIT = { radius: 13, height: 6, lookAtY: 1.4 };
 
+// Live feedback: "all camera switches should happen smooth / no
+// teleporting" -- both the eye-toggle pivot swap (Kolobok <-> stone) and
+// the steering<->idle placement swap (two otherwise-unrelated formulas)
+// used to cut instantly. Both eased below via a 0..1 blend value that
+// tweens whenever the underlying boolean flips, rather than snapping.
+const PIVOT_BLEND_EASE_MS = 900;
+const STEERING_BLEND_EASE_MS = 800;
+
 // Free-look vertical drag: pitchOffset scales into a height nudge (bigger)
 // and an opposite lookAt-Y nudge (smaller), which is what makes it read as
 // "tilting the view" rather than just "elevator up/down" -- the camera
@@ -85,6 +93,23 @@ export function CameraRig() {
   const introActive = useRef(true);
   const introMountedAt = useRef(Date.now());
   const setActiveZone = useSceneStore((s) => s.setActiveZone);
+
+  // Eye-toggle blend: 0 = USER_STONE_ORBIT, 1 = USER_KOLOBOK_ORBIT. Eases
+  // whenever orbit.cameraFollow toggles. Starts matching cameraFollow's
+  // actual initial value so there's no false transition on mount.
+  const pivotBlend = useRef({
+    value: orbit.cameraFollow ? 1 : 0, from: 0, to: 0, timeline: null,
+  });
+  const lastCameraFollow = useRef(orbit.cameraFollow);
+
+  // Steering<->idle blend: 0 = idle (framing f) placement, 1 = steering
+  // (USER_ORBIT) placement. Eases whenever the `steering` boolean flips, so
+  // switching between these two otherwise-unrelated placement formulas
+  // cross-fades instead of cutting. Starts at 0 (idle) matching `steering`'s
+  // actual value at mount (orbit.lastDragAt defaults to 0/epoch, so
+  // Date.now() - 0 is never < IDLE_RESUME_MS).
+  const steeringBlend = useRef({ value: 0, from: 0, to: 0, timeline: null });
+  const lastSteering = useRef(false);
 
   // Live camera framing (radius/height/lookAtY), eased toward whichever
   // zone is active (ART_SPEC §10: 800ms easeInOutSine per transition) --
@@ -254,34 +279,78 @@ export function CameraRig() {
     const pitchH = orbit.pitchOffset * PITCH_HEIGHT_SCALE;
     const pitchLook = orbit.pitchOffset * PITCH_LOOKAT_SCALE;
 
-    if (steering) {
-      // Actively steering: orbit a FIXED pivot per the eye toggle, and
-      // deliberately ignore dialogue framing/push-in (dialogues are followed
-      // ONLY when idle, per the camera spec).
-      //   eye ON  -> pivot on Kolobok's LIVE world position (circle him)
-      //   eye OFF -> pivot on the stone / island center, pulled back to survey
-      const o = orbit.cameraFollow ? USER_KOLOBOK_ORBIT : USER_STONE_ORBIT;
-      const pivotX = orbit.cameraFollow ? storyMotion.kolobokWorldPos[0] : 0;
-      const pivotZ = orbit.cameraFollow ? storyMotion.kolobokWorldPos[2] : 0;
-      camera.position.set(
-        pivotX + Math.sin(orbit.angle + angleBreath) * o.radius,
-        o.height + pitchH + heightBreath,
-        pivotZ + Math.cos(orbit.angle + angleBreath) * o.radius,
-      );
-      camera.lookAt(pivotX, o.lookAtY - pitchLook, pivotZ);
-    } else {
-      // Idle: follow Kolobok + dialogues. The framing (f) already tracks the
-      // active zone / story chapter (step 4); the encounter push-in (a 4%
-      // radius nudge during a beat) rides on top, so dialogue beats pull the
-      // camera in -- only here, never while steering.
-      const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
-      camera.position.set(
-        Math.sin(orbit.angle + angleBreath) * pushedRadius,
-        f.height + pitchH + heightBreath,
-        Math.cos(orbit.angle + angleBreath) * pushedRadius,
-      );
-      camera.lookAt(f.lookAtX, f.lookAtY - pitchLook, f.lookAtZ);
+    // Eye-toggle blend (USER_KOLOBOK_ORBIT <-> USER_STONE_ORBIT), eased on
+    // toggle rather than cut. Ticked unconditionally (not just while
+    // steering) so it's already correct the instant steering starts.
+    if (orbit.cameraFollow !== lastCameraFollow.current) {
+      lastCameraFollow.current = orbit.cameraFollow;
+      const pb = pivotBlend.current;
+      pb.from = pb.value;
+      pb.to = orbit.cameraFollow ? 1 : 0;
+      pb.timeline = createTimeline([
+        {
+          at: 0,
+          dur: PIVOT_BLEND_EASE_MS,
+          ease: 'easeInOutSine',
+          update: (t) => { pb.value = pb.from + (pb.to - pb.from) * t; },
+        },
+      ]);
     }
+    if (pivotBlend.current.timeline) pivotBlend.current.timeline.tick(dt);
+    const pb = pivotBlend.current.value;
+
+    // Steering placement: orbit a pivot blended between the stone/island
+    // center (pb=0) and Kolobok's LIVE world position (pb=1), deliberately
+    // ignoring dialogue framing/push-in (dialogues are followed ONLY when
+    // idle, per the camera spec).
+    const orbitRadius = USER_STONE_ORBIT.radius + (USER_KOLOBOK_ORBIT.radius - USER_STONE_ORBIT.radius) * pb;
+    const orbitHeight = USER_STONE_ORBIT.height + (USER_KOLOBOK_ORBIT.height - USER_STONE_ORBIT.height) * pb;
+    const orbitLookAtY = USER_STONE_ORBIT.lookAtY + (USER_KOLOBOK_ORBIT.lookAtY - USER_STONE_ORBIT.lookAtY) * pb;
+    const steerPivotX = storyMotion.kolobokWorldPos[0] * pb;
+    const steerPivotZ = storyMotion.kolobokWorldPos[2] * pb;
+    const steerPosX = steerPivotX + Math.sin(orbit.angle + angleBreath) * orbitRadius;
+    const steerPosY = orbitHeight + pitchH + heightBreath;
+    const steerPosZ = steerPivotZ + Math.cos(orbit.angle + angleBreath) * orbitRadius;
+    const steerLookY = orbitLookAtY - pitchLook;
+
+    // Idle placement: follow Kolobok + dialogues. The framing (f) already
+    // tracks the active zone / story chapter (step 4); the encounter
+    // push-in (a 4% radius nudge during a beat) rides on top.
+    const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
+    const idlePosX = Math.sin(orbit.angle + angleBreath) * pushedRadius;
+    const idlePosY = f.height + pitchH + heightBreath;
+    const idlePosZ = Math.cos(orbit.angle + angleBreath) * pushedRadius;
+    const idleLookY = f.lookAtY - pitchLook;
+
+    // Steering<->idle blend, eased on toggle rather than cut -- live
+    // feedback: "all camera switches should happen smooth / no teleporting".
+    if (steering !== lastSteering.current) {
+      lastSteering.current = steering;
+      const sb = steeringBlend.current;
+      sb.from = sb.value;
+      sb.to = steering ? 1 : 0;
+      sb.timeline = createTimeline([
+        {
+          at: 0,
+          dur: STEERING_BLEND_EASE_MS,
+          ease: 'easeInOutSine',
+          update: (t) => { sb.value = sb.from + (sb.to - sb.from) * t; },
+        },
+      ]);
+    }
+    if (steeringBlend.current.timeline) steeringBlend.current.timeline.tick(dt);
+    const sb = steeringBlend.current.value;
+
+    camera.position.set(
+      idlePosX + (steerPosX - idlePosX) * sb,
+      idlePosY + (steerPosY - idlePosY) * sb,
+      idlePosZ + (steerPosZ - idlePosZ) * sb,
+    );
+    camera.lookAt(
+      f.lookAtX + (steerPivotX - f.lookAtX) * sb,
+      idleLookY + (steerLookY - idleLookY) * sb,
+      f.lookAtZ + (steerPivotZ - f.lookAtZ) * sb,
+    );
   });
 
   return null;

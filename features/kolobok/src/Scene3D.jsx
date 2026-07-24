@@ -95,12 +95,18 @@ export function Scene3D({ onNavigate, focused = true }) {
   // to the Canvas's own pointer handling to reach Kolobok/plaques/animals --
   // only an actual drag past that small threshold moves the camera. Kept low
   // so the drag engages promptly instead of feeling sticky at the start.
+  // freeLookActive is set in onStart (fires only once the gesture actually
+  // ACTIVATES, i.e. past minDistance), not onBegin (fires on every touch-
+  // down, activated or not) -- onBegin here left a plain tap with freeLook
+  // stuck true forever (onEnd never followed to reset it), which locked the
+  // camera into "steering" mode after literally any tap. Live feedback:
+  // "when screen tapped nothing should happen."
   const pan = Gesture.Pan()
     .minPointers(1)
     .maxPointers(1)
     .minDistance(4)
     .runOnJS(true)
-    .onBegin(() => { orbit.freeLookActive = true; })
+    .onStart(() => { orbit.freeLookActive = true; })
     .onChange((e) => {
       story.lastInputAt = Date.now();
       orbit.lastDragAt = Date.now();

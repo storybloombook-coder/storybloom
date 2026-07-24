@@ -26,14 +26,13 @@ export const orbit = {
   // story's tracked azimuth while this is true, and resumes (smoothly
   // re-converging, not snapping) after 15s of no input.
   lookingAway: false,
-  // Eye-toggle button (Scene3D): true (default) = the usual free-mode
-  // relationship, Kolobok chases the camera and the camera soft-snaps onto
-  // whichever zone it drifts near. false = a genuinely detached free-look --
-  // CameraRig skips the zone soft-snap and Kolobok.jsx freezes its own angle
-  // (stops chasing orbit.angle) while in free/user mode. Story mode is its
-  // own inverted relationship (camera chases Kolobok) and ignores this flag
-  // entirely -- toggling it only matters in free/user mode.
-  cameraFollow: true,
+  // Eye-toggle button (Scene3D), steering (CameraRig) only. false (default,
+  // live feedback: "from the beginning the camera should rotate around the
+  // center/stone") = orbit the stone/island center while steering. true =
+  // orbit Kolobok's live position instead. Story mode's own inverted
+  // relationship (camera chases Kolobok) ignores this flag entirely --
+  // toggling it only matters while steering in free/user mode.
+  cameraFollow: false,
   // ms epoch of the last real camera-DRAG gesture (Scene3D's pan onChange/
   // onEnd only -- never touched by story/encounter events). CameraRig's
   // steering-vs-idle decision reads this alone, so an animal encounter
