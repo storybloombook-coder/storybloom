@@ -213,7 +213,7 @@ function tooCloseToLandmarks(angleRad) {
   return tooCloseToZone || tooCloseToPond;
 }
 
-const HILL_SPOTS = (() => {
+const OUTER_HILL_SPOTS = (() => {
   const rng = makeRng(96);
   const out = [];
   let guard = 0;
@@ -231,6 +231,36 @@ const HILL_SPOTS = (() => {
   }
   return out;
 })();
+
+// Live feedback: 3 more hills in the INNER courtyard -- the open grass
+// between the crossroads stone and the path ring -- kept clear of the
+// stone (CrossroadsStone.jsx's BOULDER_RADIUS is 1.06; not imported here to
+// avoid a cross-file coupling for one number, INNER_HILL_MIN_R just leaves
+// generous margin beyond it) and clear of each other (mutual keep-clear,
+// which the outer band gets almost for free from its much bigger area, but
+// this smaller inner band needs an explicit check).
+const INNER_HILL_COUNT = 3;
+const INNER_HILL_MIN_R = 1.6;
+const INNER_HILL_MAX_R = PATH_RADIUS - PATH_HALF_WIDTH - 0.5;
+const INNER_HILL_GAP = 0.5;
+const INNER_HILL_SPOTS = (() => {
+  const rng = makeRng(98);
+  const out = [];
+  let guard = 0;
+  while (out.length < INNER_HILL_COUNT && guard < 4000) {
+    guard += 1;
+    const angleRad = rng() * Math.PI * 2;
+    const radius = INNER_HILL_MIN_R + rng() * (INNER_HILL_MAX_R - INNER_HILL_MIN_R);
+    const x = Math.sin(angleRad) * radius;
+    const z = Math.cos(angleRad) * radius;
+    const r = HILL_RADIUS * (0.85 + rng() * 0.3);
+    if (out.some((h) => Math.hypot(x - h.x, z - h.z) < r + h.r + INNER_HILL_GAP)) continue;
+    out.push({ x, z, r });
+  }
+  return out;
+})();
+
+const HILL_SPOTS = [...OUTER_HILL_SPOTS, ...INNER_HILL_SPOTS];
 
 // Exported so WeatherSystems.jsx can drop a matching puddle disc exactly in
 // each crater's floor once it rains (same idea as Vegetation.jsx exporting

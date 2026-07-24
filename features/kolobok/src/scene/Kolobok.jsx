@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { AdditiveBlending } from 'three';
+import { AdditiveBlending, TorusGeometry } from 'three';
 import {
   PATH_RADIUS, KOLOBOK_RADIUS, KOLOBOK_LEAD, KOLOBOK_FOLLOW_LAG, angleDelta,
 } from '../config/zones';
@@ -61,6 +61,26 @@ const EYE_X = sphereSurfaceX(FACE_Y_OFFSET + EYE_Y, EYE_Z);
 // curve where it actually is instead of borrowing the eye's depth.
 const BROW_Y = EYE_Y + 0.1 * FACE_SCALE;
 const BROW_X = sphereSurfaceX(FACE_Y_OFFSET + BROW_Y, EYE_Z);
+
+// Live feedback: eyebrows read as flat straight bars -- a gentle curved arc
+// instead, matching a natural raised-brow shape. Deliberately does NOT
+// touch position/rotation.z (the runtime browRaise/browTilt animation owns
+// rotation.z exclusively, overwriting it every frame) -- only the GEOMETRY
+// changes, from a straight box to a torus-ring segment occupying the same
+// local plane (width along X, thin along Y/Z) the box did, so nothing about
+// WHERE it sits or how it's driven changes, only its own shape.
+const BROW_ARC = (40 * Math.PI) / 180;
+const BROW_ARC_RADIUS = 0.234 * FACE_SCALE;
+const BROW_ARC_TUBE = 0.017 * FACE_SCALE;
+function makeBrowGeometry() {
+  const geo = new TorusGeometry(BROW_ARC_RADIUS, BROW_ARC_TUBE, 8, 14, BROW_ARC);
+  // TorusGeometry always starts its visible arc at local +X (u=0); bake a
+  // ONE-TIME Z rotation (via the geometry itself, not the mesh's own
+  // rotation.z) so the segment is centered on the ring's own "top" instead
+  // -- reads as a symmetric brow curve rather than an off-center sliver.
+  geo.rotateZ(Math.PI / 2 - BROW_ARC / 2);
+  return geo;
+}
 
 // Mouth: sits low on the face. Same surface treatment as eyes/brows -- the
 // old hardcoded EYE_X-based X (0.364) sat well inside the dough down here
@@ -145,6 +165,7 @@ export function Kolobok() {
   const encounter = useSceneStore((s) => s.encounter);
   const doughTexture = useMemo(() => makeDoughTexture(), []);
   const specularTexture = useMemo(() => makeRadialAlphaTexture(), []);
+  const browGeometry = useMemo(() => makeBrowGeometry(), []);
   const shadowTexture = useMemo(() => getSharedTexture(), []);
 
   // VISUAL_QUALITY_SPEC §1: one toon material per distinct surface color.
@@ -551,33 +572,33 @@ export function Kolobok() {
             <mesh position={[0.06 * FACE_SCALE, 0, 0]} material={materials.eyePupil}>
               <sphereGeometry args={[0.055 * FACE_SCALE, 10, 10]} />
             </mesh>
-            {/* Eyelid: a SHALLOW spherical cap (30deg of arc, not a full
-                90deg hemisphere dome) -- BACKLOG #14: the old full-dome
-                shape, scaled uniformly from near-zero during a blink, read
-                as a rounded bump/stick poking out rather than a lid
-                sweeping down. Radius bumped (0.14 -> 0.28) so the cap's
-                BASE radius (R*sin(30deg) = 0.5R) still lands on the same
-                0.14 footprint -- full coverage of the eye white AND the
-                forward-offset pupil unchanged -- just flatter/arc-shaped
-                instead of ball-shaped at every scale in between. */}
+            {/* Eyelid: hemisphere big enough to fully cover the eye white
+                AND the forward-offset pupil (0.14 radius vs the 0.11 white
+                and the pupil poking 0.06 forward), so a closed blink reads
+                as shut rather than leaving the pupil peeking through.
+                (BACKLOG #14 attempted a flatter cap here by shrinking theta
+                while growing the radius to preserve the base width -- but a
+                sphere's geometry sits relative to its CENTER, so that also
+                pushed the rim ~0.24 units away from the eye, breaking it
+                entirely. Reverted; needs a properly pivot-corrected fix
+                later, not a blind radius/theta swap.) */}
             <mesh
               ref={side === 1 ? leftEyelid : rightEyelid}
               position={[0.03 * FACE_SCALE, 0.02 * FACE_SCALE, 0]}
               scale={0.001}
               material={materials.eyelid}
             >
-              <sphereGeometry args={[0.28 * FACE_SCALE, 12, 8, 0, Math.PI * 2, 0, Math.PI / 6]} />
+              <sphereGeometry args={[0.14 * FACE_SCALE, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
             </mesh>
           </group>
         ))}
 
-        {/* Brows */}
-        <mesh ref={leftBrow} position={[BROW_X, BROW_Y, EYE_Z]} rotation={[0, 0, (10 * Math.PI) / 180]} material={materials.brow}>
-          <boxGeometry args={[0.16 * FACE_SCALE, 0.035 * FACE_SCALE, 0.05 * FACE_SCALE]} />
-        </mesh>
-        <mesh ref={rightBrow} position={[BROW_X, BROW_Y, -EYE_Z]} rotation={[0, 0, -((10 * Math.PI) / 180)]} material={materials.brow}>
-          <boxGeometry args={[0.16 * FACE_SCALE, 0.035 * FACE_SCALE, 0.05 * FACE_SCALE]} />
-        </mesh>
+        {/* Brows: a curved arc (see makeBrowGeometry above), not a flat bar.
+            Both sides share the same geometry -- it's symmetric about its
+            own center, so it doesn't need mirroring, only the existing
+            position.z / rotation.z sign flip below (unchanged). */}
+        <mesh ref={leftBrow} position={[BROW_X, BROW_Y, EYE_Z]} rotation={[0, 0, (10 * Math.PI) / 180]} material={materials.brow} geometry={browGeometry} />
+        <mesh ref={rightBrow} position={[BROW_X, BROW_Y, -EYE_Z]} rotation={[0, 0, -((10 * Math.PI) / 180)]} material={materials.brow} geometry={browGeometry} />
 
         {/* Mouth: smile arc (default) + open-mouth ellipse (singing),
             visibility toggles. X is surface-derived (MOUTH_X) so the whole
