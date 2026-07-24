@@ -12,7 +12,7 @@ import { polish } from '../config/devFlags';
 // After the user stops steering the camera, how long before it counts as
 // "idle" again and eases back to auto-following Kolobok + dialogues (smoothly
 // re-converging via KOLOBOK_FOLLOW_LAG, not snapping). Tunable.
-const IDLE_RESUME_MS = 3000;
+const IDLE_RESUME_MS = 15000;
 
 // POLISH_SPEC §5 "never a static frame": idle camera breath, free mode
 // only -- suspended instantly on any input, resumes the instant it's been
