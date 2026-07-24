@@ -11,13 +11,28 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { eggMotion, eggManager } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeRng } from './prng';
+import { windSway, wind } from './wind';
 
 const dummy = new Object3D();
+// Live feedback: "the willow should be affected by wind" -- same
+// perpendicular-axis-tilt technique Vegetation.jsx already uses for
+// ambient tree sway (POLISH_SPEC §3), applied to the whole willow mesh
+// since it's a single static merged geometry, not an instanced one.
+const tiltAxisTmp = new Vector3();
+const tiltQuatTmp = new Quaternion();
 
 // ART_SPEC §14: pond at 324 deg, radius 5.6 (the free arc between fox and
 // izba, rim side of the path).
 const POND_ANGLE = rad(POND_ANGLE_DEG);
 const POND_POS = pointOnCircle(POND_RADIUS, POND_ANGLE);
+
+// BACKLOG.md #6 willow's position/yaw (was inlined in the JSX) -- named so
+// the wind-sway calculation below can reuse the same world x/z.
+const WILLOW_POS = [0.5, 0, 1.9];
+const WILLOW_YAW = rad(15);
+// A bit more than Vegetation.jsx's TREE_SWAY_AMPLITUDE (rad(2.2)): willows
+// are known for reading as flowier/more wind-responsive than a birch/spruce.
+const WILLOW_SWAY_AMPLITUDE = rad(4);
 
 const RECAST_INTERVAL = 30;
 const RIPPLE_COUNT = 3;
@@ -116,6 +131,7 @@ export function PondAndGrandpa() {
   const glintRef = useRef();
   const splashRipplesRef = useRef();
   const dropletsRef = useRef();
+  const willowRef = useRef();
 
   // Reeds/cane scattered around the shore (8-12, up from the old fixed 2) --
   // seeded so placement is stable across reloads, keeping clear of Grandpa's
@@ -352,6 +368,24 @@ export function PondAndGrandpa() {
     const s = state.current;
     const t = Date.now();
 
+    // Live feedback: "the willow should be affected by wind" -- same
+    // perpendicular-axis tilt Vegetation.jsx's ambient tree sway already
+    // uses (POLISH_SPEC §3), applied to the whole mesh since the willow is
+    // one static merged geometry, not per-instance. Re-asserting the base
+    // yaw via .rotation.set() first (auto-syncs the quaternion), THEN
+    // premultiplying the tilt on top, matches Vegetation.jsx's own pattern
+    // exactly rather than fighting between rotation/quaternion each frame.
+    if (willowRef.current) {
+      const clock = t / 1000;
+      willowRef.current.rotation.set(0, WILLOW_YAW, 0);
+      const swayAngle = windSway(WILLOW_POS[0], WILLOW_POS[2], clock, WILLOW_SWAY_AMPLITUDE);
+      if (swayAngle) {
+        tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
+        tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);
+        willowRef.current.quaternion.premultiply(tiltQuatTmp);
+      }
+    }
+
     // Idle recast every ~30s (skipped while an egg catch is running).
     if (!eggManager.running) {
       if (s.recastT < 0) {
@@ -524,7 +558,7 @@ export function PondAndGrandpa() {
       {/* Willow -- BACKLOG.md #6. Live feedback: moved again, marked directly
           on a screenshot -- between the water's edge and the grass on the
           side away from the bridge/stump, roughly level with the beach arc. */}
-      <mesh geometry={willowGeometry} position={[0.5, 0, 1.9]} rotation={[0, rad(15), 0]}>
+      <mesh ref={willowRef} geometry={willowGeometry} position={WILLOW_POS} rotation={[0, WILLOW_YAW, 0]}>
         <meshStandardMaterial vertexColors roughness={0.85} side={DoubleSide} />
       </mesh>
 
