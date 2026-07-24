@@ -292,7 +292,13 @@ export function CameraRig() {
       // toward a close orbit around Kolobok's live position instead --
       // narration/his own scripted movement keep going regardless, only
       // the camera's framing changes.
-      const pb = pivotBlend.current.value;
+      // Live feedback: rotating ALWAYS orbits the stone, regardless of
+      // whatever the eye toggle was set to before the drag started -- it
+      // immediately reverts to the chapter's own wide framing the instant
+      // you rotate, and only resumes wherever the eye toggle actually
+      // points (wide or close-Kolobok) once lookingAway itself resets
+      // after the idle timeout above.
+      const pb = orbit.lookingAway ? 0 : pivotBlend.current.value;
       // Suspended while lookingAway (the user dragged away, e.g. rotating
       // around the stone) -- see the lookingAway block above.
       const pushT = orbit.lookingAway ? 0 : encounterMotion.cameraPushT;
