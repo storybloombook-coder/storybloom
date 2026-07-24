@@ -17,16 +17,32 @@ export function initGreetWaveState() {
  *  approach/react phases proceed underneath (that beat's phases are much
  *  shorter than "2-3 seconds"). Returns a 0..1 rise-and-fall envelope;
  *  multiply by whatever amplitude/Hz wiggle reads right for that animal's
- *  own part. Resets (so it can fire again) once the encounter moves on. */
+ *  own part.
+ *
+ *  Once triggered, the wave ALWAYS finishes its own arc -- it does not
+ *  hard-reset just because the encounter ends or gets interrupted
+ *  (re-tapping a different animal, a swipe past 40px both clear
+ *  encounterMotion.zoneId/the store's `encounter` INSTANTLY, with no
+ *  transition of their own). Force-resetting the timer the moment isMine
+ *  went false used to snap the envelope from wherever it was straight to
+ *  0 in a single frame; letting it keep counting up to its own natural
+ *  GREET_WAVE_DURATION instead means it always eases out smoothly. */
 export function tickGreetWave(s, dt, isMine, mode) {
-  if (isMine && mode === 'encounter') {
-    if (!s.waved) { s.waved = true; s.t = 0; }
-  } else if (!isMine) {
-    s.waved = false;
-    s.t = -1;
+  if (isMine && mode === 'encounter' && !s.waved) {
+    s.waved = true;
+    s.t = 0;
   }
-  if (s.t < 0) return 0;
+  if (s.t < 0) {
+    // Not currently mid-wave -- clear the latch once it's no longer this
+    // animal's turn, so the NEXT encounter can trigger a fresh one.
+    if (!isMine) s.waved = false;
+    return 0;
+  }
   s.t += dt;
-  if (s.t > GREET_WAVE_DURATION) { s.t = -1; return 0; }
+  if (s.t > GREET_WAVE_DURATION) {
+    s.t = -1;
+    s.waved = false;
+    return 0;
+  }
   return Math.sin((s.t / GREET_WAVE_DURATION) * Math.PI);
 }
