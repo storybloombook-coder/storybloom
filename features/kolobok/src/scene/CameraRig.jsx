@@ -12,7 +12,7 @@ import { polish } from '../config/devFlags';
 // After the user stops steering the camera, how long before it counts as
 // "idle" again and eases back to auto-following Kolobok + dialogues (smoothly
 // re-converging via KOLOBOK_FOLLOW_LAG, not snapping). Tunable.
-const IDLE_RESUME_MS = 15000;
+const IDLE_RESUME_MS = 10000;
 
 // POLISH_SPEC §5 "never a static frame": idle camera breath, free mode
 // only -- suspended instantly on any input, resumes the instant it's been
@@ -181,8 +181,13 @@ export function CameraRig() {
     //   steering -> orbit a fixed pivot per the eye toggle (Kolobok / stone),
     //               ignoring dialogues.
     //   idle     -> auto-follow Kolobok AND focus dialogues.
+    // Deliberately orbit.lastDragAt (real drags only), NOT story.lastInputAt
+    // -- that field is ALSO bumped by story-driven encounter beats (see
+    // StoryDirector's `[encounter]` effect), which used to masquerade as
+    // "user is steering" and snap the camera into the tight Kolobok orbit
+    // every time a dialogue started.
     const steering = orbit.freeLookActive
-      || Date.now() - story.lastInputAt < IDLE_RESUME_MS;
+      || Date.now() - orbit.lastDragAt < IDLE_RESUME_MS;
 
     if (orbit.snapTarget !== null) {
       // Explicit snap request (nav button) always wins.
@@ -197,12 +202,15 @@ export function CameraRig() {
       orbit.velocity *= FRICTION;
     } else {
       // Idle: auto-follow Kolobok. Ease orbit.angle so he stays framed
-      // (kolobokAngle - LEAD), derived from his LIVE world position so it
-      // works whether the tale is driving him or he's parked. Writing the
-      // result back INTO orbit.angle means the next drag hands over exactly
-      // where the camera already is: zero jump.
-      const kAngle = Math.atan2(storyMotion.kolobokWorldPos[0], storyMotion.kolobokWorldPos[2]);
-      const camTarget = kAngle - KOLOBOK_LEAD;
+      // (kolobokAngle - LEAD). Uses the SCRIPTED storyMotion.kolobokAngle,
+      // not his raw world-position angle -- during posOverride beats (sill,
+      // snout) his true XZ position deliberately points a different
+      // direction than his staged angle (birth stages him at izba +
+      // BIRTH_STAGE specifically so the camera views the sill from an angle
+      // clear of the roofline; his real position is dead-on at izba, 0deg).
+      // Using the raw position would visibly drag the camera toward that
+      // unstaged angle the moment idle-follow took over mid-story.
+      const camTarget = storyMotion.kolobokAngle - KOLOBOK_LEAD;
       const d = angleDelta(orbit.angle, camTarget);
       orbit.angle += d * Math.min(1, KOLOBOK_FOLLOW_LAG * dt);
       orbit.velocity = 0;

@@ -28,7 +28,7 @@ const PITCH_OFFSET_MAX = 1.6;
 // instead (confirmed by reading react-three-fiber-native's source), which
 // MainScreen's wrapping ErrorBoundary already catches. That's the real
 // rescue path; a second onError plumbing line would just be dead code.
-export function Scene3D({ onNavigate }) {
+export function Scene3D({ onNavigate, focused = true }) {
   const activeZone = useSceneStore((s) => s.activeZone);
   const encounter = useSceneStore((s) => s.encounter);
   const narration = useSceneStore((s) => s.narration);
@@ -54,16 +54,24 @@ export function Scene3D({ onNavigate }) {
   // AppState pause (ANIMATION_SPEC §6 / WEATHER_SPEC §6): backgrounded ->
   // stop the frameloop entirely (no renders, no weather requests); active ->
   // resume + a foreground weather refresh (service debounces to 1 per 5min).
-  const [frameloop, setFrameloop] = useState('always');
+  const [appActive, setAppActive] = useState(true);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (st) => {
-      setFrameloop(st === 'active' ? 'always' : 'never');
+      setAppActive(st === 'active');
       if (st === 'active') {
         refreshWeather().then((w) => useSceneStore.getState().setWeatherState(w));
       }
     });
     return () => sub.remove();
   }, []);
+  // `focused` (from the host route's useIsFocused, see kolobok-preview.tsx):
+  // router.push keeps THIS screen mounted underneath whatever it navigated
+  // to, and nothing else pauses a mounted-but-hidden Canvas -- without this,
+  // the whole scene (including any autoplaying tale) keeps ticking while the
+  // user is on another screen, then visibly "catches up" on return instead
+  // of resuming from where they left it. Same frameloop knob as the AppState
+  // pause above, just gated on a second condition.
+  const frameloop = (appActive && focused) ? 'always' : 'never';
 
   // Finale gulp fade (STORY_SPEC §3 ch8): plain RN Animated (no new deps).
   // Out = 300ms to black; in = 900ms back, matching the chapter table.
@@ -95,6 +103,7 @@ export function Scene3D({ onNavigate }) {
     .onBegin(() => { orbit.freeLookActive = true; })
     .onChange((e) => {
       story.lastInputAt = Date.now();
+      orbit.lastDragAt = Date.now();
       if (orbit.mode === 'story') orbit.lookingAway = true;
       orbit.snapTarget = null;
       orbit.angle += -e.changeX * SWIPE_SENSITIVITY;

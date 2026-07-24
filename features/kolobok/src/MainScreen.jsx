@@ -19,7 +19,7 @@ import { useSceneStore } from './state/sceneStore';
  *  ErrorBoundary below already catches. A second, unverified error channel
  *  would just be dead code pretending to be a safety net. */
 export function MainScreen({
-  onNavigate, initialSceneMode, onSceneModeChange, onSceneError,
+  onNavigate, initialSceneMode, onSceneModeChange, onSceneError, focused = true,
 }) {
   const locale = useSceneStore((s) => s.locale);
   // Flat is the safe default while we don't yet know: flashing the 3D scene
@@ -60,7 +60,7 @@ export function MainScreen({
     <View style={styles.root}>
       {sceneMode === '3d' && Scene3D ? (
         <ErrorBoundary onError={rescueToFlat}>
-          <Scene3D onNavigate={onNavigate} />
+          <Scene3D onNavigate={onNavigate} focused={focused} />
         </ErrorBoundary>
       ) : (
         <FlatMenu onNavigate={onNavigate} locale={locale} />

@@ -34,6 +34,13 @@ export const orbit = {
   // own inverted relationship (camera chases Kolobok) and ignores this flag
   // entirely -- toggling it only matters in free/user mode.
   cameraFollow: true,
+  // ms epoch of the last real camera-DRAG gesture (Scene3D's pan onChange/
+  // onEnd only -- never touched by story/encounter events). CameraRig's
+  // steering-vs-idle decision reads this alone, so an animal encounter
+  // firing mid-story can never masquerade as "the user is steering" (that
+  // conflation, via the shared story.lastInputAt, was BACKLOG-review bug:
+  // camera snapping into a tight orbit whenever a dialogue beat started).
+  lastDragAt: 0,
 };
 
 // STORY_SPEC §1: the story state machine's own transient (chapter index,
@@ -58,7 +65,15 @@ export const story = {
 export const storyMotion = {
   kolobokAngle: 0,       // scripted path angle ('story' drive target)
   posOverride: null,     // [x,y,z] world pos while off the path (sill, snout, arcs)
-  scale: 1,              // 0 -> 1 birth pop, 1 -> 0 gulp
+  // Starts at 0 (not born yet): the very first launch's pre-birth idle
+  // window (StoryDirector's LAUNCH_IDLE_MS) would otherwise render him
+  // standing on the path at full size, THEN pop invisible when buildBirth's
+  // own `at:0` step claims the sill -- a visible spawn-then-vanish glitch.
+  // Starting hidden makes his birth-chapter pop-in (easeOutBack, 0 -> 1)
+  // the ONE and only reveal. Every later startChapter() call runs
+  // resetStoryMotion() first, which sets this back to 1, so this default
+  // only governs those first few pre-story seconds.
+  scale: 0,              // 0 -> 1 birth pop, 1 -> 0 gulp
   faceYaw: 0,            // look-around offset on the face group
   bodyTilt: 0,           // windowsill wobble / snout balance (root z-tilt)
   spinT: 0,              // 0..1, proud/defiant 360 spin progress
