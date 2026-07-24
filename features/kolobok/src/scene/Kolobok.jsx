@@ -79,6 +79,14 @@ function makeBrowGeometry() {
   // rotation.z) so the segment is centered on the ring's own "top" instead
   // -- reads as a symmetric brow curve rather than an off-center sliver.
   geo.rotateZ(Math.PI / 2 - BROW_ARC / 2);
+  // A ring SEGMENT isn't centered at the ring's own origin -- it sits out
+  // at BROW_ARC_RADIUS from it (confirmed: the un-translated arc floated
+  // that far above the eye on-device). Translate it back by that same
+  // radius, in the direction we just rotated it toward (+Y), so the arc's
+  // own visual center lands on the mesh's local origin -- exactly where
+  // the original box was centered, so position/rotation.z (unchanged)
+  // place it correctly again.
+  geo.translate(0, -BROW_ARC_RADIUS, 0);
   return geo;
 }
 
