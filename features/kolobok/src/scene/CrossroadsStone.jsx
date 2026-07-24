@@ -363,6 +363,7 @@ function Plaque({
  *  its own draw call because each carries a different baked label texture. */
 export function CrossroadsStone() {
   const plaqueGroupRef = useRef();
+  const plaqueGroupInitRef = useRef(false);
   const dustRef = useRef();
   const dustState = useRef({ timeline: null, y: 1 });
   const ambientDustRef = useRef();
@@ -515,6 +516,17 @@ export function CrossroadsStone() {
 
     let angularSpeed = 0;
     if (plaqueGroupRef.current) {
+      if (!plaqueGroupInitRef.current) {
+        // Snap to orbit.angle on the very first tick instead of easing up
+        // from the group's default rotation (0). orbit is a module-level
+        // singleton that outlives this component's own mount -- after any
+        // earlier camera movement this session, it can already be pointing
+        // somewhere other than 0 by the time this remounts, and easing the
+        // FRESH group up to match left the buttons' hitboxes visibly out of
+        // sync with where they appeared on screen for about a second.
+        plaqueGroupRef.current.rotation.y = orbit.angle;
+        plaqueGroupInitRef.current = true;
+      }
       const d = angleDelta(plaqueGroupRef.current.rotation.y, orbit.angle);
       const step = d * Math.min(1, FACE_LERP_RATE * dt);
       plaqueGroupRef.current.rotation.y += step;
