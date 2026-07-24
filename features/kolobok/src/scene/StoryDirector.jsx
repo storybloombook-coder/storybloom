@@ -6,7 +6,7 @@ import {
   orbit, story, storyMotion, useSceneStore,
 } from '../state/sceneStore';
 import { resetEncounterMotion } from './encounterBeats';
-import { CHAPTERS } from './storyChapters';
+import { CHAPTERS, buildRebirthResume } from './storyChapters';
 
 const LAUNCH_IDLE_MS = 1500;  // STORY_SPEC §1: sceneReady + 1.5s of no input
 const RESUME_IDLE_MS = 8000;  // §1: 8s idle in free mode resumes the story
@@ -50,6 +50,10 @@ export function StoryDirector() {
   const compositeRef = useRef(null);
   const reducedMotionRef = useRef(false);
   const mountedAtRef = useRef(Date.now());
+  // True while compositeRef holds buildRebirthResume's composite rather than
+  // an indexed CHAPTERS[] entry -- lets the composite-done handler route to
+  // startChapter(1) instead of the generic chapter+1 advance (see below).
+  const rebirthResumeActive = useRef(false);
 
   // ctx handed to every chapter builder: the discrete store actions plus
   // the finale's haptic hooks (STORY_SPEC §4: gulp + rebirth only).
@@ -111,11 +115,33 @@ export function StoryDirector() {
     st.setNarration(null);
     st.setStoryCompleted(false);
 
+    rebirthResumeActive.current = false;
     story.chapter = index;
     const built = CHAPTERS[index](ctxRef.current);
     storyMotion.kolobokAngle = built.startAngle;
     storyMotion.framing = built.framing; // fresh object -> CameraRig glides over 900ms
     compositeRef.current = built.composite;
+    orbit.mode = 'story';
+    story.mode = 'playing';
+    st.setStoryPlaying(true);
+  };
+
+  // Live feedback: the fox finale itself now stops the tale right at the
+  // gulp/SNAP (see buildFoxFinale/foxCatchGulpSteps) -- pressing ▶ from that
+  // stopped state plays THIS (the "Grandma just smiled..." rebirth pop)
+  // instead of restarting chapter 0's full cooking cinematic. Deliberately
+  // NOT startChapter(): that would resetStoryMotion() and pick a CHAPTERS[]
+  // entry, neither of which applies to this one-off resume composite.
+  const startRebirthResume = () => {
+    if (compositeRef.current) compositeRef.current.cancel();
+    const st = useSceneStore.getState();
+    st.setStoryCompleted(false);
+
+    const built = buildRebirthResume(ctxRef.current);
+    storyMotion.kolobokAngle = built.startAngle;
+    storyMotion.framing = built.framing;
+    compositeRef.current = built.composite;
+    rebirthResumeActive.current = true;
     orbit.mode = 'story';
     story.mode = 'playing';
     st.setStoryPlaying(true);
@@ -147,7 +173,13 @@ export function StoryDirector() {
     // ---- Manual controls (▶ / ❚❚), consumed transiently ----
     if (story.playRequest) {
       story.playRequest = false;
-      if (story.mode !== 'playing') startChapter(story.mode === 'paused' ? story.chapter : 0);
+      if (story.mode === 'stopped') {
+        // Only ever set by the finale's own gulp/SNAP ending below --
+        // resume via the rebirth pop, not a full chapter-0 replay.
+        startRebirthResume();
+      } else if (story.mode !== 'playing') {
+        startChapter(story.mode === 'paused' ? story.chapter : 0);
+      }
     }
     if (story.pauseRequest) {
       story.pauseRequest = false;
@@ -162,12 +194,30 @@ export function StoryDirector() {
         composite.tick(dt * STORY_TIME_SCALE);
         if (composite.done) {
           compositeRef.current = null;
+          if (rebirthResumeActive.current) {
+            // The restart-triggered rebirth pop just finished: continue the
+            // loop from chapter 1 (road), deliberately skipping chapter 0's
+            // full cooking cinematic.
+            rebirthResumeActive.current = false;
+            startChapter(1);
+            return;
+          }
           if (story.chapter === CHAPTERS.length - 1) {
-            // Finale done: stop instead of auto-looping -- the user restarts
-            // manually via the play button, which shows a restart icon
-            // while story.mode is 'stopped' (see Scene3D's storyCompleted).
+            // Finale's gulp/SNAP composite just ended (buildFoxFinale now
+            // stops there, see foxCatchGulpSteps) -- deliberately NOT
+            // stopStory('stopped') here: that calls resetStoryMotion() +
+            // setFadeBlack(false), which would instantly un-fade the screen
+            // and reveal Kolobok again before the user ever presses restart.
+            // Leave everything exactly as the finale left it (black,
+            // narration still reading "...and SNAP!...") -- the restart
+            // button (Scene3D's storyCompleted) is the only way forward,
+            // and pressing it plays the rebirth via startRebirthResume above.
             story.loopCount += 1;
-            stopStory('stopped');
+            st.setStoryPlaying(false);
+            st.setStoryCompleted(true);
+            orbit.mode = 'user';
+            story.mode = 'stopped';
+            story.idleClock = 0;
             return;
           }
           startChapter(story.chapter + 1);

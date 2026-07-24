@@ -6,6 +6,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#8a6444';
 const MUZZLE = '#b08a62';
@@ -48,6 +49,7 @@ export function Bear({ mode, isActiveZone }) {
     scratchSide: 1,
     approachZ: 0, swipeT: 0,
     wetShake: initWetShakeState(),
+    greetWave: initGreetWaveState(),
   });
 
   useFrame((_, delta) => {
@@ -96,6 +98,15 @@ export function Bear({ mode, isActiveZone }) {
     const grabReach = Math.sin(grabT * Math.PI) * ((45 * Math.PI) / 180); // both arms swing forward together
     const grabClose = Math.sin(grabT * Math.PI) * 0.12; // and inward, as if closing on something
 
+    // --- Tap greeting (live feedback): right arm raises + waves hello for
+    // ~2.6s right as the encounter starts -- Bear stands upright enough
+    // that this reads as a person-like wave, well past horizontal. Plays
+    // out on its own fixed timer, independent of the (much shorter)
+    // approach/react phase timing below, so it doesn't get cut short. ---
+    const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
+    const waveRaise = waveEnv * ((100 * Math.PI) / 180);
+    const waveWiggle = waveEnv > 0 ? Math.sin(s.greetWave.t * Math.PI * 2 * 2.5) * ((14 * Math.PI) / 180) : 0;
+
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
     if (rootRef.current) {
@@ -108,9 +119,20 @@ export function Bear({ mode, isActiveZone }) {
     if (armsRef.current) {
       const mesh = armsRef.current;
       [1, -1].forEach((side, i) => {
-        const isScratchArm = s.scratching && s.scratchSide === side;
-        const armX = isScratchArm ? scratchWiggle : grabReach;
-        const armZ = isScratchArm ? side * 0.15 : side * Math.max(0, 0.15 - grabClose);
+        const isWaveArm = side === 1 && waveEnv > 0; // right arm only
+        const isScratchArm = !isWaveArm && s.scratching && s.scratchSide === side;
+        let armX;
+        let armZ;
+        if (isWaveArm) {
+          armX = waveRaise;
+          armZ = side * 0.15 + waveWiggle;
+        } else if (isScratchArm) {
+          armX = scratchWiggle;
+          armZ = side * 0.15;
+        } else {
+          armX = grabReach;
+          armZ = side * Math.max(0, 0.15 - grabClose);
+        }
         dummy.position.set(0.32 * side, 0.85, 0.05);
         dummy.rotation.set(armX, 0, armZ);
         dummy.scale.setScalar(1);

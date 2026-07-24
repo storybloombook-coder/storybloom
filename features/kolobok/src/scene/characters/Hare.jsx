@@ -8,6 +8,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#d8d8d2';
 const BELLY = '#efeeea';
@@ -52,6 +53,7 @@ export function Hare({ mode, isActiveZone }) {
     sniffPhase: Math.random() * Math.PI * 2,
     approachZ: 0, reactT: 0, retreatZ: 0,
     wetShake: initWetShakeState(),
+    greetWave: initGreetWaveState(),
   });
 
   useFrame((_, delta) => {
@@ -115,6 +117,13 @@ export function Hare({ mode, isActiveZone }) {
     const reactHop = Math.sin(reactPhase * Math.PI) * 0.32;
     const reactZ = Math.sin(reactPhase * Math.PI) * 0.22;
 
+    // --- Tap greeting (live feedback): both ears wave hello (side to side)
+    // for ~2.6s right as the encounter starts -- Hare has no arms/paws, so
+    // the ears carry the greeting instead. Own fixed timer, independent of
+    // the (much shorter) approach/react phase timing above. ---
+    const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
+    const earWave = waveEnv > 0 ? Math.sin(s.greetWave.t * Math.PI * 2 * 3) * ((28 * Math.PI) / 180) * waveEnv : 0;
+
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
     if (rootRef.current) {
@@ -128,7 +137,7 @@ export function Hare({ mode, isActiveZone }) {
       const mesh = earsRef.current;
       [1, -1].forEach((side, i) => {
         dummy.position.set(0.06 * side, 0.7, 0.02);
-        dummy.rotation.set(-0.26 + s.earTwitch[i], 0, side * 0.05);
+        dummy.rotation.set(-0.26 + s.earTwitch[i], 0, side * 0.05 + earWave);
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);

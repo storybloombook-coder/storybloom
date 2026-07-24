@@ -6,6 +6,7 @@ import { encounterMotion, storyMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#d9722f';
 const CREAM = '#f2e8d8';
@@ -63,6 +64,7 @@ export function Fox({ mode, isActiveZone }) {
     tiltT: 0,
     approachZ: 0,
     wetShake: initWetShakeState(),
+    greetWave: initGreetWaveState(),
   });
 
   useFrame((_, delta) => {
@@ -85,7 +87,15 @@ export function Fox({ mode, isActiveZone }) {
     // sway x1.6. ---
     s.swayPhase += dt * Math.PI * 2 * 0.4;
     const amp = inEncounter ? (14 * Math.PI) / 180 * 1.6 : (14 * Math.PI) / 180;
-    s.baseAngle = Math.sin(s.swayPhase) * amp;
+
+    // --- Tap greeting (live feedback): an extra big wag layered on top of
+    // the ambient sway for ~2.6s right as the encounter starts -- Wolf/Fox
+    // share their tails for this rather than adding a new limb. Own fixed
+    // timer, independent of the (much shorter) approach/react phasing. ---
+    const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
+    const tailWave = waveEnv > 0 ? Math.sin(s.greetWave.t * Math.PI * 2 * 2.2) * ((30 * Math.PI) / 180) * waveEnv : 0;
+
+    s.baseAngle = Math.sin(s.swayPhase) * amp + tailWave;
     s.tipAngle += (s.baseAngle - s.tipAngle) * (1 - Math.exp(-dt / 0.2));
     const tipAngle = s.tipAngle;
 

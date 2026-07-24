@@ -181,11 +181,14 @@ function buildAnimalChapter(zoneId, bragKey) {
   };
 }
 
-/** The gulp -> fade -> rebirth tail (STORY_SPEC §4: shared by the finale
- *  and, in Phase 7, the fox easter egg -- same beats, parameterized
- *  narration/haptics hooks). Returns a STEP ARRAY offset to `at0` so the
- *  caller can splice it into its own timeline. */
-export function foxCatchSteps(ctx, at0 = 0) {
+/** Toss -> gulp -> "...and SNAP!" -> the (invisible, still-black) reset to
+ *  izba staging. Ends on a held black screen -- the fox easter egg continues
+ *  straight into foxCatchRebirthSteps in the SAME beat, but the tale's own
+ *  finale (buildFoxFinale) uses ONLY this half and stops the story right
+ *  here: live feedback wants the tale to visibly END at "the fox ate him",
+ *  with the rebirth ("Grandma just smiled...") gated behind the restart
+ *  button instead of auto-playing. Returns a STEP ARRAY offset to `at0`. */
+export function foxCatchGulpSteps(ctx, at0 = 0) {
   // Captured on the toss's first frame so the 0.9 rise is an absolute
   // offset from wherever he was sitting (snout for the finale; the egg may
   // stage him differently), not a frame-rate-dependent accumulation.
@@ -216,7 +219,9 @@ export function foxCatchSteps(ctx, at0 = 0) {
     },
     { at: at0 + 1100, call: () => ctx.setNarration('story.snap') },
     // While black: reset everything to the izba (staged like the birth so
-    // the rebirth pop is framed clear of the roofline).
+    // the rebirth pop is framed clear of the roofline) -- invisible either
+    // way, so no harm doing this now vs. whenever the rebirth eventually
+    // plays.
     {
       at: at0 + 2600,
       call: () => {
@@ -231,14 +236,29 @@ export function foxCatchSteps(ctx, at0 = 0) {
         encounterMotion.phaseT = 0;
       },
     },
+    // Hold on black a beat so "...and SNAP!..." has time to land before the
+    // finale's composite reports done and the restart button appears.
+    { at: at0 + 3400, call: () => {} },
+  ];
+}
+
+/** Fade back in + "Grandma just smiled -- and baked another" + the rebirth
+ *  pop + hop back onto the path. Picks up exactly where foxCatchGulpSteps
+ *  left off (screen black, Kolobok gone, izba framing/angle already
+ *  staged). Used both by the fox easter egg (continuing the same beat) and
+ *  by StoryDirector's restart-button handler (its own fresh composite,
+ *  started only once the user presses ▶ after the finale). Returns a STEP
+ *  ARRAY offset to `at0`. */
+export function foxCatchRebirthSteps(ctx, at0 = 0) {
+  return [
     // Fade back in (RN side: 900ms), window glows, smoke puffs.
-    { at: at0 + 3100, call: () => { ctx.setFadeBlack(false); storyMotion.windowGlow = 1; storyMotion.smokeBoost = 2; } },
+    { at: at0, call: () => { ctx.setFadeBlack(false); storyMotion.windowGlow = 1; storyMotion.smokeBoost = 2; } },
     // Rebirth pop on the sill.
-    { at: at0 + 4000, call: () => { ctx.setNarration('story.rebirth'); storyMotion.posOverride = [...SILL_POS]; ctx.onRebirth?.(); } },
-    { at: at0 + 4000, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
+    { at: at0 + 900, call: () => { ctx.setNarration('story.rebirth'); storyMotion.posOverride = [...SILL_POS]; ctx.onRebirth?.(); } },
+    { at: at0 + 900, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
     // Quick hop down to the path so the next road chapter starts grounded.
     {
-      at: at0 + 5400,
+      at: at0 + 2300,
       dur: 500,
       ease: 'easeInOutSine',
       update: (t) => {
@@ -248,7 +268,7 @@ export function foxCatchSteps(ctx, at0 = 0) {
       },
     },
     {
-      at: at0 + 5900,
+      at: at0 + 2800,
       call: () => {
         storyMotion.posOverride = null;
         storyMotion.windowGlow = 0;
@@ -258,8 +278,16 @@ export function foxCatchSteps(ctx, at0 = 0) {
     },
     // Ease the staged angle back to the izba so the looping road chapter
     // picks him up exactly where it expects to start.
-    { at: at0 + 5900, dur: 300, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
+    { at: at0 + 2800, dur: 300, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
   ];
+}
+
+/** The full gulp -> fade -> rebirth tail, unchanged as a single continuous
+ *  beat -- kept for the fox easter egg (runFoxCatch in easterEggs.js), which
+ *  plays start to finish in one go (a quick free-mode aside, not the tale's
+ *  own ending, so it has no restart-button gate). */
+export function foxCatchSteps(ctx, at0 = 0) {
+  return [...foxCatchGulpSteps(ctx, at0), ...foxCatchRebirthSteps(ctx, at0 + 3100)];
 }
 
 /** Chapter 8 — Fox finale (12s): the one time the tale wins. */
@@ -301,13 +329,36 @@ function buildFoxFinale(ctx) {
     // Balance wobble on the snout: +-5 deg at 3Hz until the toss.
     { at: 5300, dur: 500, update: (t) => { storyMotion.bodyTilt = Math.sin(t * Math.PI * 2 * 1.5) * rad(5); } },
     { at: 5800, call: () => { storyMotion.bodyTilt = 0; } },
-    // §4-shared gulp/fade/rebirth tail, offset to 5800 (toss at 5800,
-    // gulp 6400, snap 6900, reset 8400, fade-in 8900, pop 9800, down
-    // 11200, done 11700 -- matching the §3 chapter-8 table).
-    ...foxCatchSteps(ctx, 5800),
-    { at: 12000, call: () => {} },
+    // Live feedback: the tale should visibly END here -- toss (5800), gulp
+    // (6400), "...and SNAP!..." (6900), reset-while-black (8400), hold
+    // (9200) -- and STOP, screen held black, restart button appearing.
+    // Only the ▶ press (StoryDirector's startRebirthResume) plays
+    // foxCatchRebirthSteps (the "Grandma just smiled..." pop) from here.
+    ...foxCatchGulpSteps(ctx, 5800),
   ]);
   return { composite: composeTimelines(tl), startAngle: foxAngle, framing: { ...FRAMING.foxStart } };
+}
+
+/** Restart-button resume after the fox finale (live feedback): the tale
+ *  itself stops at the gulp/SNAP (see buildFoxFinale above); pressing ▶
+ *  from that stopped state plays THIS instead of replaying chapter 0 --
+ *  "Grandma just smiled -- and baked another" + the rebirth pop, picking up
+ *  exactly where the finale left off (screen black, Kolobok gone, izba
+ *  framing/angle already staged by foxCatchGulpSteps's own reset step).
+ *  Once this finishes, StoryDirector moves on to chapter 1 (road to hare),
+ *  deliberately skipping chapter 0's full cooking cinematic every time --
+ *  Grandma "just" baked him, no need to rewatch the kneading on every
+ *  restart. */
+export function buildRebirthResume(ctx) {
+  const tl = createTimeline([
+    ...foxCatchRebirthSteps(ctx, 0),
+    { at: 3100, call: () => {} },
+  ]);
+  return {
+    composite: composeTimelines(tl),
+    startAngle: ZONE_ANGLE.izba + BIRTH_STAGE,
+    framing: { ...FRAMING.birth },
+  };
 }
 
 // Chapter order (STORY_SPEC §2). Loop: after 8, back to 1 (or 0 every 4th).

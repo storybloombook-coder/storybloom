@@ -6,6 +6,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#7d8a96';
 const BELLY = '#aab4bd';
@@ -21,6 +22,7 @@ const HOWL_INTERVAL = 12;
 export function Wolf({ mode, isActiveZone }) {
   const rootRef = useRef();
   const headGroupRef = useRef();
+  const tailRef = useRef();
 
   const bodyGeometry = useMemo(() => mergeColoredParts([
     // Torso, forward-leaning.
@@ -30,8 +32,8 @@ export function Wolf({ mode, isActiveZone }) {
     ...[[0.13, 0.14], [-0.13, 0.14], [0.13, -0.16], [-0.13, -0.16]].map(([x, z]) => ({
       geometry: new CapsuleGeometry(0.06, 0.32, 2, 6), color: FUR, position: [x, 0.2, z],
     })),
-    // Tail, drooping.
-    { geometry: new CapsuleGeometry(0.06, 0.4, 2, 6), color: FUR, position: [0, 0.5, -0.42], rotation: [(-30 * Math.PI) / 180, 0, 0] },
+    // Tail is NOT merged here -- it gets its own group (see JSX below) so it
+    // can wag independently for the tap-greeting wave (live feedback).
   ]), []);
 
   const headGeometry = useMemo(() => mergeColoredParts([
@@ -46,6 +48,7 @@ export function Wolf({ mode, isActiveZone }) {
   const materials = useMemo(() => ({
     body: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
     head: makeToonMaterial({ vertexColors: true, color: FUR, rimStrength: 0.35 }),
+    tail: makeToonMaterial({ color: FUR, rimStrength: 0.35 }),
   }), []);
 
   const state = useRef({
@@ -56,6 +59,7 @@ export function Wolf({ mode, isActiveZone }) {
     shakeT: 1,
     approachZ: 0, snapT: 0,
     wetShake: initWetShakeState(),
+    greetWave: initGreetWaveState(),
   });
 
   useFrame((_, delta) => {
@@ -108,6 +112,13 @@ export function Wolf({ mode, isActiveZone }) {
     const snapPhase = Math.min(s.snapT, 1);
     const snapZ = Math.sin(snapPhase * Math.PI) * 0.28;
     const snapY = Math.sin(snapPhase * Math.PI) * 0.22;
+
+    // --- Tap greeting (live feedback): tail wags side to side for ~2.6s
+    // right as the encounter starts -- Wolf/Fox share their tails for this
+    // rather than adding a new limb. Own fixed timer, independent of the
+    // (much shorter) approach/react phase timing above. ---
+    const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
+    const tailWag = waveEnv > 0 ? Math.sin(s.greetWave.t * Math.PI * 2 * 2.2) * ((30 * Math.PI) / 180) * waveEnv : 0;
     // Head shake only once he's landed (back half of the arc), not while
     // mid-air -- a wolf mid-leap doesn't shake its head.
     const shakeYaw = snapPhase > 0.6 ? Math.sin((snapPhase - 0.6) / 0.4 * Math.PI * 4) * ((10 * Math.PI) / 180) : 0;
@@ -124,6 +135,7 @@ export function Wolf({ mode, isActiveZone }) {
       headGroupRef.current.rotation.x = -howlPitch;
       headGroupRef.current.rotation.y = sweepYaw + shakeYaw;
     }
+    if (tailRef.current) tailRef.current.rotation.y = tailWag;
   });
 
   return (
@@ -132,6 +144,13 @@ export function Wolf({ mode, isActiveZone }) {
       <mesh geometry={bodyGeometry} material={materials.body} />
       <group ref={headGroupRef} position={[0, 0.72, 0.22]}>
         <mesh geometry={headGeometry} material={materials.head} />
+      </group>
+      {/* Tail: own group (not merged into bodyGeometry) so it can wag for
+          the tap-greeting wave -- same rest position/tilt as before. */}
+      <group ref={tailRef} position={[0, 0.5, -0.42]}>
+        <mesh rotation={[(-30 * Math.PI) / 180, 0, 0]} material={materials.tail}>
+          <capsuleGeometry args={[0.06, 0.4, 2, 6]} />
+        </mesh>
       </group>
     </group>
   );
