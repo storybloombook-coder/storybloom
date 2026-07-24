@@ -551,17 +551,22 @@ export function Kolobok() {
             <mesh position={[0.06 * FACE_SCALE, 0, 0]} material={materials.eyePupil}>
               <sphereGeometry args={[0.055 * FACE_SCALE, 10, 10]} />
             </mesh>
-            {/* Eyelid: hemisphere big enough to fully cover the eye white
-                AND the forward-offset pupil (0.14 radius vs the 0.11 white
-                and the pupil poking 0.06 forward), so a closed blink reads
-                as shut rather than leaving the pupil peeking through. */}
+            {/* Eyelid: a SHALLOW spherical cap (30deg of arc, not a full
+                90deg hemisphere dome) -- BACKLOG #14: the old full-dome
+                shape, scaled uniformly from near-zero during a blink, read
+                as a rounded bump/stick poking out rather than a lid
+                sweeping down. Radius bumped (0.14 -> 0.28) so the cap's
+                BASE radius (R*sin(30deg) = 0.5R) still lands on the same
+                0.14 footprint -- full coverage of the eye white AND the
+                forward-offset pupil unchanged -- just flatter/arc-shaped
+                instead of ball-shaped at every scale in between. */}
             <mesh
               ref={side === 1 ? leftEyelid : rightEyelid}
               position={[0.03 * FACE_SCALE, 0.02 * FACE_SCALE, 0]}
               scale={0.001}
               material={materials.eyelid}
             >
-              <sphereGeometry args={[0.14 * FACE_SCALE, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
+              <sphereGeometry args={[0.28 * FACE_SCALE, 12, 8, 0, Math.PI * 2, 0, Math.PI / 6]} />
             </mesh>
           </group>
         ))}

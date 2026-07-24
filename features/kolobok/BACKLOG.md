@@ -17,19 +17,14 @@ code as of that session -- verify they still apply before trusting them.
    Confirmed "okay-ish" on device -- user flagged it may get revisited later
    but not blocking, move on for now.
 
-3. **Stronger rain + puddles**: `src/scene/WeatherSystems.jsx` rain system
-   (`RAIN_COUNT`, streak sprites) -- increase density/visual weight, and add
-   a puddle system (a handful of flattened reflective-ish disc decals that
-   fade in while raining, persist briefly after, fade out -- similar
-   lifecycle to the ground-mist "10 min after rain ends" rule already there).
+3. ~~**Stronger rain + puddles**~~ -- DONE (this backlog entry was stale;
+   already implemented). `src/scene/WeatherSystems.jsx`: `RAIN_COUNT` bumped
+   220 -> 380; a 6-spot puddle system (`PUDDLE_SPOTS`, kept clear of zone
+   landmarks/pond) plus pothole puddles (BACKLOG #16) share one `wetness`
+   ramp that fills fast while raining and drains slowly after.
 
-4. **Birth-chapter forward-then-snap-back bug**: right after spawning,
-   Kolobok rolls forward some distance then jumps sharply backward -- a real
-   bug, not intended. Likely in `src/scene/storyChapters.js` `buildBirth`
-   (the COOKING_DELTA-shifted timeline) or the birth->road angle handoff --
-   check `storyMotion.kolobokAngle` easing around the jump-off-the-sill and
-   settle-back-to-izba-angle steps (`at: 6600+COOKING_DELTA` block) for a
-   sign/direction mismatch.
+4. ~~**Birth-chapter forward-then-snap-back bug**~~ -- DROPPED, user said
+   "keep as it is." Not investigating further.
 
 5. ~~**Fox-catch VFX**~~ -- DONE (`src/scene/KolobokParticles.jsx`: light-ray
    instancedMesh + smoke `points`, triggered via `storyMotion.catchBurstId`
@@ -150,23 +145,15 @@ code as of that session -- verify they still apply before trusting them.
     (e.g., potholes fill with water/reflect during rain, dust/dry look
     otherwise). Keep it sparse ("just a few"), not a full terrain system.
 
-17. **Reeds shouldn't press into the bridge** -- IMPLEMENTED (awaiting
-    on-device confirmation; device was loading a stale bundle at time of
-    change). `src/scene/PondAndGrandpa.jsx`: precomputed `BRIDGE_LOCAL_POINTS`
-    (the bridge centerline sampled in pond-local space via the existing
-    `bridgeWorldToLocal`, same points `bridgeParts` uses) and added a
-    keep-clear in `reedParts` -- a candidate reed is rejected if it lands
-    within `BRIDGE_CLEARANCE` (0.6) of any bridge point in the local XZ
-    plane, same shape as the existing Grandpa-stump reject. Placement guard
-    raised 60 -> 120 so the extra rejection doesn't thin out the reed count.
-    Smoke-tested (`expo export`) + lint clean. `BRIDGE_CLEARANCE` is the knob
-    if reeds end up too far from / too close to the deck.
+17. ~~**Reeds shouldn't press into the bridge**~~ -- DONE, confirmed on
+    device ("all good"). `src/scene/PondAndGrandpa.jsx`: precomputed
+    `BRIDGE_LOCAL_POINTS` (the bridge centerline sampled in pond-local space
+    via the existing `bridgeWorldToLocal`, same points `bridgeParts` uses)
+    and added a keep-clear in `reedParts` -- a candidate reed is rejected if
+    it lands within `BRIDGE_CLEARANCE` (0.6) of any bridge point in the
+    local XZ plane, same shape as the existing Grandpa-stump reject.
 
 ## Parked (explicitly "for later, not now")
 
-- **Crossroads signpost redesign**: replace the stone with a signpost;
-  instead of a fixed menu, three buttons rotate with a delay toward the
-  viewer's position with springy movement. (Partially superseded/merged
-  into item 9 above, which the user described in more concrete "grooves +
-  orbiting buttons" terms on the same stone base -- reconcile the two
-  before implementing either.)
+(none currently -- Crossroads signpost redesign was dropped, superseded by
+item 9's stone-with-orbiting-plaques rework.)

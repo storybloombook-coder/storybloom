@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
   AdditiveBlending, BoxGeometry, BufferAttribute, BufferGeometry, CapsuleGeometry, ConeGeometry,
-  CylinderGeometry, DoubleSide, Matrix4, Object3D, Quaternion, SphereGeometry, Vector3,
+  CylinderGeometry, DoubleSide, Euler, Matrix4, Object3D, Quaternion, SphereGeometry, Vector3,
 } from 'three';
 import {
   rad, pointOnCircle, POND_ANGLE_DEG, POND_RADIUS, PATH_RADIUS,
@@ -175,12 +175,27 @@ export function PondAndGrandpa() {
     for (let i = 0; i < FROND_COUNT; i++) {
       const angle = (i / FROND_COUNT) * Math.PI * 2 + rng() * 0.5;
       const len = 0.5 + rng() * 0.3;
-      const tilt = rad(58) + rng() * rad(18); // mostly downward droop
+      // Live feedback: fronds were growing out to the sides, not falling
+      // down -- the old 58-76deg tilt off vertical is CLOSER to horizontal
+      // than vertical (sin(58deg)=0.85 sideways vs cos(58deg)=0.53 down).
+      // Now a small lean off straight-down instead.
+      const tilt = rad(8) + rng() * rad(14);
       const rIn = 0.16 + rng() * 0.08;
+      // Anchor at the canopy attach point and hang the cylinder's CENTER
+      // half its own length below that, along the same rotated "down"
+      // direction as its own orientation -- otherwise, since `position` is
+      // the cylinder's center, half the frond would still poke up above
+      // the canopy even at a small tilt (same fix as Bear's shoulder-pivot
+      // arm: don't rotate a part around its own center when it's meant to
+      // hang/swing from one end).
+      const attachX = Math.sin(angle) * rIn;
+      const attachY = WILLOW_CANOPY_Y - 0.05;
+      const attachZ = Math.cos(angle) * rIn;
+      const hang = new Vector3(0, -len / 2, 0).applyEuler(new Euler(tilt, angle, 0));
       parts.push({
         geometry: new CylinderGeometry(0.01, 0.018, len, 4),
         color: '#9bb06a',
-        position: [Math.sin(angle) * rIn, WILLOW_CANOPY_Y - 0.08, Math.cos(angle) * rIn],
+        position: [attachX + hang.x, attachY + hang.y, attachZ + hang.z],
         rotation: [tilt, angle, 0],
       });
     }

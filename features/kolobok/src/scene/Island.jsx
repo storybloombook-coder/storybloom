@@ -11,6 +11,12 @@ import { jitterVertices } from './builders/vertexJitter';
 import { SPRUCE_OCCUPIED } from './Vegetation';
 
 const BASE_GRASS = [0x7a / 255, 0xa8 / 255, 0x5c / 255];
+// Live feedback: hills should read greener than the surrounding grass, the
+// green deepening from the base up to the top -- blended in useGroundGeometry
+// by the SAME 0..1 falloff that drives the height bump itself (hillBumpAt),
+// so the color gradient and the geometric rise always agree on "how high up
+// this point is."
+const HILL_GREEN_TOP = [0x4a / 255, 0x9c / 255, 0x38 / 255];
 
 // The dirt path ring stops short on either side of Grandpa's pond -- the
 // new wooden bridge (PondAndGrandpa.jsx, spanning local Z=1.0, i.e. world
@@ -138,6 +144,17 @@ function useGroundGeometry() {
         g = g + (secondClosest.rgb[1] - g) * clump;
         b = b + (secondClosest.rgb[2] - b) * clump;
       }
+      // Live feedback: hills should read greener than the base grass, the
+      // green deepening toward the top -- reuse the SAME height bump (0 at
+      // the base/edge, HILL_HEIGHT at the exact center/top) as the blend
+      // factor, so the color gradient always matches the geometric rise.
+      const hillH = hillBumpAt(x, z);
+      if (hillH > 0) {
+        const hillT = Math.min(1, hillH / HILL_HEIGHT);
+        r = r + (HILL_GREEN_TOP[0] - r) * hillT;
+        g = g + (HILL_GREEN_TOP[1] - g) * hillT;
+        b = b + (HILL_GREEN_TOP[2] - b) * hillT;
+      }
       // BACKLOG.md #16: darken toward exposed dirt inside a pothole's
       // radius -- live feedback: they need to read as darker than the
       // grass around them (not just a subtle geometric dip) to stand out.
@@ -152,7 +169,7 @@ function useGroundGeometry() {
       colors[i * 3] = Math.min(1, Math.max(0, r + noise));
       colors[i * 3 + 1] = Math.min(1, Math.max(0, g + noise));
       colors[i * 3 + 2] = Math.min(1, Math.max(0, b + noise));
-      pos.setZ(i, hillBumpAt(x, z) - potholeF * POTHOLE_DEPTH);
+      pos.setZ(i, hillH - potholeF * POTHOLE_DEPTH);
     }
     geo.setAttribute('color', new BufferAttribute(colors, 3));
     geo.computeVertexNormals();
@@ -218,11 +235,22 @@ const HILL_SPOTS = (() => {
 // Exported so WeatherSystems.jsx can drop a matching puddle disc exactly in
 // each crater's floor once it rains (same idea as Vegetation.jsx exporting
 // SPRUCE_TOP_MATRICES for the snow-cap system).
+// Live feedback: potholes read as too-similar same-size circles clustered
+// close together. Fixed three ways: (1) a much wider size range (was
+// 0.75-1.15x POTHOLE_RADIUS, now 0.55-1.3x), (2) each one is a squashed,
+// rotated ELLIPSE rather than a perfect circle (rMinor/rot below) --
+// potholeFactorAt uses these for its falloff -- so no two look alike even
+// at similar sizes, and (3) an actual pothole-vs-pothole keep-clear check,
+// which was missing entirely (only checked against hills/spruces before).
+// Guard cap raised (8000 -> 15000) since the new pairwise check makes
+// placement pickier; verified via a standalone simulation that 9 still
+// place reliably (~1000 guard iterations used) well under this cap.
+const POTHOLE_GAP = 0.4;
 export const POTHOLE_SPOTS = (() => {
   const rng = makeRng(97);
   const out = [];
   let guard = 0;
-  while (out.length < POTHOLE_COUNT && guard < 8000) {
+  while (out.length < POTHOLE_COUNT && guard < 15000) {
     guard += 1;
     const angleDeg = rng() * 360;
     const angleRad = rad(angleDeg);
@@ -230,10 +258,15 @@ export const POTHOLE_SPOTS = (() => {
     const radius = OPEN_BAND_MIN_R + rng() * (OPEN_BAND_MAX_R - OPEN_BAND_MIN_R);
     const x = Math.sin(angleRad) * radius;
     const z = Math.cos(angleRad) * radius;
-    const r = POTHOLE_RADIUS * (0.75 + rng() * 0.4);
+    const r = POTHOLE_RADIUS * (0.55 + rng() * 0.75); // major axis / keep-clear bounding radius
+    const rMinor = r * (0.55 + rng() * 0.35); // minor axis: 55-90% of major -- an ellipse, not a circle
+    const rot = rng() * Math.PI;
     if (HILL_SPOTS.some((h) => Math.hypot(x - h.x, z - h.z) < r + h.r + 0.3)) continue;
     if (SPRUCE_OCCUPIED.some((s) => Math.hypot(x - s.x, z - s.z) < r + s.r + 0.3)) continue;
-    out.push({ x, z, r });
+    if (out.some((o) => Math.hypot(x - o.x, z - o.z) < r + o.r + POTHOLE_GAP)) continue;
+    out.push({
+      x, z, r, rMinor, rot,
+    });
   }
   return out;
 })();
@@ -254,11 +287,21 @@ function hillBumpAt(x, z) {
 // 0 outside every pothole, up to 1 at a crater's exact center -- shared by
 // both the height dip AND the color darkening below, so the visual "hole"
 // and the actual geometric dip always agree on where the crater is.
+// Elliptical (not circular): rotates into each hole's own local frame and
+// normalizes by its two radii (r = major, rMinor = minor), so the falloff
+// -- and therefore the crater's actual carved shape -- is a squashed oval
+// per BACKLOG #16's live feedback, not a stamped-identical circle.
 function potholeFactorAt(x, z) {
   let f = 0;
   for (const hole of POTHOLE_SPOTS) {
-    const d = Math.hypot(x - hole.x, z - hole.z);
-    if (d < hole.r) f = Math.max(f, Math.cos((d / hole.r) * (Math.PI / 2)));
+    const dx = x - hole.x;
+    const dz = z - hole.z;
+    const cos = Math.cos(-hole.rot);
+    const sin = Math.sin(-hole.rot);
+    const lx = dx * cos - dz * sin;
+    const lz = dx * sin + dz * cos;
+    const d = Math.hypot(lx / hole.r, lz / hole.rMinor);
+    if (d < 1) f = Math.max(f, Math.cos(d * (Math.PI / 2)));
   }
   return f;
 }
