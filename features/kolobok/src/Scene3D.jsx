@@ -95,20 +95,17 @@ export function Scene3D({ onNavigate, focused = true }) {
   // to the Canvas's own pointer handling to reach Kolobok/plaques/animals --
   // only an actual drag past that small threshold moves the camera. Kept low
   // so the drag engages promptly instead of feeling sticky at the start.
-  // freeLookActive is set in onStart (fires only once the gesture actually
-  // ACTIVATES, i.e. past minDistance), not onBegin (fires on every touch-
-  // down, activated or not) -- onBegin here left a plain tap with freeLook
-  // stuck true forever, since onEnd never followed to reset it, which
-  // locked the camera into "steering" mode after literally any tap.
   const pan = Gesture.Pan()
     .minPointers(1)
     .maxPointers(1)
     .minDistance(4)
     .runOnJS(true)
-    .onStart(() => { orbit.freeLookActive = true; })
+    .onBegin(() => { orbit.freeLookActive = true; })
     .onChange((e) => {
       story.lastInputAt = Date.now();
+      orbit.lastDragAt = Date.now();
       if (orbit.mode === 'story') orbit.lookingAway = true;
+      orbit.snapTarget = null;
       orbit.angle += -e.changeX * SWIPE_SENSITIVITY;
       orbit.velocity = 0;
       // Free-look: vertical drag nudges camera height/tilt on top of
@@ -215,11 +212,11 @@ export function Scene3D({ onNavigate, focused = true }) {
       </Pressable>
 
       {/* Eye toggle: identical 40x40 circle, stacked directly above the
-          play/pause button. Free/user mode only (story mode ignores it
-          entirely). OFF (default) = wide, whole-scene view, orbiting the
-          island center. ON = camera eases into a close orbit around
-          Kolobok instead (CameraRig.jsx's pivotBlend) -- dimmed background
-          is the only visual state change, same eye glyph either way. */}
+          play/pause button. ON (default) = Kolobok chases the camera and it
+          soft-snaps onto zones, same as always; OFF = a genuinely detached
+          free camera (CameraRig.jsx skips the zone soft-snap, Kolobok.jsx
+          freezes his own angle) -- dimmed background is the only visual
+          state change, same eye glyph either way. */}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={cameraFollow ? t('ui.disableFollow', locale) : t('ui.enableFollow', locale)}

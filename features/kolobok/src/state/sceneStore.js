@@ -6,6 +6,7 @@ import { detectLocale, t } from '../config/strings';
 export const orbit = {
   angle: 0,        // current camera angle (radians)
   velocity: 0,     // radians / frame impulse from gestures
+  snapTarget: null, // set to an angle to make the camera ease there (nav buttons)
   // STORY_SPEC §1 control inversion: 'user' = gestures drive orbit.angle and
   // Kolobok chases the camera; 'story' = StoryDirector drives Kolobok's
   // angle (storyMotion.kolobokAngle) and the CAMERA chases him instead.
@@ -18,20 +19,28 @@ export const orbit = {
   // Eases back to 0 in CameraRig the instant the drag ends -- "temporarily
   // overrides the framing, snaps back on release", never a persisted state.
   pitchOffset: 0,
-  freeLookActive: false, // true only while a genuine drag is in progress
+  freeLookActive: false, // true only while a vertical drag is in progress
   // Story mode: true the instant the user drags, letting them look at the
   // scene from any angle WITHOUT pausing the tale (Kolobok/narration keep
   // going) -- CameraRig just stops correcting orbit.angle back toward the
   // story's tracked azimuth while this is true, and resumes (smoothly
   // re-converging, not snapping) after 15s of no input.
   lookingAway: false,
-  // Eye-toggle button (Scene3D), free/user mode only -- story mode ignores
-  // this entirely (it's always camera-chases-Kolobok there). false
-  // (default) = wide, whole-scene view, orbiting the island center. true =
-  // close orbit around Kolobok's live world position. CameraRig eases
-  // between the two on toggle rather than cutting; a drag always rotates
-  // the orbit around whichever one is currently active.
-  cameraFollow: false,
+  // Eye-toggle button (Scene3D): true (default) = the usual free-mode
+  // relationship, Kolobok chases the camera and the camera soft-snaps onto
+  // whichever zone it drifts near. false = a genuinely detached free-look --
+  // CameraRig skips the zone soft-snap and Kolobok.jsx freezes its own angle
+  // (stops chasing orbit.angle) while in free/user mode. Story mode is its
+  // own inverted relationship (camera chases Kolobok) and ignores this flag
+  // entirely -- toggling it only matters in free/user mode.
+  cameraFollow: true,
+  // ms epoch of the last real camera-DRAG gesture (Scene3D's pan onChange/
+  // onEnd only -- never touched by story/encounter events). CameraRig's
+  // steering-vs-idle decision reads this alone, so an animal encounter
+  // firing mid-story can never masquerade as "the user is steering" (that
+  // conflation, via the shared story.lastInputAt, was BACKLOG-review bug:
+  // camera snapping into a tight orbit whenever a dialogue beat started).
+  lastDragAt: 0,
 };
 
 // STORY_SPEC §1: the story state machine's own transient (chapter index,
