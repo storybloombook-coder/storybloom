@@ -32,6 +32,12 @@ const ENCOUNTER_PUSH_IN = 0.04;
 const FRICTION = 0.94;        // per-frame velocity decay
 const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transition (story mode)
 
+// How long orbit.lookingAway (story mode, set on drag -- see Scene3D) holds
+// the camera under manual control before auto-follow resumes on its own.
+// Live feedback: this reset went missing in an earlier rewrite this
+// session, leaving lookingAway stuck true forever after the first drag.
+const LOOK_AWAY_TIMEOUT_MS = 15000;
+
 // The eye toggle's two framings, blended via pivotBlend below rather than
 // snapped -- works in BOTH modes now (live feedback: "let me switch the
 // focus on kolobok when the story is in the process"):
@@ -194,9 +200,15 @@ export function CameraRig() {
       // interrupt) hands control over exactly where the camera already is:
       // zero jump. Dragging sets orbit.lookingAway (Scene3D) without
       // pausing the tale -- the user gets to look at the scene from any
-      // angle while Kolobok and narration keep going. Auto-follow resumes
-      // on its own 15s after the last input (CameraRig no longer tracks
-      // that timer itself; StoryDirector/Scene3D own lookingAway).
+      // angle (e.g. rotating around the stone) while Kolobok and narration
+      // keep going, and -- live feedback -- dialogue focus (the encounter
+      // push-in, step 5 below) is suspended too while looking away, since
+      // yanking the zoom level for a dialogue the user isn't even looking
+      // at reads as wrong. Auto-follow (and push-in) resume once the user
+      // has been quiet for LOOK_AWAY_TIMEOUT_MS.
+      if (orbit.lookingAway && Date.now() - story.lastInputAt > LOOK_AWAY_TIMEOUT_MS) {
+        orbit.lookingAway = false;
+      }
       if (!orbit.lookingAway) {
         const camTarget = storyMotion.kolobokAngle - KOLOBOK_LEAD;
         const d = angleDelta(orbit.angle, camTarget);
@@ -281,7 +293,10 @@ export function CameraRig() {
       // narration/his own scripted movement keep going regardless, only
       // the camera's framing changes.
       const pb = pivotBlend.current.value;
-      const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
+      // Suspended while lookingAway (the user dragged away, e.g. rotating
+      // around the stone) -- see the lookingAway block above.
+      const pushT = orbit.lookingAway ? 0 : encounterMotion.cameraPushT;
+      const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * pushT);
       const orbitRadius = pushedRadius + (KOLOBOK_ORBIT.radius - pushedRadius) * pb;
       const orbitHeight = f.height + (KOLOBOK_ORBIT.height - f.height) * pb;
       const orbitLookAtY = f.lookAtY + (KOLOBOK_ORBIT.lookAtY - f.lookAtY) * pb;
