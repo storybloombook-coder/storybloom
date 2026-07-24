@@ -36,7 +36,7 @@ const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transiti
 // the camera under manual control before auto-follow resumes on its own.
 // Live feedback: this reset went missing in an earlier rewrite this
 // session, leaving lookingAway stuck true forever after the first drag.
-const LOOK_AWAY_TIMEOUT_MS = 15000;
+const LOOK_AWAY_TIMEOUT_MS = 4000;
 
 // The eye toggle's two framings, blended via pivotBlend below rather than
 // snapped -- works in BOTH modes now (live feedback: "let me switch the
