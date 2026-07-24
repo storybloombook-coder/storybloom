@@ -1,6 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { CapsuleGeometry, Object3D, SphereGeometry } from 'three';
+import {
+  CapsuleGeometry, Euler, Object3D, SphereGeometry, Vector3,
+} from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
@@ -13,6 +15,19 @@ const MUZZLE = '#b08a62';
 const INNER_EAR = '#6b4c33';
 
 const dummy = new Object3D();
+const armPivotOffset = new Vector3();
+const armPivotEuler = new Euler();
+
+// Arms rotate from the SHOULDER, not their own geometric center: the capsule
+// (radius 0.09, length 0.4) is authored hanging straight down, so half its
+// total length is the offset from the shoulder point to the capsule's own
+// center at rest. Rotating that offset vector by the same (armX, 0, armZ)
+// used for the mesh's own rotation, then re-adding it to the fixed shoulder
+// position, keeps the TOP of the arm pinned at the shoulder while the rest
+// swings -- previously the rotation was applied directly to the capsule's
+// center, so the whole arm spun in place like a windmill blade.
+const ARM_HALF_LEN = 0.2 + 0.09; // capsuleGeometry(radius, length)/2 + radius
+const SHOULDER_Y = 0.85 + ARM_HALF_LEN;
 
 /** Bear (ART_SPEC §3, height 2.0, bulkiest silhouette -- body radius x1.5
  *  the wolf's): body+head+ears+muzzle merge into one mesh, since the "weight
@@ -105,7 +120,13 @@ export function Bear({ mode, isActiveZone }) {
     // approach/react phase timing below, so it doesn't get cut short. ---
     const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
     const waveRaise = waveEnv * ((100 * Math.PI) / 180);
-    const waveWiggle = waveEnv > 0 ? Math.sin(s.greetWave.t * Math.PI * 2 * 2.5) * ((14 * Math.PI) / 180) : 0;
+    // Scaled by waveEnv (not just gated on it being >0): without this, the
+    // wiggle held its full amplitude right up to the last frame, then
+    // snapped to 0 the instant the gesture's timer ran out -- a visible
+    // teleport back to rest instead of easing out with the rest of the wave.
+    const waveWiggle = waveEnv > 0
+      ? Math.sin(s.greetWave.t * Math.PI * 2 * 2.5) * ((14 * Math.PI) / 180) * waveEnv
+      : 0;
 
     const pulse = isActiveZone && mode === 'idle' ? 1 + Math.sin(Date.now() / 500) * 0.025 : 1;
 
@@ -133,7 +154,13 @@ export function Bear({ mode, isActiveZone }) {
           armX = grabReach;
           armZ = side * Math.max(0, 0.15 - grabClose);
         }
-        dummy.position.set(0.32 * side, 0.85, 0.05);
+        // Pivot from the shoulder (see ARM_HALF_LEN/SHOULDER_Y above): rotate
+        // the "hanging straight down" offset by the same (armX, 0, armZ),
+        // then place the capsule's center at shoulder + that rotated
+        // offset, so the top of the arm stays pinned while it swings.
+        armPivotEuler.set(armX, 0, armZ);
+        armPivotOffset.set(0, -ARM_HALF_LEN, 0).applyEuler(armPivotEuler);
+        dummy.position.set(0.32 * side + armPivotOffset.x, SHOULDER_Y + armPivotOffset.y, 0.05 + armPivotOffset.z);
         dummy.rotation.set(armX, 0, armZ);
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
