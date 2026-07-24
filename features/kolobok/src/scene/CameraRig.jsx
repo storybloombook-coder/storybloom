@@ -32,18 +32,17 @@ const ENCOUNTER_PUSH_IN = 0.04;
 const FRICTION = 0.94;        // per-frame velocity decay
 const FRAMING_EASE_MS = 800;  // ART_SPEC §10: per-zone camera framing transition (story mode)
 
-// Free/manual-mode camera (live feedback): a single orbit whose pivot is
-// chosen by the eye toggle --
-//   eye OFF (default) -> WIDE_ORBIT, pulled back, pivot at the island
-//                         center, the whole scene visible
-//   eye ON             -> KOLOBOK_ORBIT, close in, pivot on Kolobok's LIVE
-//                         world position (he moves on his own; the camera
-//                         just circles wherever he currently is)
-// A drag always rotates orbit.angle around whichever pivot is CURRENTLY
-// active; toggling the eye eases radius/height/pivot all together via
-// pivotBlend below rather than snapping. Only applies outside story mode --
-// the autoplaying tale keeps its own scripted camera (see the
-// orbit.mode === 'story' branch).
+// The eye toggle's two framings, blended via pivotBlend below rather than
+// snapped -- works in BOTH modes now (live feedback: "let me switch the
+// focus on kolobok when the story is in the process"):
+//   free mode:  eye OFF (default) -> WIDE_ORBIT, pulled back, pivot at the
+//               island center, whole scene visible. eye ON -> KOLOBOK_ORBIT,
+//               close in, pivot on Kolobok's LIVE world position. A drag
+//               always rotates orbit.angle around whichever is active.
+//   story mode: eye OFF (default) -> the chapter's own scripted framing,
+//               unchanged. eye ON -> blends toward KOLOBOK_ORBIT instead,
+//               orbiting/looking at Kolobok directly -- narration and his
+//               own scripted movement keep going regardless.
 const WIDE_ORBIT = { radius: 13, height: 6, lookAtY: 1.4 };
 const KOLOBOK_ORBIT = { radius: 5.5, height: 3.2, lookAtY: 0.8 };
 const PIVOT_BLEND_EASE_MS = 900;
@@ -103,10 +102,11 @@ export function CameraRig() {
     storyKey: null, // identity of the storyMotion.framing object last targeted
   });
 
-  // Free-mode pivot blend: 0 = WIDE_ORBIT (island center), 1 = KOLOBOK_ORBIT
-  // (Kolobok). Eases whenever orbit.cameraFollow toggles (live feedback:
-  // "can the camera change be done in a smooth manner? it's just a snap
-  // now") instead of cutting instantly between the two.
+  // Eye-toggle blend: 0 = the eye-off framing (WIDE_ORBIT in free mode, the
+  // chapter's own scripted framing in story mode), 1 = KOLOBOK_ORBIT.
+  // Eases whenever orbit.cameraFollow toggles (live feedback: "can the
+  // camera change be done in a smooth manner? it's just a snap now")
+  // instead of cutting instantly between the two. Shared by both modes.
   const pivotBlend = useRef({
     value: orbit.cameraFollow ? 1 : 0, from: 0, to: 0, timeline: null,
   });
@@ -209,25 +209,27 @@ export function CameraRig() {
       // updates.
       orbit.angle += orbit.velocity;
       orbit.velocity *= FRICTION;
-
-      // Ease the pivot blend whenever the eye toggle changes, rather than
-      // cutting the camera straight to the new radius/height/pivot.
-      if (orbit.cameraFollow !== lastCameraFollow.current) {
-        lastCameraFollow.current = orbit.cameraFollow;
-        const pb = pivotBlend.current;
-        pb.from = pb.value;
-        pb.to = orbit.cameraFollow ? 1 : 0;
-        pb.timeline = createTimeline([
-          {
-            at: 0,
-            dur: PIVOT_BLEND_EASE_MS,
-            ease: 'easeInOutSine',
-            update: (t) => { pb.value = pb.from + (pb.to - pb.from) * t; },
-          },
-        ]);
-      }
-      if (pivotBlend.current.timeline) pivotBlend.current.timeline.tick(dt);
     }
+
+    // Ease the pivot blend whenever the eye toggle changes, in EITHER mode
+    // (live feedback: "let me switch the focus on kolobok when the story is
+    // in the process by tapping on the eye button" -- the tale keeps
+    // narrating/moving him regardless, only the camera's framing blends).
+    if (orbit.cameraFollow !== lastCameraFollow.current) {
+      lastCameraFollow.current = orbit.cameraFollow;
+      const pb = pivotBlend.current;
+      pb.from = pb.value;
+      pb.to = orbit.cameraFollow ? 1 : 0;
+      pb.timeline = createTimeline([
+        {
+          at: 0,
+          dur: PIVOT_BLEND_EASE_MS,
+          ease: 'easeInOutSine',
+          update: (t) => { pb.value = pb.from + (pb.to - pb.from) * t; },
+        },
+      ]);
+    }
+    if (pivotBlend.current.timeline) pivotBlend.current.timeline.tick(dt);
 
     // 4. Publish the active zone (UI zone-name card) + story-mode framing
     // retargets. Zone framing/push-in placement below only matters in story
@@ -271,16 +273,33 @@ export function CameraRig() {
 
     if (orbit.mode === 'story') {
       // The autoplaying tale keeps its scripted per-chapter framing
-      // (radius/height/lookAt), orbiting the island center -- unchanged, so
-      // "if I do nothing" the cinematic plays exactly as before. Encounter
-      // push-in (a 4% radius nudge during a beat) rides on top of it.
+      // (radius/height/lookAt), orbiting the island center -- unchanged at
+      // pivotBlend 0 (eye off, default), so "if I do nothing" the cinematic
+      // plays exactly as before. Encounter push-in (a 4% radius nudge
+      // during a beat) rides on top of it. Toggling the eye ON blends this
+      // toward a close orbit around Kolobok's live position instead --
+      // narration/his own scripted movement keep going regardless, only
+      // the camera's framing changes.
+      const pb = pivotBlend.current.value;
       const pushedRadius = f.radius * (1 - ENCOUNTER_PUSH_IN * encounterMotion.cameraPushT);
+      const orbitRadius = pushedRadius + (KOLOBOK_ORBIT.radius - pushedRadius) * pb;
+      const orbitHeight = f.height + (KOLOBOK_ORBIT.height - f.height) * pb;
+      const orbitLookAtY = f.lookAtY + (KOLOBOK_ORBIT.lookAtY - f.lookAtY) * pb;
+      // Position orbits the island center at pb=0 (unchanged), blending
+      // toward orbiting Kolobok himself as pb -> 1. The lookAt target
+      // blends from the chapter's own (possibly off-center, e.g. an
+      // encounter's rim point) target toward Kolobok separately, since at
+      // pb=0 it must stay EXACTLY the chapter's own lookAt, not the origin.
+      const posPivotX = storyMotion.kolobokWorldPos[0] * pb;
+      const posPivotZ = storyMotion.kolobokWorldPos[2] * pb;
+      const lookPivotX = f.lookAtX + (storyMotion.kolobokWorldPos[0] - f.lookAtX) * pb;
+      const lookPivotZ = f.lookAtZ + (storyMotion.kolobokWorldPos[2] - f.lookAtZ) * pb;
       camera.position.set(
-        Math.sin(orbit.angle + angleBreath) * pushedRadius,
-        f.height + pitchH + heightBreath,
-        Math.cos(orbit.angle + angleBreath) * pushedRadius,
+        posPivotX + Math.sin(orbit.angle + angleBreath) * orbitRadius,
+        orbitHeight + pitchH + heightBreath,
+        posPivotZ + Math.cos(orbit.angle + angleBreath) * orbitRadius,
       );
-      camera.lookAt(f.lookAtX, f.lookAtY - pitchLook, f.lookAtZ);
+      camera.lookAt(lookPivotX, orbitLookAtY - pitchLook, lookPivotZ);
     } else {
       // Free mode: orbit the eye-selected pivot, blended smoothly between
       // WIDE_ORBIT (pivot at the island center) and KOLOBOK_ORBIT (pivot on
