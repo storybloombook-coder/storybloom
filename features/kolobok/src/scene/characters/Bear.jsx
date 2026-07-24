@@ -119,7 +119,11 @@ export function Bear({ mode, isActiveZone }) {
     // out on its own fixed timer, independent of the (much shorter)
     // approach/react phase timing below, so it doesn't get cut short. ---
     const waveEnv = tickGreetWave(s.greetWave, dt, isMine, mode);
-    const waveRaise = waveEnv * ((100 * Math.PI) / 180);
+    // Negative: raises the arm toward the scene center (same forward
+    // direction as grabReach below), not away from it -- live feedback
+    // caught this once the shoulder-pivot fix made the swing direction
+    // actually legible instead of just spinning in place.
+    const waveRaise = -waveEnv * ((100 * Math.PI) / 180);
     // Scaled by waveEnv (not just gated on it being >0): without this, the
     // wiggle held its full amplitude right up to the last frame, then
     // snapped to 0 the instant the gesture's timer ran out -- a visible

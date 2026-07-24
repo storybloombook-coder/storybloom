@@ -18,7 +18,16 @@ export default function KolobokPreviewScreen() {
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
-      <MainScreen onNavigate={(route: string) => router.push(route as never)} focused={focused} />
+      {/* initialSceneMode="3d": this dev-only preview button is a straight
+          shortcut into the scene -- MainScreen's own default (start flat,
+          switch to 3d only after an async reduce-motion check resolves) is
+          a safety behavior for a REAL production entry point; here it just
+          flashed FlatMenu for a moment before the Canvas took over. */}
+      <MainScreen
+        onNavigate={(route: string) => router.push(route as never)}
+        focused={focused}
+        initialSceneMode="3d"
+      />
     </>
   );
 }
