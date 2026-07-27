@@ -73,7 +73,9 @@ export function Fox({ mode, isActiveZone }) {
     const activeMult = isActiveZone ? 1.3 : 1;
 
     const isMine = encounterMotion.zoneId === 'fox';
-    const inEncounter = isMine && (mode === 'encounter' || mode === 'retreat');
+    // encounterMotion.phase === 'retreat' (not the `mode` prop) covers a
+    // forced retreat too -- see the encounter block below.
+    const inEncounter = isMine && (mode === 'encounter' || encounterMotion.phase === 'retreat');
 
     // --- Wet shake-off (BACKLOG.md #1), idle only ---
     const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
@@ -113,7 +115,16 @@ export function Fox({ mode, isActiveZone }) {
     const headTilt = s.tilting ? Math.sin(Math.min(s.tiltT, 1) * Math.PI) * ((12 * Math.PI) / 180) : 0;
 
     // --- Encounter (ANIMATION_SPEC §5): glide 0.5 toward path, no hop ---
-    if (isMine && mode === 'encounter') {
+    // Checked via encounterMotion.phase (the frame-accurate transient),
+    // not the `mode` prop (store-derived, can lag a frame or land on
+    // 'idle' if `encounter` was already cleared) -- so a forced retreat
+    // (EncounterDirector.jsx, an interrupted beat easing back to rest
+    // instead of snapping) plays correctly even when `mode` no longer
+    // agrees with encounterMotion. Checked BEFORE the 'encounter' branch
+    // so it always wins during a retreat regardless of mode.
+    if (isMine && encounterMotion.phase === 'retreat') {
+      s.approachZ = 0.5 * (1 - encounterMotion.phaseT);
+    } else if (isMine && mode === 'encounter') {
       // Only ramp during 'approach' -- the shared beat REUSES phaseT for
       // its 'react' step too (resetting 0->1 again), so recomputing
       // approachZ from it unconditionally through the whole 'encounter'
@@ -122,8 +133,6 @@ export function Fox({ mode, isActiveZone }) {
       // read as an outright teleport). Holding steady here at whatever
       // approach left it (normally 0.5) fixes that.
       if (encounterMotion.phase === 'approach') s.approachZ = 0.5 * encounterMotion.phaseT;
-    } else if (isMine && mode === 'retreat') {
-      s.approachZ = 0.5 * (1 - encounterMotion.phaseT);
     } else if (!isMine) {
       s.approachZ = 0;
     }

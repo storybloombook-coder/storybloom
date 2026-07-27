@@ -103,7 +103,17 @@ export function Hare({ mode, isActiveZone }) {
     // startled ARC jump (forward burst + vertical hop together, not just
     // straight up), retreat back to spot ---
     const isMine = encounterMotion.zoneId === 'hare';
-    if (isMine && mode === 'encounter') {
+    // Checked via encounterMotion.phase (the frame-accurate transient),
+    // not the `mode` prop (store-derived, can lag a frame or land on
+    // 'idle' if `encounter` was already cleared) -- so a forced retreat
+    // (EncounterDirector.jsx, an interrupted beat easing back to rest
+    // instead of snapping) plays correctly even when `mode` no longer
+    // agrees with encounterMotion. Checked BEFORE the 'encounter' branch
+    // so it always wins during a retreat regardless of mode.
+    if (isMine && encounterMotion.phase === 'retreat') {
+      s.approachZ = 0.6 * (1 - encounterMotion.phaseT);
+      s.reactT = 0;
+    } else if (isMine && mode === 'encounter') {
       // Only ramp during 'approach' -- the shared beat REUSES phaseT for
       // its 'react' step too (resetting 0->1 again), so recomputing
       // approachZ from it unconditionally through the whole 'encounter'
@@ -113,9 +123,6 @@ export function Hare({ mode, isActiveZone }) {
       // the only thing that moves on top of it during react.
       if (encounterMotion.phase === 'approach') s.approachZ = 0.6 * encounterMotion.phaseT;
       s.reactT = encounterMotion.phase === 'react' ? encounterMotion.phaseT : 0;
-    } else if (isMine && mode === 'retreat') {
-      s.approachZ = 0.6 * (1 - encounterMotion.phaseT);
-      s.reactT = 0;
     } else if (!isMine) {
       s.approachZ = 0;
       s.reactT = 0;

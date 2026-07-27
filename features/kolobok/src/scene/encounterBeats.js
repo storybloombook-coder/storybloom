@@ -55,6 +55,53 @@ export function buildIzbaBeat({ setPhase, setLine }) {
   ]);
 }
 
+// Live feedback: an interrupted beat (swipe mid-beat, tapping a different
+// zone, navigating away) used to snap the animal straight back to its rest
+// pose instead of easing out. FORCED_RETREAT_MS is how long that quick
+// ease-back takes -- short enough to feel responsive to the interruption,
+// long enough to read as a real motion rather than another snap.
+const FORCED_RETREAT_MS = 350;
+
+/** How "approached" the current beat is right now (0 = at rest, 1 = fully
+ *  approached), derived from whatever encounterMotion.phase/phaseT happen
+ *  to represent at this exact moment. Every beat builder ramps phaseT
+ *  0->1 during 'approach', then reuses it 0->1 again for 'react' (holding
+ *  the approach amount steady -- see each animal's own comment on this),
+ *  then ramps back 1->0 (as 1-phaseT) during 'retreat'. Shared here so an
+ *  interruption can compute exactly where to retreat FROM, instead of
+ *  assuming it's always fully approached. */
+export function currentApproachFraction() {
+  if (encounterMotion.phase === 'approach') return encounterMotion.phaseT;
+  if (encounterMotion.phase === 'react') return 1;
+  if (encounterMotion.phase === 'retreat') return 1 - encounterMotion.phaseT;
+  return 0;
+}
+
+/** A short, standalone "ease back to idle" timeline from wherever an
+ *  interrupted beat currently is. Reuses the SAME retreat math every beat's
+ *  own final phase already uses (phaseT ramping such that 1-phaseT eases
+ *  the approach amount to 0), just compressed to FORCED_RETREAT_MS and
+ *  starting from `fraction` instead of 1 -- so every animal's existing
+ *  retreat-phase pose code (`X * (1 - encounterMotion.phaseT)`) plays this
+ *  identically to a natural retreat, no per-animal changes needed. Returns
+ *  null if there's nothing to ease back from (already at rest). */
+export function buildForcedRetreat(fraction, setPhase) {
+  if (fraction <= 0) return null;
+  return createTimeline([
+    { at: 0, call: () => setPhase?.('retreat') },
+    {
+      at: 0,
+      dur: FORCED_RETREAT_MS,
+      ease: 'easeOutCubic',
+      update: (v) => {
+        encounterMotion.phase = 'retreat';
+        encounterMotion.phaseT = (1 - fraction) + fraction * v;
+        encounterMotion.cameraPushT = fraction * (1 - v);
+      },
+    },
+  ]);
+}
+
 /** Resets every encounterMotion field to its idle value. Shared by both
  *  directors' cancel/finish paths. */
 export function resetEncounterMotion() {

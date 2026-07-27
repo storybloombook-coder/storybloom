@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { DoubleSide } from 'three';
+import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
@@ -125,8 +126,14 @@ function Landmark({ zone }) {
     // true`), starting a fresh non-story encounter here would overwrite
     // that shared store field and desync EncounterDirector's beat from
     // the story's own composite timeline. Tapping while already
-    // mid-dialogue here is just a no-op, not a re-trigger.
-    if (encounter?.id === zone.id) return;
+    // mid-dialogue here is still a no-op (never a re-trigger) -- but live
+    // feedback: it shouldn't feel like the tap did nothing at all, so a
+    // story-driven visit specifically gets a haptic acknowledgment even
+    // though nothing about the encounter itself changes.
+    if (encounter?.id === zone.id) {
+      if (encounter.story) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      return;
+    }
     startEncounter(zone);
   };
 

@@ -99,7 +99,17 @@ export function Wolf({ mode, isActiveZone }) {
     // + up + down, not a flat slide) that overshoots and misses, head shake
     // ±10° twice on landing ---
     const isMine = encounterMotion.zoneId === 'wolf';
-    if (isMine && mode === 'encounter') {
+    // Checked via encounterMotion.phase (the frame-accurate transient),
+    // not the `mode` prop (store-derived, can lag a frame or land on
+    // 'idle' if `encounter` was already cleared) -- so a forced retreat
+    // (EncounterDirector.jsx, an interrupted beat easing back to rest
+    // instead of snapping) plays correctly even when `mode` no longer
+    // agrees with encounterMotion. Checked BEFORE the 'encounter' branch
+    // so it always wins during a retreat regardless of mode.
+    if (isMine && encounterMotion.phase === 'retreat') {
+      s.approachZ = 0.6 * (1 - encounterMotion.phaseT);
+      s.snapT = 0;
+    } else if (isMine && mode === 'encounter') {
       // Only ramp during 'approach' -- the shared beat REUSES phaseT for
       // its 'react' step too (resetting 0->1 again), so recomputing
       // approachZ from it unconditionally through the whole 'encounter'
@@ -109,9 +119,6 @@ export function Wolf({ mode, isActiveZone }) {
       // the only thing that moves on top of it during react.
       if (encounterMotion.phase === 'approach') s.approachZ = 0.6 * encounterMotion.phaseT;
       s.snapT = encounterMotion.phase === 'react' ? encounterMotion.phaseT : 0;
-    } else if (isMine && mode === 'retreat') {
-      s.approachZ = 0.6 * (1 - encounterMotion.phaseT);
-      s.snapT = 0;
     } else if (!isMine) {
       s.approachZ = 0;
       s.snapT = 0;
