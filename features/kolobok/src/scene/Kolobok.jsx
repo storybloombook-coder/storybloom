@@ -13,7 +13,7 @@ import { makeToonMaterial } from './materials/toonMaterial';
 import { getSharedTexture } from './BlobShadow';
 import { polish } from '../config/devFlags';
 
-// ANIMATION_SPEC §4/§5: how far Kolobok rolls forward during a beat's react
+// ANIMATION_SPEC Â§4/Â§5: how far Kolobok rolls forward during a beat's react
 // phase, and the extra target-angle offset it rides on top of the normal
 // camera-follow lead.
 const REACT_ROLL_BOOST = (14 * Math.PI) / 180;
@@ -59,7 +59,7 @@ const EYE_X = sphereSurfaceX(FACE_Y_OFFSET + EYE_Y, EYE_Z);
 // Brow: local Y (relative to the `face` group) sits above the eye; its
 // surface X is computed at that higher absolute height, so it hugs the
 // curve where it actually is instead of borrowing the eye's depth.
-const BROW_Y = EYE_Y + 0.1 * FACE_SCALE;
+const BROW_Y = EYE_Y + 0.22 * FACE_SCALE;
 const BROW_X = sphereSurfaceX(FACE_Y_OFFSET + BROW_Y, EYE_Z);
 
 // Live feedback: eyebrows read as flat straight bars -- a gentle curved arc
@@ -69,8 +69,8 @@ const BROW_X = sphereSurfaceX(FACE_Y_OFFSET + BROW_Y, EYE_Z);
 // changes, from a straight box to a torus-ring segment occupying the same
 // local plane (width along X, thin along Y/Z) the box did, so nothing about
 // WHERE it sits or how it's driven changes, only its own shape.
-const BROW_ARC = (40 * Math.PI) / 180;
-const BROW_ARC_RADIUS = 0.234 * FACE_SCALE;
+const BROW_ARC = (70 * Math.PI) / 180;
+const BROW_ARC_RADIUS = 0.2 * FACE_SCALE;
 const BROW_ARC_TUBE = 0.017 * FACE_SCALE;
 function makeBrowGeometry() {
   const geo = new TorusGeometry(BROW_ARC_RADIUS, BROW_ARC_TUBE, 8, 14, BROW_ARC);
@@ -108,7 +108,7 @@ const SMILE_ARC = Math.PI * 0.7;
 const SMILE_OUTER_R = 0.18 * FACE_SCALE;
 const SMILE_TUBE_R = 0.05 * FACE_SCALE;
 
-// Expression poses (ANIMATION_SPEC §2) -- brow raise/tilt in local units/
+// Expression poses (ANIMATION_SPEC Â§2) -- brow raise/tilt in local units/
 // radians, smile widen as a scale factor. Poses are targets; Kolobok()
 // lerps its live pose toward whichever of these is current over ~200ms.
 const EXPRESSIONS = {
@@ -119,13 +119,13 @@ const EXPRESSIONS = {
 };
 const EXPRESSION_LERP_SEC = 0.2;
 
-// Blink timing (ANIMATION_SPEC §2), ms.
+// Blink timing (ANIMATION_SPEC Â§2), ms.
 const BLINK_CLOSE_MS = 70;
 const BLINK_HOLD_MS = 60;
 const BLINK_OPEN_MS = 90;
 const BLINK_DOUBLE_CHANCE = 0.15;
 
-// Hop timing (ANIMATION_SPEC §2): 450ms total, easeOutCubic up / gravity
+// Hop timing (ANIMATION_SPEC Â§2): 450ms total, easeOutCubic up / gravity
 // fall, then a 120ms landing squash. The up/down split isn't spec'd beyond
 // the 450ms total + named easings; 200/250 reads as a snappier rise than
 // fall, which is what makes a hop feel like a hop instead of a lob.
@@ -153,7 +153,7 @@ const KOLOBOK_SHADOW_OPACITY = 0.28 * 1.15;
  *  blink, tap-to-hop-and-sing, and speed-based squash-and-stretch. Outer
  *  `root` group orients along the path tangent and carries position; inner
  *  `dough` mesh spins to roll; `face` group stays upright and must never
- *  inherit the dough's spin (ART_SPEC §2). All non-dough surface features
+ *  inherit the dough's spin (ART_SPEC Â§2). All non-dough surface features
  *  (eyes, brows, mouth, specular) live under `face` so they share
  *  its yaw and never spin with the dough. */
 export function Kolobok() {
@@ -176,7 +176,7 @@ export function Kolobok() {
   const browGeometry = useMemo(() => makeBrowGeometry(), []);
   const shadowTexture = useMemo(() => getSharedTexture(), []);
 
-  // VISUAL_QUALITY_SPEC §1: one toon material per distinct surface color.
+  // VISUAL_QUALITY_SPEC Â§1: one toon material per distinct surface color.
   // Tiny features (eyes, brows, mouth) skip the rim -- not worth the extra
   // shader variant at that scale (same call the spec makes for mushrooms/
   // flowers/feathers).
@@ -221,14 +221,14 @@ export function Kolobok() {
     singing: false,
     singT: 0,
 
-    // Encounter reactions (ANIMATION_SPEC §4/§5), driven by the transient
+    // Encounter reactions (ANIMATION_SPEC Â§4/Â§5), driven by the transient
     // encounterMotion object rather than store state (it changes every
     // frame while a beat runs).
     encounterZoneWas: null, // edge-detect zone changes
     wasSinging: false,      // edge-detect encounterMotion.singing
     spinAngle: 0,           // additional rotation.y from the 360 spin beat
 
-    // Story-mode request channels (STORY_SPEC §3), edge-detected.
+    // Story-mode request channels (STORY_SPEC Â§3), edge-detected.
     blinkBurstWas: 0,
     storyExpressionWas: null,
   });
@@ -290,7 +290,7 @@ export function Kolobok() {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
 
-    // --- Encounter reactions (ANIMATION_SPEC §4/§5) ---
+    // --- Encounter reactions (ANIMATION_SPEC Â§4/Â§5) ---
     // A new beat started (edge-triggered on zoneId changing to non-null):
     // startled, or the "sly mirrored curiosity" look specifically for fox.
     if (encounterMotion.zoneId !== s.encounterZoneWas) {
@@ -312,7 +312,7 @@ export function Kolobok() {
     if (!encounterMotion.singing && s.wasSinging && encounterMotion.zoneId) s.singing = false;
     s.wasSinging = encounterMotion.singing;
 
-    // --- Story-mode extras (STORY_SPEC §3), all edge-detected requests ---
+    // --- Story-mode extras (STORY_SPEC Â§3), all edge-detected requests ---
     // Hard teleport (finale's while-black reset): consume-once, bypasses
     // the chase lag entirely so he's already at the izba when the screen
     // fades back in.
@@ -330,7 +330,7 @@ export function Kolobok() {
     }
 
     // Chase target: in story mode the director's scripted angle IS the
-    // target (STORY_SPEC §1 control inversion -- camera follows him
+    // target (STORY_SPEC Â§1 control inversion -- camera follows him
     // instead); in free mode, the point slightly ahead of the camera. Both
     // add the temporary +14 deg roll-forward boost while a tapped animal
     // reacts (react phase only -- approach/retreat don't push Kolobok).
@@ -348,7 +348,7 @@ export function Kolobok() {
     const step = d * Math.min(1, FOLLOW_LAG * dt);
     s.angle += step;
 
-    // 360 deg defiant spin mid-beat (ANIMATION_SPEC §4: "at 1300, 700ms"),
+    // 360 deg defiant spin mid-beat (ANIMATION_SPEC Â§4: "at 1300, 700ms"),
     // riding on top of the normal path-facing rotation applied below.
     // storyMotion.spinT is the story chapters' own spin channel (birth's
     // proud spin, finale beats) -- same visual, different driver.
@@ -362,7 +362,7 @@ export function Kolobok() {
     s.spin -= arc / KOLOBOK_RADIUS;
 
     // Roll speed drives both the existing squash and the new bouncy-hop
-    // path bounce (ANIMATION_SPEC §2): while rolling fast, add a tiny
+    // path bounce (ANIMATION_SPEC Â§2): while rolling fast, add a tiny
     // periodic lift so it reads as bouncing rather than gliding.
     const speed = Math.min(Math.abs(step) * 40, 1);
     const rollBounce = speed > 0.15 ? Math.abs(Math.sin(s.spin * 2)) * 0.02 : 0;
@@ -371,7 +371,7 @@ export function Kolobok() {
     if (s.blinkTimeline) {
       s.blinkTimeline.tick(dt);
     } else if (!s.singing) {
-      // Suppressed while singing (ANIMATION_SPEC §2).
+      // Suppressed while singing (ANIMATION_SPEC Â§2).
       s.nextBlinkIn -= dt;
       if (s.nextBlinkIn <= 0) startBlink(s);
     }
@@ -418,7 +418,7 @@ export function Kolobok() {
         );
       }
       // Face along the tangent of the circle, plus the defiant 360 spin
-      // (ANIMATION_SPEC §4/§5) riding on top during its own beat window,
+      // (ANIMATION_SPEC Â§4/Â§5) riding on top during its own beat window,
       // plus the story's windowsill-wobble/snout-balance body tilt.
       root.current.rotation.y = s.angle + Math.PI / 2 + s.spinAngle;
       root.current.rotation.z = storyMotion.bodyTilt;
@@ -431,7 +431,7 @@ export function Kolobok() {
       storyMotion.kolobokWorldPos[1] = root.current.position.y;
       storyMotion.kolobokWorldPos[2] = root.current.position.z;
       storyMotion.kolobokSinging = s.singing;
-      // POLISH_SPEC §4 dust kick reads this: 0..1 roll speed (same value
+      // POLISH_SPEC Â§4 dust kick reads this: 0..1 roll speed (same value
       // that already drives the squash-and-stretch below).
       storyMotion.kolobokSpeed = speed;
     }
@@ -493,13 +493,23 @@ export function Kolobok() {
     // scaled here at the point of use. Only Y is animated; X stays at the
     // JSX-declared surface-derived BROW_X so the brow keeps hugging the
     // dough curve.
+    // Resting outward tilt: the OUTER end of each brow lifts (raised,
+    // friendly), not the inner end -- reads as a gentle up-arch rather than
+    // a frown. X is recomputed from the animated Y so a raised brow keeps
+    // hugging the dough curve instead of detaching forward (the sphere's
+    // surface curves back as a feature climbs off the equator).
+    const BROW_REST_TILT = (6 * Math.PI) / 180;
     if (leftBrow.current) {
-      leftBrow.current.position.y = BROW_Y + (s.browRaise + s.browAsymmetry * 0.02) * FACE_SCALE;
-      leftBrow.current.rotation.z = (10 * Math.PI) / 180 + s.browTilt;
+      const ly = BROW_Y + (s.browRaise + s.browAsymmetry * 0.02) * FACE_SCALE;
+      leftBrow.current.position.y = ly;
+      leftBrow.current.position.x = sphereSurfaceX(FACE_Y_OFFSET + ly, EYE_Z);
+      leftBrow.current.rotation.z = -BROW_REST_TILT + s.browTilt;
     }
     if (rightBrow.current) {
-      rightBrow.current.position.y = BROW_Y + (s.browRaise - s.browAsymmetry * 0.02) * FACE_SCALE;
-      rightBrow.current.rotation.z = -((10 * Math.PI) / 180 + s.browTilt);
+      const ry = BROW_Y + (s.browRaise - s.browAsymmetry * 0.02) * FACE_SCALE;
+      rightBrow.current.position.y = ry;
+      rightBrow.current.position.x = sphereSurfaceX(FACE_Y_OFFSET + ry, EYE_Z);
+      rightBrow.current.rotation.z = BROW_REST_TILT - s.browTilt;
     }
 
     // Mouth: smile torus visible unless singing (open-mouth mesh instead).
@@ -554,7 +564,7 @@ export function Kolobok() {
           yaw (including the birth-chapter look-around) and never inherits
           the dough's roll spin. */}
       <group ref={face} position={[0, FACE_Y_OFFSET, 0]}>
-        {/* VISUAL_QUALITY_SPEC §1 hero pass: a thin additive overlay
+        {/* VISUAL_QUALITY_SPEC Â§1 hero pass: a thin additive overlay
             standing in for a cheap fake specular (toon shading has no real
             specular model). Positioned on the upper-forward side, which is
             also the side the camera-follow framing keeps lit through most
@@ -605,8 +615,8 @@ export function Kolobok() {
             Both sides share the same geometry -- it's symmetric about its
             own center, so it doesn't need mirroring, only the existing
             position.z / rotation.z sign flip below (unchanged). */}
-        <mesh ref={leftBrow} position={[BROW_X, BROW_Y, EYE_Z]} rotation={[0, 0, (10 * Math.PI) / 180]} material={materials.brow} geometry={browGeometry} />
-        <mesh ref={rightBrow} position={[BROW_X, BROW_Y, -EYE_Z]} rotation={[0, 0, -((10 * Math.PI) / 180)]} material={materials.brow} geometry={browGeometry} />
+        <mesh ref={leftBrow} position={[BROW_X, BROW_Y, EYE_Z]} rotation={[0, 0, -(6 * Math.PI) / 180]} material={materials.brow} geometry={browGeometry} />
+        <mesh ref={rightBrow} position={[BROW_X, BROW_Y, -EYE_Z]} rotation={[0, 0, (6 * Math.PI) / 180]} material={materials.brow} geometry={browGeometry} />
 
         {/* Mouth: smile arc (default) + open-mouth ellipse (singing),
             visibility toggles. X is surface-derived (MOUTH_X) so the whole
