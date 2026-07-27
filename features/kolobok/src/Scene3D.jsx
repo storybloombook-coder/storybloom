@@ -218,8 +218,7 @@ export function Scene3D({ onNavigate, focused = true }) {
       {/* Dialogue bubble: anchored above whoever is actually speaking
           (BubbleAnchor.jsx projects their world position to screen space
           every frame; the rAF loop above feeds it into these two Animated
-          values), rather than a single fixed screen position. A small
-          triangular tail points down at the speaker's head. */}
+          values), rather than a single fixed screen position. */}
       {bubbleText && (
         <Animated.View
           style={[styles.bubbleWrap, { left: bubbleLeft, bottom: bubbleBottom }]}
@@ -228,7 +227,6 @@ export function Scene3D({ onNavigate, focused = true }) {
           <View style={[styles.bubble, narration && styles.narrationBubble]}>
             <Text style={styles.bubbleText}>{bubbleText}</Text>
           </View>
-          <View style={styles.bubbleTail} />
         </Animated.View>
       )}
 
@@ -365,19 +363,6 @@ const styles = StyleSheet.create({
     borderLeftColor: '#d9a441',
   },
   bubbleText: { fontSize: 15, color: '#2e2a22', textAlign: 'center' },
-  // Small downward-pointing triangle (classic RN "triangle via borders"
-  // trick) so the bubble reads as a real speech bubble pointing at whoever
-  // is talking, not just a floating card.
-  bubbleTail: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
-    borderTopWidth: 9,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: 'rgba(255,255,255,0.92)',
-  },
   navRow: {
     flexDirection: 'row',
     justifyContent: 'center',
