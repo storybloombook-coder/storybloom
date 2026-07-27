@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
+import { DoubleSide } from 'three';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
@@ -45,7 +46,13 @@ function IzbaDoor() {
   return (
     <mesh position={[0, 0.675, -0.66]}>
       <planeGeometry args={[0.4, 0.75]} />
-      <meshStandardMaterial color="#4a2f1c" roughness={0.75} />
+      {/* Live feedback: door wasn't visible at all -- a plane's default
+          FrontSide material only renders from whichever direction its
+          normal happens to face (backface culling), and this one was never
+          rotated to face outward. DoubleSide sidesteps having to get that
+          direction right (same class of mistake as the eyelid/eyebrow
+          placement bugs earlier), rendering it from either side. */}
+      <meshStandardMaterial color="#4a2f1c" roughness={0.75} side={DoubleSide} />
     </mesh>
   );
 }
