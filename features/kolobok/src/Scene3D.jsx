@@ -40,6 +40,7 @@ export function Scene3D({ onNavigate, focused = true }) {
   const fadeBlack = useSceneStore((s) => s.fadeBlack);
   const pendingNavigation = useSceneStore((s) => s.pendingNavigation);
   const locale = useSceneStore((s) => s.locale);
+  const setLocale = useSceneStore((s) => s.setLocale);
   const requestNavigation = useSceneStore((s) => s.requestNavigation);
   const consumeNavigation = useSceneStore((s) => s.consumeNavigation);
 
@@ -168,6 +169,7 @@ export function Scene3D({ onNavigate, focused = true }) {
   };
 
   const onMainMenu = () => requestNavigation('/');
+  const onToggleLocale = () => setLocale(locale === 'ru' ? 'en' : 'ru');
 
   const active = ZONES.find((z) => z.id === activeZone);
   // Story narration wins the bubble slot; interactive dialogue otherwise.
@@ -274,6 +276,21 @@ export function Scene3D({ onNavigate, focused = true }) {
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>☰</Text>
+      </Pressable>
+
+      {/* Language toggle: identical 40x40 circle, stacked directly above the
+          main-menu button (mirroring how the eye toggle stacks above
+          play/pause). Shows the language a tap switches TO, matching the
+          menu labels' own convention of showing the destination, not the
+          current state. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('ui.switchLanguage', locale)}
+        onPress={onToggleLocale}
+        style={[styles.storyButton, styles.localeButton]}
+        hitSlop={8}
+      >
+        <Text style={styles.storyButtonText}>{locale === 'ru' ? 'EN' : 'RU'}</Text>
       </Pressable>
 
       {/* Finale fade-to-black overlay; never intercepts touches. */}
@@ -397,6 +414,7 @@ const styles = StyleSheet.create({
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.4)' },
   menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
+  localeButton: { left: 14, right: undefined, bottom: 144 }, // stacked above menuButton
   fadeOverlay: { backgroundColor: '#000000' },
   vignetteAnchor: { position: 'absolute', width: 0, height: 0 },
 });

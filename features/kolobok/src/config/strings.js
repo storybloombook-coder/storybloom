@@ -62,6 +62,7 @@ export const STRINGS = {
       enableFollow: 'Follow Kolobok',
       disableFollow: 'Free the camera',
       mainMenu: 'Main menu',
+      switchLanguage: 'Switch to Russian',
     },
     weather: {
       permission: "Allow location so the sky above Kolobok matches yours — sunrise, clouds, even snow.",
@@ -128,6 +129,7 @@ export const STRINGS = {
       enableFollow: 'Следовать за Колобком',
       disableFollow: 'Свободная камера',
       mainMenu: 'Главное меню',
+      switchLanguage: 'Переключить на английский',
     },
     weather: {
       permission: 'Разрешите доступ к геолокации — и небо над Колобком станет таким же, как у вас: рассвет, облака и даже снег.',
