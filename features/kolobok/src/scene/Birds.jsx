@@ -3,21 +3,25 @@ import { useFrame } from '@react-three/fiber/native';
 import { Object3D } from 'three';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeRng } from './prng';
+import { STONE_GROUND_RADIUS } from './CrossroadsStone';
 
 const rad = (deg) => (deg * Math.PI) / 180;
 
 const BIRD_COUNT = 7;
 
-// The crossroads boulder's three plaque blocks are static in HEIGHT but the
-// column that carries them continuously re-yaws to face wherever the camera
-// currently is (CrossroadsStone.jsx) -- so over a full orbit a block sweeps
-// every azimuth at its own height (0.455-0.945 / 1.105-1.595 / 1.805-2.295
-// around PLAQUE_HEIGHTS). A perch anywhere in those bands would eventually
-// get swept by a passing plaque regardless of which side it's on. This sits
-// in the one gap between the middle and top block, already including the
-// boulder's own BASE_LIFT (-0.2) so it lines up with the rock as rendered.
-const PERCH_Y = 1.5;
-const PERCH_RADIUS = 0.78; // the boulder's own surface radius there, inset slightly
+// Live feedback: birds perch on the ground, scattered randomly among the
+// moss/grass skirt ringing the boulder's base (CrossroadsStone.jsx's
+// baseSkirtMatrices), NOT up on the rotating-plaque body -- comfortably
+// below the lowest plaque block (which starts at world y ~0.455), so there
+// is no risk of a passing plaque ever sweeping through a perch regardless
+// of camera angle. Radius straddles the moss ring itself (same
+// STONE_GROUND_RADIUS the skirt is built from), each bird's own exact spot
+// randomized rather than laid out in a neat ring.
+const GROUND_PERCH_Y = 0.14; // sitting on top of a mossy tuft
+const PERCH_RADIUS_MIN = STONE_GROUND_RADIUS * 0.82;
+const PERCH_RADIUS_MAX = STONE_GROUND_RADIUS * 1.28;
+const PERCH_MIN_SEP = rad(22); // random, but not stacked on top of each other
+const PERCH_GUARD = 400;
 
 const BODY_R = 0.075;
 const WING_LEN = 0.09;
@@ -48,17 +52,15 @@ const WING_FLAP_AMP = rad(50);
 
 const dummy = new Object3D();
 
-function makeBird(az) {
-  const x = Math.sin(az) * PERCH_RADIUS;
-  const z = Math.cos(az) * PERCH_RADIUS;
+function makeBird(perch) {
   return {
     mode: 'perched', // perched | scatter | climb | away | return | landing
     t: 0,
-    perch: { x, y: PERCH_Y, z, az },
-    pos: { x, y: PERCH_Y, z },
-    from: { x, y: PERCH_Y, z },
-    to: { x, y: PERCH_Y, z },
-    yaw: az,
+    perch,
+    pos: { x: perch.x, y: perch.y, z: perch.z },
+    from: { x: perch.x, y: perch.y, z: perch.z },
+    to: { x: perch.x, y: perch.y, z: perch.z },
+    yaw: perch.yaw,
     wobbleAmp: 0,
     wobbleCycles: 1,
     wobbleSign: 1,
@@ -73,9 +75,10 @@ function makeBird(az) {
   };
 }
 
-/** BACKLOG live feedback: 7 simple birds perched on the crossroads boulder.
- *  Tap one and it startles away, climbs off into the sky away from the
- *  camera, waits off-screen a while, then swoops back to its own perch.
+/** BACKLOG live feedback: 7 simple birds perched in the moss around the
+ *  crossroads boulder. Tap one and it startles away, climbs off into the
+ *  sky away from the camera, waits off-screen a while, then swoops back
+ *  down to its own perch.
  *  The whole flock renders through 3 shared instancedMesh draw calls (body,
  *  wings, invisible hit target) -- each bird's independent flight state
  *  just writes a different matrix into its own instance slot every frame,
@@ -88,16 +91,35 @@ export function Birds() {
 
   const material = useMemo(() => makeToonMaterial({ color: '#7a5738', rimStrength: 0.15 }), []);
 
-  const perchAzimuths = useMemo(() => {
+  // Randomly scattered among the moss ring (rejection-sampled so no two
+  // birds land right on top of each other), not laid out in a neat ring.
+  const perches = useMemo(() => {
     const rng = makeRng(707);
-    return new Array(BIRD_COUNT).fill(0).map((_, i) => (
-      (i / BIRD_COUNT) * Math.PI * 2 + (rng() - 0.5) * rad(18)
-    ));
+    const placed = [];
+    for (let i = 0; i < BIRD_COUNT; i += 1) {
+      let az = 0;
+      let guard = 0;
+      let ok = false;
+      while (!ok && guard < PERCH_GUARD) {
+        guard += 1;
+        az = rng() * Math.PI * 2;
+        ok = placed.every((p) => Math.abs(Math.atan2(Math.sin(az - p.az), Math.cos(az - p.az))) >= PERCH_MIN_SEP);
+      }
+      const r = PERCH_RADIUS_MIN + rng() * (PERCH_RADIUS_MAX - PERCH_RADIUS_MIN);
+      const y = GROUND_PERCH_Y + (rng() - 0.5) * 0.04;
+      // Facing roughly out toward the crossroads, with enough scatter that
+      // it doesn't read as a mechanical "all facing dead outward" ring.
+      const yaw = az + (rng() - 0.5) * rad(120);
+      placed.push({
+        az, x: Math.sin(az) * r, y, z: Math.cos(az) * r, yaw,
+      });
+    }
+    return placed;
   }, []);
 
   const state = useRef(null);
   if (!state.current) {
-    state.current = { birds: perchAzimuths.map((az) => makeBird(az)) };
+    state.current = { birds: perches.map((perch) => makeBird(perch)) };
   }
 
   const launch = (i) => {
@@ -135,7 +157,7 @@ export function Birds() {
     birds.forEach((b) => {
       if (b.mode === 'perched') {
         b.pos = { ...b.perch };
-        b.yaw = b.perch.az;
+        b.yaw = b.perch.yaw;
       } else if (b.mode === 'scatter' || b.mode === 'climb' || b.mode === 'return') {
         const dur = b.mode === 'scatter' ? SCATTER_DUR : b.mode === 'climb' ? CLIMB_DUR : RETURN_DUR;
         b.t += dt / dur;
@@ -180,7 +202,7 @@ export function Birds() {
             b.mode = 'landing';
             b.landT = 0;
             b.pos = { ...b.perch };
-            b.yaw = b.perch.az;
+            b.yaw = b.perch.yaw;
           }
         }
       } else if (b.mode === 'away') {

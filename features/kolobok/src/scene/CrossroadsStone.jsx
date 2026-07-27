@@ -80,6 +80,14 @@ function boulderWidenAt(topT, naturalR) {
 }
 const worldYToLocalY = (worldY) => (worldY - BOULDER_Y) / BOULDER_Y_SCALE;
 
+// Where the boulder's own sunken profile crosses world y=0 -- the moss/
+// grass skirt below and Birds.jsx's ground perches both key off this exact
+// value (rather than each re-deriving their own) so neither can silently
+// drift out of sync with the other.
+const GROUND_AT_LOCAL_Y = (0 - BASE_LIFT - BOULDER_Y) / BOULDER_Y_SCALE;
+const GROUND_TOP_T = Math.max(0, Math.min(1, (GROUND_AT_LOCAL_Y / BOULDER_RADIUS + 1) / 2));
+export const STONE_GROUND_RADIUS = targetRadiusAt(GROUND_TOP_T) * BOULDER_XZ_SCALE;
+
 // The groove each plaque rides in is a local dip in the SAME taper curve
 // (not a separate floating ring) -- GROOVE_DEPTH_FRAC is how much it
 // recesses relative to the surrounding (already-tapered) surface there.
@@ -427,11 +435,8 @@ export function CrossroadsStone() {
     const matrices = [];
     const CLUMPS = 30;
     const SPHERES_PER = 3;
-    // Ring the skirt where the sunk stone crosses the ground plane (y=0):
-    // find the rock radius at the local height that maps to world y=0.
-    const localAtGround = (0 - BASE_LIFT - BOULDER_Y) / BOULDER_Y_SCALE;
-    const groundTopT = Math.max(0, Math.min(1, (localAtGround / BOULDER_RADIUS + 1) / 2));
-    const baseR = targetRadiusAt(groundTopT) * BOULDER_XZ_SCALE;
+    // Ring the skirt where the sunk stone crosses the ground plane (y=0).
+    const baseR = STONE_GROUND_RADIUS;
     for (let c = 0; c < CLUMPS; c += 1) {
       const ang = (c / CLUMPS) * Math.PI * 2 + (rng() * 2 - 1) * 0.1;
       const clumpR = baseR * (0.92 + rng() * 0.22); // straddle the base edge
