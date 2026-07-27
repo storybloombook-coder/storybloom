@@ -5,6 +5,7 @@ import {
 import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { KolobokScene } from './scene/KolobokScene';
+import { TactileButton } from './TactileButton';
 import {
   orbit, story, bubbleAnchor, useSceneStore,
 } from './state/sceneStore';
@@ -236,7 +237,7 @@ export function Scene3D({ onNavigate, focused = true }) {
           right, 40x40, controls the tale. Once a full round finishes the
           loop stops itself (see StoryDirector's 'stopped' mode) and this
           swaps to a restart icon; tapping it starts back at chapter 0. */}
-      <Pressable
+      <TactileButton
         accessibilityRole="button"
         accessibilityLabel={
           storyPlaying ? t('ui.pauseTale', locale)
@@ -245,10 +246,11 @@ export function Scene3D({ onNavigate, focused = true }) {
         }
         onPress={onPlayPause}
         style={styles.storyButton}
+        innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
-      </Pressable>
+      </TactileButton>
 
       {/* Eye toggle: identical 40x40 circle, stacked directly above the
           play/pause button. ON (default) = Kolobok chases the camera and it
@@ -256,42 +258,45 @@ export function Scene3D({ onNavigate, focused = true }) {
           free camera (CameraRig.jsx skips the zone soft-snap, Kolobok.jsx
           freezes his own angle) -- dimmed background is the only visual
           state change, same eye glyph either way. */}
-      <Pressable
+      <TactileButton
         accessibilityRole="button"
         accessibilityLabel={cameraFollow ? t('ui.disableFollow', locale) : t('ui.enableFollow', locale)}
         onPress={onToggleFollow}
-        style={[styles.storyButton, styles.followButton, !cameraFollow && styles.followButtonOff]}
+        style={[styles.storyButton, styles.followButton]}
+        innerStyle={[styles.buttonVisual, !cameraFollow && styles.followButtonOff]}
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>👁</Text>
-      </Pressable>
+      </TactileButton>
 
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
           pause button on the opposite side of the screen. */}
-      <Pressable
+      <TactileButton
         accessibilityRole="button"
         accessibilityLabel={t('ui.mainMenu', locale)}
         onPress={onMainMenu}
         style={[styles.storyButton, styles.menuButton]}
+        innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>☰</Text>
-      </Pressable>
+      </TactileButton>
 
       {/* Language toggle: identical 40x40 circle, stacked directly above the
           main-menu button (mirroring how the eye toggle stacks above
           play/pause). Shows the language a tap switches TO, matching the
           menu labels' own convention of showing the destination, not the
           current state. */}
-      <Pressable
+      <TactileButton
         accessibilityRole="button"
         accessibilityLabel={t('ui.switchLanguage', locale)}
         onPress={onToggleLocale}
         style={[styles.storyButton, styles.localeButton]}
+        innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
         <Text style={styles.storyButtonText}>{locale === 'ru' ? 'EN' : 'RU'}</Text>
-      </Pressable>
+      </TactileButton>
 
       {/* Finale fade-to-black overlay; never intercepts touches. */}
       <Animated.View
@@ -399,12 +404,18 @@ const styles = StyleSheet.create({
   },
   menuPillText: { fontSize: 13, fontWeight: '600', color: '#2e2a22', textAlign: 'center' },
   menuPillUnderline: { width: 22, height: 3, borderRadius: 2, marginTop: 6 },
+  // Position/size only -- this is the OUTER TactileButton Pressable's own
+  // style (it owns the touch target since these are laid out via
+  // position:absolute). Visual look lives in buttonVisual below, on the
+  // inner view that actually scales/darkens on press.
   storyButton: {
     position: 'absolute',
     right: 14,
     bottom: 96,
     width: 40,
     height: 40,
+  },
+  buttonVisual: {
     borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.85)',
     alignItems: 'center',
