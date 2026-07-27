@@ -17,6 +17,7 @@ import { RimLightSync } from './materials/rimLight';
 import { AdaptiveQuality } from './AdaptiveQuality';
 import { DustTrail } from './DustTrail';
 import { GoldenHourExtras } from './GoldenHourExtras';
+import { BubbleAnchor } from './BubbleAnchor';
 
 // Fog + lights + all sky/weather blending live in AtmosphereDirector
 // (WEATHER_SPEC): real solar daylight when location is available, the
@@ -43,6 +44,7 @@ export function KolobokScene() {
       <CameraRig />
       <EncounterDirector />
       <StoryDirector />
+      <BubbleAnchor />
     </>
   );
 }

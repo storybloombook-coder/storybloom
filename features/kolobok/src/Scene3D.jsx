@@ -5,7 +5,9 @@ import {
 import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { KolobokScene } from './scene/KolobokScene';
-import { orbit, story, useSceneStore } from './state/sceneStore';
+import {
+  orbit, story, bubbleAnchor, useSceneStore,
+} from './state/sceneStore';
 import { refreshWeather } from './services/weather';
 import { ZONES } from './config/zones';
 import { MENU } from './config/menu';
@@ -15,6 +17,7 @@ const SWIPE_SENSITIVITY = 0.005;   // px -> radians
 const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
+const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
 
 // The actual 3D branch (Canvas, gesture wiring, the zone card + encounter
 // bubble + the stone's accessibility-twin pill row -- all of it only makes
@@ -83,6 +86,28 @@ export function Scene3D({ onNavigate, focused = true }) {
       useNativeDriver: true,
     }).start();
   }, [fadeBlack, fadeOpacity]);
+
+  // Dialogue bubble anchor: BubbleAnchor.jsx (inside the Canvas) projects
+  // the current speaker's world position to screen space every GL frame and
+  // publishes it to the transient `bubbleAnchor` bridge; this rAF loop reads
+  // it and drives the bubble's left/bottom imperatively via Animated, so it
+  // tracks the speaker smoothly without a React re-render every frame (same
+  // "outside React" reasoning as `orbit`/`storyMotion`, just bridged across
+  // the Canvas/RN boundary instead of read directly in a useFrame).
+  const bubbleLeft = useRef(new Animated.Value(-1000)).current;
+  const bubbleBottom = useRef(new Animated.Value(140)).current;
+  useEffect(() => {
+    let raf;
+    const tick = () => {
+      if (bubbleAnchor.visible) {
+        bubbleLeft.setValue(bubbleAnchor.centerX - BUBBLE_WRAP_WIDTH / 2);
+        bubbleBottom.setValue(bubbleAnchor.bottom);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [bubbleLeft, bubbleBottom]);
 
   // Gesture wiring: JS-thread callbacks writing into the transient `orbit`
   // object. In story mode, dragging no longer pauses the tale -- it just
@@ -169,15 +194,6 @@ export function Scene3D({ onNavigate, focused = true }) {
           <Text style={styles.zoneHint}>{t('ui.hint', locale)}</Text>
         </View>
 
-        {bubbleText && (
-          <View
-            style={[styles.bubble, narration && styles.narrationBubble]}
-            pointerEvents="none"
-          >
-            <Text style={styles.bubbleText}>{bubbleText}</Text>
-          </View>
-        )}
-
         {/* The crossroads stone's accessibility twin (SPEC.md "Navigation"):
             mirrors the 3D plaques 1:1 so the menu never depends on tapping
             precisely inside the Canvas. Zone travel stays gesture-only.
@@ -198,6 +214,23 @@ export function Scene3D({ onNavigate, focused = true }) {
           ))}
         </View>
       </View>
+
+      {/* Dialogue bubble: anchored above whoever is actually speaking
+          (BubbleAnchor.jsx projects their world position to screen space
+          every frame; the rAF loop above feeds it into these two Animated
+          values), rather than a single fixed screen position. A small
+          triangular tail points down at the speaker's head. */}
+      {bubbleText && (
+        <Animated.View
+          style={[styles.bubbleWrap, { left: bubbleLeft, bottom: bubbleBottom }]}
+          pointerEvents="none"
+        >
+          <View style={[styles.bubble, narration && styles.narrationBubble]}>
+            <Text style={styles.bubbleText}>{bubbleText}</Text>
+          </View>
+          <View style={styles.bubbleTail} />
+        </Animated.View>
+      )}
 
       {/* ▶ / ❚❚ / restart (STORY_SPEC §1 + one-round loop stop): bottom-
           right, 40x40, controls the tale. Once a full round finishes the
@@ -308,14 +341,22 @@ const styles = StyleSheet.create({
   zoneCard: { alignItems: 'center', marginTop: 64 },
   zoneTitle: { fontSize: 22, fontWeight: '600', color: '#2e2a22' },
   zoneHint: { fontSize: 13, color: '#4a463c', marginTop: 4, opacity: 0.8 },
+  // Absolutely positioned (left/bottom driven by the rAF loop above) rather
+  // than laid out in the flex overlay, so it can track wherever the actual
+  // speaker projects to on screen. Fixed width (matching BUBBLE_WRAP_WIDTH)
+  // so the anchor math -- centerX minus half this width -- lines up with
+  // where the content actually renders; children center within it.
+  bubbleWrap: {
+    position: 'absolute',
+    width: BUBBLE_WRAP_WIDTH,
+    alignItems: 'center',
+  },
   bubble: {
-    alignSelf: 'center',
-    maxWidth: '80%',
+    maxWidth: '90%',
     backgroundColor: 'rgba(255,255,255,0.92)',
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    marginBottom: 8,
   },
   // STORY_SPEC §4: narration reads distinct from interactive dialogue via a
   // thin left accent in the izba gold.
@@ -324,6 +365,19 @@ const styles = StyleSheet.create({
     borderLeftColor: '#d9a441',
   },
   bubbleText: { fontSize: 15, color: '#2e2a22', textAlign: 'center' },
+  // Small downward-pointing triangle (classic RN "triangle via borders"
+  // trick) so the bubble reads as a real speech bubble pointing at whoever
+  // is talking, not just a floating card.
+  bubbleTail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 8,
+    borderRightWidth: 8,
+    borderTopWidth: 9,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(255,255,255,0.92)',
+  },
   navRow: {
     flexDirection: 'row',
     justifyContent: 'center',

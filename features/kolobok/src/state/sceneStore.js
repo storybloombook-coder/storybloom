@@ -133,6 +133,21 @@ export const encounterMotion = {
   cameraPushT: 0,  // 0..1, camera orbit-radius nudge-in amount
 };
 
+// Bridge from the Canvas (world space) to the RN overlay (screen space):
+// BubbleAnchor.jsx projects whoever is currently "speaking" (narration ->
+// Kolobok; an interactive encounter.line -> that zone/Kolobok) to screen
+// coordinates every frame; Scene3D.jsx's dialogue bubble reads this to
+// anchor itself above the actual speaker instead of a single fixed
+// on-screen position. `centerX`/`bottom` are already-final CSS pixel
+// values (screen-space X of the speaker's head point; px from the
+// screen's bottom edge, gap already included) so the RN side does no
+// projection math of its own.
+export const bubbleAnchor = {
+  visible: false,
+  centerX: 0,
+  bottom: 0,
+};
+
 // Discrete events only. Anything that changes 60x/second stays in `orbit` /
 // `encounterMotion`.
 export const useSceneStore = create((set, get) => ({
