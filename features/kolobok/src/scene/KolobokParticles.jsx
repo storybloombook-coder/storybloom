@@ -176,9 +176,15 @@ export function KolobokParticles() {
             mesh.setMatrixAt(i, dummy.matrix);
             continue;
           }
+          // A Y-axis rotation by rayAngle sends local +X (the plane's long
+          // axis) to world (cos, 0, -sin) -- NOT (sin, 0, cos). Using the
+          // wrong pairing here left each ray's center offset along one
+          // direction while the plane itself was stretched along a
+          // different one, so rays floated off to the side instead of
+          // touching Kolobok's center and pointing outward from it.
           const rayAngle = s.rayAngles[i];
-          const dx = Math.sin(rayAngle);
-          const dz = Math.cos(rayAngle);
+          const dx = Math.cos(rayAngle);
+          const dz = -Math.sin(rayAngle);
           dummy.position.set(
             s.rayOrigin[0] + dx * (len / 2),
             s.rayOrigin[1],
