@@ -6,6 +6,7 @@ import { Vegetation } from './Vegetation';
 import { Sky } from './Sky';
 import { BackgroundForest } from './BackgroundForest';
 import { CrossroadsStone } from './CrossroadsStone';
+import { Birds } from './Birds';
 import { EncounterDirector } from './EncounterDirector';
 import { StoryDirector } from './StoryDirector';
 import { KolobokParticles } from './KolobokParticles';
@@ -34,6 +35,7 @@ export function KolobokScene() {
       <PondAndGrandpa />
       <GoldenHourExtras />
       <CrossroadsStone />
+      <Birds />
       <ZoneLandmarks />
       <Kolobok />
       <DustTrail />
