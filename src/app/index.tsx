@@ -1,8 +1,16 @@
 import { Link } from 'expo-router';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import TactileButton from '../components/TactileButton';
 import { t, useLocaleStore } from '../lib/i18n';
+
+// Looping background: a short (10s, already 2x slow-motion), cropped,
+// blurred, and darkened capture of the 3D scene's own opening establishing
+// shot (the crossroads stone + izba, static camera -- see
+// assets/videos/menu-background.mp4's own history for how it was made).
+// Muted and non-interactive -- purely decorative behind the menu.
+const BACKGROUND_VIDEO = require('../../assets/videos/menu-background.mp4');
 
 export default function HomeScreen() {
   const isDark = useColorScheme() === 'dark';
@@ -12,8 +20,21 @@ export default function HomeScreen() {
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
 
+  const backgroundPlayer = useVideoPlayer(BACKGROUND_VIDEO, (player) => {
+    player.loop = true;
+    player.muted = true;
+    player.play();
+  });
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
+      <VideoView
+        player={backgroundPlayer}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        nativeControls={false}
+        pointerEvents="none"
+      />
       <View style={styles.container}>
         <Text style={[styles.title, { color: textColor }]}>{t('title', locale)}</Text>
         <Text style={[styles.subtitle, { color: textColor }]}>{t('subtitle', locale)}</Text>

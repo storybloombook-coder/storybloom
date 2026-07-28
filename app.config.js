@@ -65,6 +65,7 @@ module.exports = {
       'expo-audio',
       'expo-sensors',
       'expo-localization',
+      'expo-video',
       [
         'expo-location',
         {
