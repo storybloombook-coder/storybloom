@@ -2,6 +2,7 @@ import { Link } from 'expo-router';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { BlurView } from 'expo-blur';
 import TactileButton from '../components/TactileButton';
 import { t, useLocaleStore } from '../lib/i18n';
 
@@ -16,10 +17,6 @@ export default function HomeScreen() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const backgroundColor = isDark ? '#000' : '#fff';
-  // 10% opacity so the blurred background video reads through the buttons
-  // themselves, not just around them; the light border (see styles.button/
-  // cornerButton) is what actually defines each button's edge now.
-  const buttonBackground = isDark ? 'rgba(28,28,30,0.1)' : 'rgba(242,242,242,0.1)';
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
 
@@ -44,17 +41,20 @@ export default function HomeScreen() {
 
         <View style={styles.menu}>
           <Link href="/add-book" asChild>
-            <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
+            <TactileButton style={styles.button}>
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('addBook', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/create-story" asChild>
-            <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
+            <TactileButton style={styles.button}>
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('createStory', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
-            <TactileButton style={StyleSheet.flatten([styles.button, { backgroundColor: buttonBackground }])}>
+            <TactileButton style={styles.button}>
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('myLibrary', locale)}</Text>
             </TactileButton>
           </Link>
@@ -63,7 +63,8 @@ export default function HomeScreen() {
 
       <View style={styles.cornerButtonWrap}>
         <Link href="/kolobok-preview" asChild>
-          <TactileButton style={StyleSheet.flatten([styles.cornerButton, { backgroundColor: buttonBackground }])}>
+          <TactileButton style={styles.cornerButton}>
+            <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
             <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>3D</Text>
           </TactileButton>
         </Link>
@@ -78,8 +79,9 @@ export default function HomeScreen() {
           accessibilityRole="button"
           accessibilityLabel={t('switchLanguage', locale)}
           onPress={() => setLocale(locale === 'ru' ? 'en' : 'ru')}
-          style={StyleSheet.flatten([styles.cornerButton, { backgroundColor: buttonBackground }])}
+          style={styles.cornerButton}
         >
+          <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
           <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>
             {locale === 'ru' ? 'EN' : 'RU'}
           </Text>
@@ -118,8 +120,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
+    // A real frosted-glass pane (see the BlurView rendered as this
+    // button's first child) rather than a flat tint -- the border is
+    // brighter on top than the sides/bottom, like light catching the
+    // top edge of a real glass panel.
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderTopColor: 'rgba(255,255,255,0.7)',
   },
   buttonLabel: {
     fontSize: 17,
@@ -153,7 +160,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderTopColor: 'rgba(255,255,255,0.7)',
+  },
+  // Matches cornerButton's own circular radius so the BlurView clips to a
+  // circle instead of a square corner poking out past the button's edge.
+  cornerButtonBlur: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: 20,
   },
   cornerButtonLabel: {
     fontSize: 13,
