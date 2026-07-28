@@ -1,4 +1,4 @@
-# Storybloom — set up & run on another computer
+# Kolobook — set up & run on another computer
 
 This branch (`feat/ondevice-vision-tesseract`) uses **native modules** (on-device
 Tesseract OCR + Vosk speech), so it runs in a **custom dev client**, NOT Expo Go.
@@ -81,7 +81,7 @@ npx expo run:android
 ```bash
 npx expo start --dev-client
 ```
-- **Wi-Fi:** open the Storybloom dev app on the phone → connect to
+- **Wi-Fi:** open the Kolobook dev app on the phone → connect to
   `exp://<this-pc-lan-ip>:8081` (or scan the QR). Phone + PC on the same network.
 - **USB only (no shared Wi-Fi):** `adb reverse tcp:8081 tcp:8081`, then in the dev
   app use `localhost:8081`.

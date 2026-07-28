@@ -1,6 +1,6 @@
 // menu.js — the crossroads stone's three destinations (SPEC.md
 // "Navigation"). Labels resolve through strings.js's t() -- ui.menu.* are
-// final (docs/STRINGS.md, resolved 2026-07-18). Routes map to Storybloom's
+// final (docs/STRINGS.md, resolved 2026-07-18). Routes map to Kolobook's
 // actual three home-screen destinations (src/app/add-book.tsx,
 // create-story.tsx, library.tsx).
 

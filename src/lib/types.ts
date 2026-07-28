@@ -1,4 +1,4 @@
-// types.ts — Storybloom data model (single source of truth)
+// types.ts — Kolobook data model (single source of truth)
 //
 // These types match the data model in CLAUDE.md exactly. The schema
 // (schema.ts) and the AI module (ai/gemini.ts) both build on these.

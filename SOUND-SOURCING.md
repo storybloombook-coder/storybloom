@@ -1,4 +1,4 @@
-# Storybloom — Sound Sourcing Guide
+# Kolobook — Sound Sourcing Guide
 
 > How to fill the bundled sound library, and the AI-generation options for later.
 > Written licensing-first, because VISION.md wants approved sound builds to become
@@ -86,7 +86,7 @@ kit already applies to portable bundles + ISBN capture).
 - **Free tier: ~10k credits/mo; SFX ~200 credits each — ~50 gens/mo, BUT output
   requires attribution to elevenlabs.io and is PERSONAL-USE ONLY.** Commercial
   rights need a paid plan (~$5–6/mo Starter+).
-- ❌ Reach for this ONLY if/when Storybloom monetizes (roadmap v3+). Then it's
+- ❌ Reach for this ONLY if/when Kolobook monetizes (roadmap v3+). Then it's
   excellent. Not suitable for a free, shareable v1.
 
 ### Meta AudioGen (AudioCraft) = the clean free option ✅

@@ -159,7 +159,7 @@ for (const exp of expected.pages) {
   }
 }
 
-console.log(`\nStorybloom prep check — ${expected.book}`);
+console.log(`\nKolobook prep check — ${expected.book}`);
 console.log(`PASS ${pass}   FAIL ${fail}\n`);
 if (fails.length) {
   console.log("Failures:");

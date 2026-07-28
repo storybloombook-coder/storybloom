@@ -17,7 +17,7 @@ const IS_DEV = process.env.APP_VARIANT === 'development';
 
 module.exports = {
   expo: {
-    name: IS_DEV ? 'Storybloom Testing' : 'Storybloom',
+    name: IS_DEV ? 'Kolobook Testing' : 'Kolobook',
     slug: 'Storybloom',
     owner: 'alexstorybloom',
     version: '1.0.0',

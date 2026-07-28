@@ -4,7 +4,7 @@
 // index.tsx gets swapped to render MainScreen directly instead.
 import { router, Stack, useIsFocused } from 'expo-router';
 // features/kolobok is plain JS/JSX by its own CLAUDE.md (no TypeScript
-// migration unless asked) -- untyped (implicit any) from Storybloom's side.
+// migration unless asked) -- untyped (implicit any) from Kolobook's side.
 import { MainScreen } from '../../features/kolobok/src/MainScreen';
 
 export default function KolobokPreviewScreen() {

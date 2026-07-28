@@ -1,4 +1,4 @@
-# CLAUDE.md — Storybloom
+# CLAUDE.md — Kolobook
 
 ## THIS REPO (read first)
 - Expo **SDK 57** (React Native 0.86, React 19.2, expo-router v57), TypeScript strict.
@@ -12,7 +12,7 @@
 - **Speech recognition** (`react-native-vosk`, milestone 7) is a native module
   that requires a **custom dev build** — it does NOT run in Expo Go. Keep
   milestones 1–6 Expo-Go-compatible; introduce the dev build at milestone 7.
-  Storybloom must support English AND Russian; Android's on-device Google
+  Kolobook must support English AND Russian; Android's on-device Google
   recognizer is unreliable per-device and weak in Russian, so Vosk (fully
   on-device, free, first-class EN+RU) is the primary engine. See src/lib/speech/
   for the swappable `SpeechRecognizer` interface (whisper.rn is the upgrade path).

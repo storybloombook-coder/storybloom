@@ -1,7 +1,7 @@
 // audio/playRange.ts — the ONE playback path shared by the page editor and the
 // reader, so what you hear while assigning a sound is exactly what plays during
 // a read. expo-audio has no built-in "stop at time" / fade API, so these poll
-// currentTime on an interval — fine for the short clips Storybloom plays.
+// currentTime on an interval — fine for the short clips Kolobook plays.
 
 import type { createAudioPlayer } from 'expo-audio';
 

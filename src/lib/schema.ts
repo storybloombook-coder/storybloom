@@ -1,4 +1,4 @@
-// schema.ts — Storybloom local SQLite schema (expo-sqlite)
+// schema.ts — Kolobook local SQLite schema (expo-sqlite)
 //
 // Standalone: pure SQL + a tiny init helper. No device features used beyond
 // opening the DB. Matches types.ts. Local-only storage (v1 has no backend).

@@ -1,4 +1,4 @@
-# Sound Library Manifest — Storybloom
+# Sound Library Manifest — Kolobook
 
 The app ships with a fixed set of royalty-free sounds. Gemini matches page cues
 to these ids (see gemini-vision-prompt.md). This is a STARTER set — expand later.

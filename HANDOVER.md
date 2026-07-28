@@ -1,4 +1,4 @@
-# Storybloom — Handover
+# Kolobook — Handover
 
 _Snapshot for picking up on another machine / another day. **Update this file
 every time you commit + push meaningful work** — it's the first thing a fresh
@@ -102,7 +102,7 @@ native module isn't present (e.g. Expo Go), `createVisionProvider` throws a
 clear error instead of falling back.
 
 **Dev/prod app separation** — the dev-client build has its own Android
-package (`com.storybloom.app.dev`, name "**Storybloom Testing**", a
+package (`com.storybloom.app.dev`, name "**Kolobook Testing**", a
 yellow-tinted icon) via `app.config.js` + `APP_VARIANT=development` (set in
 `eas.json`'s `development` profile). It installs as a genuinely separate app
 from any preview/production build permanently — they used to share
@@ -146,7 +146,7 @@ because "Try another," a real unbuilt gap, isn't documented anywhere else).
 
 ## Latest dev-client build
 
-Package `com.storybloom.app.dev`, name "Storybloom Testing" — installs
+Package `com.storybloom.app.dev`, name "Kolobook Testing" — installs
 alongside any existing `com.storybloom.app` build, does not overwrite it.
 
 - **Build:** https://expo.dev/accounts/alexstorybloom/projects/Storybloom/builds/05a71b4c-adc4-4bb4-9369-e6511e7276b5

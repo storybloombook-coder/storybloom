@@ -1,4 +1,4 @@
-# Design Direction — Storybloom
+# Design Direction — Kolobook
 
 The look and feel this app is aiming for. This guides the visual restyle
 (milestone 11) and the general "vibe" of every screen. It is NOT a v1 blocker —

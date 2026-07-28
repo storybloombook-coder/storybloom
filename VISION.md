@@ -1,6 +1,6 @@
-# Storybloom — Product Vision (north star)
+# Kolobook — Product Vision (north star)
 
-This is where Storybloom is headed. NONE of this is v1. It's here so v1 decisions
+This is where Kolobook is headed. NONE of this is v1. It's here so v1 decisions
 don't accidentally close doors. v1 stays local-only and free; these are the
 horizons that justify the shape of the data model.
 

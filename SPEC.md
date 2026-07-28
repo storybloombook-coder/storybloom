@@ -1,4 +1,4 @@
-# Storybloom — Product Spec (v1)
+# Kolobook — Product Spec (v1)
 
 ## One-liner
 A mobile app that turns a physical children's book into an immersive read-aloud
@@ -91,7 +91,7 @@ on later via a toggle — NOT required to call v1 a success.
 - Free-tier rate limits (handle 429s; check live caps in Google AI Studio).
 
 ## First plan-mode prompt (suggested for the other account)
-> Read CLAUDE.md. We're building Storybloom, a React Native + Expo app that must
+> Read CLAUDE.md. We're building Kolobook, a React Native + Expo app that must
 > run entirely on free API tiers. Start with milestone 1 only: scaffold an
 > Expo + TypeScript project using expo-router, with a single blank home screen,
 > that runs in Expo Go on Android. Use plan mode — propose the setup and file

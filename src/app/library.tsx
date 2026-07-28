@@ -221,7 +221,7 @@ export default function LibraryScreen() {
         <View style={styles.empty}>
           <Text style={[styles.emptyTitle, { color: textColor }]}>Your library is empty</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
-            Photograph a book’s pages and Storybloom will bring it to life.
+            Photograph a book’s pages and Kolobook will bring it to life.
           </Text>
           <TactileButton
             style={StyleSheet.flatten([
