@@ -16,10 +16,10 @@ export default function HomeScreen() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const backgroundColor = isDark ? '#000' : '#fff';
-  // Solid-ish fill (60% opacity) so the buttons read clearly over the
+  // Solid-ish fill (55% opacity) so the buttons read clearly over the
   // busier background video, with the light border (see styles.button/
   // cornerButton) still outlining each one.
-  const buttonBackground = isDark ? 'rgba(28,28,30,0.6)' : 'rgba(242,242,242,0.6)';
+  const buttonBackground = isDark ? 'rgba(28,28,30,0.55)' : 'rgba(242,242,242,0.55)';
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
 
