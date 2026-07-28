@@ -4,8 +4,10 @@ import { StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { BlurView } from 'expo-blur';
+import GlassGlare from '../components/GlassGlare';
 import TactileButton from '../components/TactileButton';
 import { t, useLocaleStore } from '../lib/i18n';
+import { useDeviceTilt } from '../lib/useDeviceTilt';
 
 // Looping background: a short (10s, already 2x slow-motion), cropped,
 // blurred, and darkened capture of the 3D scene's own opening establishing
@@ -20,6 +22,9 @@ export default function HomeScreen() {
   const backgroundColor = isDark ? '#000' : '#fff';
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
+  // One accelerometer subscription shared by every glass button's own
+  // GlassGlare overlay below -- see lib/useDeviceTilt's own comment for why.
+  const { tiltX, tiltY } = useDeviceTilt();
 
   const backgroundPlayer = useVideoPlayer(BACKGROUND_VIDEO, (player) => {
     player.loop = true;
@@ -56,18 +61,21 @@ export default function HomeScreen() {
           <Link href="/add-book" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassGlare tiltX={tiltX} tiltY={tiltY} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.addBook', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/create-story" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassGlare tiltX={tiltX} tiltY={tiltY} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.createStory', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassGlare tiltX={tiltX} tiltY={tiltY} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.myLibrary', locale)}</Text>
             </TactileButton>
           </Link>
@@ -78,6 +86,7 @@ export default function HomeScreen() {
         <Link href="/kolobok-preview" asChild>
           <TactileButton style={styles.cornerButton}>
             <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+            <GlassGlare tiltX={tiltX} tiltY={tiltY} />
             <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>3D</Text>
           </TactileButton>
         </Link>
@@ -95,6 +104,7 @@ export default function HomeScreen() {
           style={styles.cornerButton}
         >
           <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+          <GlassGlare tiltX={tiltX} tiltY={tiltY} />
           <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>
             {locale === 'ru' ? 'EN' : 'RU'}
           </Text>
