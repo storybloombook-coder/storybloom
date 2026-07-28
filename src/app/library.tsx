@@ -28,6 +28,7 @@ import {
   updateShelfOrder,
   type BookSummary,
 } from '../lib/db';
+import { t, useLocaleStore, type Locale } from '../lib/i18n';
 import {
   checkReadiness,
   warningLabel,
@@ -36,25 +37,32 @@ import {
 } from '../lib/reader/readiness';
 import type { Book, Cue } from '../lib/types';
 
-const STATUS: Record<Book['prepStatus'], { label: string; color: string }> = {
-  pending: { label: 'Pending', color: '#8e8e93' },
-  processing: { label: 'Prepping…', color: '#e8a33d' },
-  ready: { label: 'Ready', color: '#2fb344' },
-  failed: { label: 'Prep failed', color: '#ff453a' },
+const STATUS_COLOR: Record<Book['prepStatus'], string> = {
+  pending: '#8e8e93',
+  processing: '#e8a33d',
+  ready: '#2fb344',
+  failed: '#ff453a',
+};
+const STATUS_KEY: Record<Book['prepStatus'], string> = {
+  pending: 'common.statusPending',
+  processing: 'common.statusPrepping',
+  ready: 'common.statusReady',
+  failed: 'common.statusPrepFailed',
 };
 
-function formatDate(ms: number): string {
+function formatDate(ms: number, locale: Locale): string {
   const d = new Date(ms);
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) return `Today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  if (sameDay) return `${t('library.today', locale)} ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  if (d.toDateString() === yesterday.toDateString()) return t('library.yesterday', locale);
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 }
 
 export default function LibraryScreen() {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -194,7 +202,7 @@ export default function LibraryScreen() {
                 onPress={() => setViewMode('books')}
               >
                 <Text style={[styles.tabLabel, { color: viewMode === 'books' ? '#208AEF' : subColor }]}>
-                  My Library
+                  {t('library.myLibrary', locale)}
                 </Text>
               </TactileButton>
               <TactileButton
@@ -207,7 +215,7 @@ export default function LibraryScreen() {
                 onPress={() => setViewMode('recordings')}
               >
                 <Text style={[styles.tabLabel, { color: viewMode === 'recordings' ? '#208AEF' : subColor }]}>
-                  My Recordings
+                  {t('library.myRecordings', locale)}
                 </Text>
               </TactileButton>
             </View>
@@ -219,9 +227,9 @@ export default function LibraryScreen() {
         <RecordingsList />
       ) : books.length === 0 ? (
         <View style={styles.empty}>
-          <Text style={[styles.emptyTitle, { color: textColor }]}>Your library is empty</Text>
+          <Text style={[styles.emptyTitle, { color: textColor }]}>{t('library.emptyTitle', locale)}</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
-            Photograph a book’s pages and Kolobook will bring it to life.
+            {t('library.emptyBody', locale)}
           </Text>
           <TactileButton
             style={StyleSheet.flatten([
@@ -230,21 +238,21 @@ export default function LibraryScreen() {
             ])}
             onPress={() => router.push('/add-book')}
           >
-            <Text style={styles.ctaLabel}>Add your first book</Text>
+            <Text style={styles.ctaLabel}>{t('library.addFirstBook', locale)}</Text>
           </TactileButton>
         </View>
       ) : favoritesOnly && visibleBooks.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyStar}>☆</Text>
-          <Text style={[styles.emptyTitle, { color: textColor }]}>No favorites yet</Text>
+          <Text style={[styles.emptyTitle, { color: textColor }]}>{t('library.noFavoritesTitle', locale)}</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
-            Tap the ☆ on any book to add it here.
+            {t('library.noFavoritesBody', locale)}
           </Text>
           <TactileButton
             style={StyleSheet.flatten([styles.cta, { backgroundColor: badgeBackground }])}
             onPress={() => setFavoritesOnly(false)}
           >
-            <Text style={[styles.ctaLabel, { color: textColor }]}>Show all books</Text>
+            <Text style={[styles.ctaLabel, { color: textColor }]}>{t('library.showAllBooks', locale)}</Text>
           </TactileButton>
         </View>
       ) : (
@@ -271,8 +279,8 @@ export default function LibraryScreen() {
               <View style={styles.countRow}>
                 <Text style={[styles.count, { color: subColor }]}>
                   {favoritesOnly
-                    ? `${visibleBooks.length} favorite${visibleBooks.length === 1 ? '' : 's'}`
-                    : `${books.length} book${books.length === 1 ? '' : 's'} · ${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}`}
+                    ? t('library.favoriteCount', locale, visibleBooks.length)
+                    : t('library.bookAndFavoriteCount', locale, books.length, favoriteCount)}
                 </Text>
                 {/* The favorites toggle now lives here (not the header) —
                     always tappable, even at 0 favorites, so there's still a
@@ -287,7 +295,7 @@ export default function LibraryScreen() {
             </>
           }
           renderItem={({ item }) => {
-            const status = STATUS[item.prepStatus];
+            const status = { label: t(STATUS_KEY[item.prepStatus], locale), color: STATUS_COLOR[item.prepStatus] };
             const readiness = readinessByBook.get(item.id);
             const canRead = (readiness?.storyPageCount ?? 0) > 0;
             const missingCount = readiness?.warnings.length ?? 0;
@@ -318,24 +326,24 @@ export default function LibraryScreen() {
                     <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
                     <Text style={[styles.meta, { color: subColor }]}>
                       {'  ·  '}
-                      {item.pageCount} pg · {item.cueCount} cue{item.cueCount === 1 ? '' : 's'}
+                      {t('library.pageAndCueCount', locale, item.pageCount, item.cueCount)}
                     </Text>
                   </View>
 
-                  <Text style={[styles.meta, { color: subColor }]}>{formatDate(item.createdAt)}</Text>
+                  <Text style={[styles.meta, { color: subColor }]}>{formatDate(item.createdAt, locale)}</Text>
 
                   <View style={styles.badges}>
                     <Badge
-                      label={item.source === 'dictation' ? '🎙️ Dictated' : 'Photos'}
+                      label={item.source === 'dictation' ? t('library.dictatedBadge', locale) : t('library.photosBadge', locale)}
                     />
-                    {item.hasDialogue && <Badge label="Dialogue" />}
+                    {item.hasDialogue && <Badge label={t('library.dialogueBadge', locale)} />}
                     {missingCount > 0 && (
                       <Pressable
                         onPress={() => setMissingFor({ title: item.title, warnings: readiness!.warnings })}
                         hitSlop={6}
                       >
                         <View style={styles.warnChip}>
-                          <Text style={styles.warnChipText}>⚠️ {missingCount}</Text>
+                          <Text style={styles.warnChipText}>{t('library.missingCount', locale, missingCount)}</Text>
                         </View>
                       </Pressable>
                     )}
@@ -373,10 +381,10 @@ export default function LibraryScreen() {
           <Pressable style={StyleSheet.flatten([styles.sheet, { backgroundColor: sheetBackground }])}>
             <Text style={styles.deleteEmoji}>⚠️</Text>
             <Text style={StyleSheet.flatten([styles.sheetTitle, { color: textColor }])}>
-              What’s missing in “{missingFor?.title}”
+              {t('library.whatsMissingTitle', locale, missingFor?.title ?? '')}
             </Text>
             <Text style={StyleSheet.flatten([styles.deleteMessage, { color: subColor }])}>
-              Tap an item to jump to that page and fix it.
+              {t('library.whatsMissingBody', locale)}
             </Text>
             <ScrollView style={{ alignSelf: 'stretch', maxHeight: 260 }}>
               {missingFor?.warnings.map((w, i) => (
@@ -389,7 +397,7 @@ export default function LibraryScreen() {
                   }}
                 >
                   <Text style={StyleSheet.flatten([styles.missingText, { color: textColor }])}>
-                    {warningLabel(w)}
+                    {warningLabel(w, locale)}
                   </Text>
                   <Text style={{ color: subColor }}>›</Text>
                 </Pressable>
@@ -400,7 +408,7 @@ export default function LibraryScreen() {
                 style={StyleSheet.flatten([styles.button, { backgroundColor: badgeBackground }])}
                 onPress={() => setMissingFor(null)}
               >
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>Close</Text>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('common.close', locale)}</Text>
               </TactileButton>
             </View>
           </Pressable>
@@ -409,8 +417,8 @@ export default function LibraryScreen() {
 
       <ConfirmDeleteModal
         visible={pendingDelete !== null}
-        title={`Delete "${pendingDelete?.title}"?`}
-        message={`This book and its ${pendingDelete?.pageCount ?? 0} page${pendingDelete?.pageCount === 1 ? '' : 's'} will be permanently removed.`}
+        title={t('library.deleteBookTitle', locale, pendingDelete?.title ?? '')}
+        message={t('library.deleteBookBody', locale, pendingDelete?.pageCount ?? 0)}
         onConfirm={performDelete}
         onCancel={() => setPendingDelete(null)}
       />

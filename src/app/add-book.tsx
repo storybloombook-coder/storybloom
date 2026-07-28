@@ -25,6 +25,7 @@ import TactileButton from '../components/TactileButton';
 import { SOUND_ALLOWLISTS } from '../lib/ai/soundLibrary';
 import { createVisionProvider } from '../lib/vision';
 import { createBook, createCue, createPage, setBookPrepStatus, updatePagePrepResult } from '../lib/db';
+import { t, useLocaleStore } from '../lib/i18n';
 import type { BookLanguage } from '../lib/types';
 
 const GRID_GAP = 12;
@@ -60,6 +61,7 @@ interface DebugPageInfo {
 }
 
 export default function AddBookScreen() {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -153,7 +155,7 @@ export default function AddBookScreen() {
   async function takePhoto() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permission needed', 'Camera access is required to photograph pages.');
+      Alert.alert(t('common.permissionNeeded', locale), t('common.cameraPermissionBody', locale));
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -172,7 +174,7 @@ export default function AddBookScreen() {
   async function pickFromLibrary() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permission needed', 'Photo library access is required to add pages.');
+      Alert.alert(t('common.permissionNeeded', locale), t('common.libraryPermissionBody', locale));
       return;
     }
     // The OS's own crop UI can't combine with multi-select, but that only
@@ -203,7 +205,7 @@ export default function AddBookScreen() {
     const title = titleInput.trim() || 'Untitled Book';
     setTitleModalVisible(false);
     setProcessing(true);
-    setProgressText('Creating book…');
+    setProgressText(t('addBook.creatingBook', locale));
     setDebugPages([]);
 
     try {
@@ -222,7 +224,7 @@ export default function AddBookScreen() {
 
       for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
-        setProgressText(`Prepping page ${i + 1} of ${pages.length}…`);
+        setProgressText(t('addBook.preppingPage', locale, i + 1, pages.length));
 
         const destFile = new ExpoFile(bookDir, `page-${i + 1}.jpg`);
         await new ExpoFile(page.uri).copy(destFile);
@@ -318,13 +320,13 @@ export default function AddBookScreen() {
 
       if (failureCount > 0) {
         setResultModal({
-          title: 'Book prepped with some errors',
-          message: `${pages.length - failureCount} of ${pages.length} page(s) processed successfully. The rest couldn't be read — retry, or fix them in the book editor.`,
+          title: t('addBook.preppedWithErrorsTitle', locale),
+          message: t('addBook.preppedWithErrorsBody', locale, pages.length - failureCount, pages.length),
           success: false,
         });
         // Stays up until the parent taps through — this one's worth reading.
       } else {
-        setResultModal({ title: 'Book ready! 🌱', message: `"${title}" was prepped successfully.`, success: true });
+        setResultModal({ title: t('addBook.readyTitle', locale), message: t('addBook.readyBody', locale, title), success: true });
         setTimeout(() => {
           setResultModal(null);
           router.replace('/library');
@@ -332,13 +334,13 @@ export default function AddBookScreen() {
       }
     } catch (err: any) {
       setProcessing(false);
-      Alert.alert('Something went wrong', err?.message ?? String(err));
+      Alert.alert(t('addBook.somethingWentWrong', locale), err?.message ?? String(err));
     }
   }
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
-      <Stack.Screen options={{ headerShown: true, title: 'Add a Book' }} />
+      <Stack.Screen options={{ headerShown: true, title: t('addBook.title', locale) }} />
 
       {pages.length > 0 ? (
         <ScrollView contentContainerStyle={styles.thumbGrid}>
@@ -361,7 +363,7 @@ export default function AddBookScreen() {
       ) : (
         <View style={styles.emptyState}>
           <Text style={StyleSheet.flatten([styles.emptyStateText, { color: textColor }])}>
-            No pages yet — add photos below to get started.
+            {t('addBook.noPagesYet', locale)}
           </Text>
         </View>
       )}
@@ -380,10 +382,10 @@ export default function AddBookScreen() {
               >
                 <Text style={styles.squareButtonEmoji}>🖼️</Text>
                 <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
-                  Add Pictures
+                  {t('common.addPictures', locale)}
                 </Text>
                 <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
-                  from your library or files
+                  {t('common.fromLibraryOrFiles', locale)}
                 </Text>
               </TactileButton>
             </View>
@@ -397,10 +399,10 @@ export default function AddBookScreen() {
               >
                 <Text style={styles.squareButtonEmoji}>📷</Text>
                 <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
-                  Make Photos
+                  {t('addBook.makePhotos', locale)}
                 </Text>
                 <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
-                  using your camera
+                  {t('common.usingYourCamera', locale)}
                 </Text>
               </TactileButton>
             </View>
@@ -417,10 +419,10 @@ export default function AddBookScreen() {
                 >
                   <Text style={styles.squareButtonEmoji}>✅</Text>
                   <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
-                    Done
+                    {t('addBook.done', locale)}
                   </Text>
                   <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
-                    {pages.length} page{pages.length === 1 ? '' : 's'}
+                    {t('addBook.pageCount', locale, pages.length)}
                   </Text>
                 </TactileButton>
               </View>
@@ -431,10 +433,10 @@ export default function AddBookScreen() {
                 >
                   <Text style={styles.squareButtonEmoji}>{captureMode === 'library' ? '🖼️' : '📷'}</Text>
                   <Text style={StyleSheet.flatten([styles.squareButtonLabel, { color: textColor }])}>
-                    {captureMode === 'library' ? 'Next Picture' : 'Next Photo'}
+                    {captureMode === 'library' ? t('addBook.nextPicture', locale) : t('addBook.nextPhoto', locale)}
                   </Text>
                   <Text style={StyleSheet.flatten([styles.squareButtonCaption, { color: subColor }])}>
-                    {captureMode === 'library' ? 'from your library or files' : 'using your camera'}
+                    {captureMode === 'library' ? t('common.fromLibraryOrFiles', locale) : t('common.usingYourCamera', locale)}
                   </Text>
                 </TactileButton>
               </View>
@@ -444,7 +446,7 @@ export default function AddBookScreen() {
               onPress={() => router.back()}
             >
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>
-                Cancel
+                {t('common.cancel', locale)}
               </Text>
             </TactileButton>
           </>
@@ -454,7 +456,7 @@ export default function AddBookScreen() {
       <PhotoEditor
         visible={editingSource !== null}
         source={editingSource}
-        queueLabel={batchTotal > 1 ? `Photo ${batchTotal - editQueue.length} of ${batchTotal}` : undefined}
+        queueLabel={batchTotal > 1 ? t('addBook.photoQueue', locale, batchTotal - editQueue.length, batchTotal) : undefined}
         onCancel={handleEditorCancel}
         onDone={handleEditorDone}
       />
@@ -472,12 +474,12 @@ export default function AddBookScreen() {
           <Pressable style={styles.backdrop} onPress={() => setTitleModalVisible(false)}>
             <Pressable style={StyleSheet.flatten([styles.sheet, { backgroundColor: sheetBackground }])}>
               <Text style={StyleSheet.flatten([styles.sheetTitle, { color: textColor }])}>
-                Name this book
+                {t('addBook.nameThisBook', locale)}
               </Text>
               <TextInput
                 value={titleInput}
                 onChangeText={setTitleInput}
-                placeholder="e.g. Bedtime Frog"
+                placeholder={t('addBook.bookTitlePlaceholder', locale)}
                 placeholderTextColor={isDark ? '#888' : '#999'}
                 style={StyleSheet.flatten([
                   styles.titleInput,
@@ -486,7 +488,7 @@ export default function AddBookScreen() {
                 autoFocus
               />
               <Text style={StyleSheet.flatten([styles.langLabel, { color: textColor }])}>
-                What language is this book?
+                {t('addBook.whatLanguage', locale)}
               </Text>
               <View style={styles.langToggleRow}>
                 <View style={styles.langBtnWrap}>
@@ -500,7 +502,7 @@ export default function AddBookScreen() {
                     onPress={() => setBookLanguage('en')}
                   >
                     <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'en' ? '#208AEF' : textColor }])}>
-                      English
+                      {t('common.englishLabel', locale)}
                     </Text>
                   </TactileButton>
                 </View>
@@ -515,7 +517,7 @@ export default function AddBookScreen() {
                     onPress={() => setBookLanguage('ru')}
                   >
                     <Text style={StyleSheet.flatten([styles.langBtnLabel, { color: bookLanguage === 'ru' ? '#208AEF' : textColor }])}>
-                      Русский
+                      {t('common.russianLabel', locale)}
                     </Text>
                   </TactileButton>
                 </View>
@@ -525,12 +527,12 @@ export default function AddBookScreen() {
                 onPress={startProcessing}
               >
                 <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#208AEF' }])}>
-                  Start Processing ({pages.length} page{pages.length === 1 ? '' : 's'})
+                  {t('addBook.startProcessing', locale, pages.length)}
                 </Text>
               </TactileButton>
               <TactileButton style={styles.cancelButton} onPress={() => setTitleModalVisible(false)}>
                 <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#ff453a' }])}>
-                  Cancel
+                  {t('common.cancel', locale)}
                 </Text>
               </TactileButton>
             </Pressable>
@@ -567,7 +569,7 @@ export default function AddBookScreen() {
                   router.replace('/library');
                 }}
               >
-                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#208AEF' }])}>OK</Text>
+                <Text style={StyleSheet.flatten([styles.buttonLabel, { color: '#208AEF' }])}>{t('common.ok', locale)}</Text>
               </TactileButton>
             )}
           </View>

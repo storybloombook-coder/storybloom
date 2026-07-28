@@ -41,6 +41,7 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { playRange } from '../lib/audio/playRange';
 import { updateRecordingTrim } from '../lib/db';
+import { t, useLocaleStore } from '../lib/i18n';
 import type { Recording } from '../lib/types';
 import PulsingDot from './PulsingDot';
 import TactileButton from './TactileButton';
@@ -73,6 +74,7 @@ export default function EditRecordingModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -214,7 +216,7 @@ export default function EditRecordingModal({
     setError(null);
     const perm = await requestRecordingPermissionsAsync();
     if (!perm.granted) {
-      setError('Microphone access is required to re-record.');
+      setError(t('recordings.micRerecordBody', locale));
       return;
     }
     stopPreview();
@@ -347,7 +349,7 @@ export default function EditRecordingModal({
           <Pressable style={styles.backdrop} onPress={saving ? undefined : handleClose}>
             <Pressable style={[styles.sheet, { backgroundColor: cardBackground }]}>
               <Text style={[styles.sheetTitle, { color: textColor }]} numberOfLines={1}>
-                Edit “{recording?.name}”
+                {t('recordings.editTitle', locale, recording?.name ?? '')}
               </Text>
 
               {recorderState.isRecording ? (
@@ -359,14 +361,13 @@ export default function EditRecordingModal({
                     </Text>
                   </View>
                   <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={stopReRecording}>
-                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop</Text>
+                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.stopGlyph', locale)}</Text>
                   </TactileButton>
                 </>
               ) : (
                 <>
               <Text style={[styles.recordHint, { color: subColor }]}>
-                Drag the edges to trim · {trimStart.toFixed(1)}s–{trimEnd.toFixed(1)}s of{' '}
-                {recordingDuration.toFixed(1)}s · the full clip is always kept, only the played range changes
+                {t('recordings.trimHintLong', locale, trimStart.toFixed(1), trimEnd.toFixed(1), recordingDuration.toFixed(1))}
               </Text>
 
               <View style={styles.waveformRow}>
@@ -382,7 +383,7 @@ export default function EditRecordingModal({
                     </Text>
                   </TactileButton>
                   <Text style={[styles.waveformSideCaption, { color: subColor }]}>
-                    {previewPlayhead !== null ? 'stop' : 'play'}
+                    {previewPlayhead !== null ? t('common.stop', locale) : t('common.play', locale)}
                   </Text>
                 </View>
 
@@ -434,7 +435,7 @@ export default function EditRecordingModal({
                   >
                     <Text style={[styles.waveformSideButtonIcon, { color: '#ff453a' }]}>↻</Text>
                   </TactileButton>
-                  <Text style={[styles.waveformSideCaption, { color: subColor }]}>Re-record</Text>
+                  <Text style={[styles.waveformSideCaption, { color: subColor }]}>{t('common.reRecord', locale)}</Text>
                 </View>
               </View>
 
@@ -443,13 +444,13 @@ export default function EditRecordingModal({
                   <View style={[styles.checkboxBox, fadeInOn && styles.checkboxBoxChecked]}>
                     {fadeInOn && <Text style={styles.checkboxMark}>✓</Text>}
                   </View>
-                  <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade in (1s)</Text>
+                  <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeIn', locale)}</Text>
                 </TactileButton>
                 <TactileButton style={styles.checkbox} onPress={() => setFadeOutOn((v) => !v)}>
                   <View style={[styles.checkboxBox, fadeOutOn && styles.checkboxBoxChecked]}>
                     {fadeOutOn && <Text style={styles.checkboxMark}>✓</Text>}
                   </View>
-                  <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade out (1s)</Text>
+                  <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeOut', locale)}</Text>
                 </TactileButton>
               </View>
                 </>
@@ -465,13 +466,13 @@ export default function EditRecordingModal({
                     onPress={handleClose}
                     disabled={saving}
                   >
-                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>Cancel</Text>
+                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
                   </TactileButton>
                 </View>
                 <View style={styles.toolBtnWrap}>
                   <TactileButton style={[styles.actionButton, styles.softGreen]} onPress={handleSave} disabled={saving}>
                     <Text style={[styles.actionButtonLabel, { color: '#2fb344' }]}>
-                      {saving ? 'Saving…' : '✅ Save changes'}
+                      {saving ? t('common.saving', locale) : t('recordings.saveChanges', locale)}
                     </Text>
                   </TactileButton>
                 </View>

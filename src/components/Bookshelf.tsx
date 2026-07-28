@@ -71,6 +71,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
+import { t, useLocaleStore } from '../lib/i18n';
 
 type AccelerometerModule = {
   setUpdateInterval: (ms: number) => void;
@@ -1077,6 +1078,7 @@ export default function Bookshelf({
   /** Called with the new left-to-right book ids after a drag settles. */
   onReorder: (bookIds: string[]) => void;
 }) {
+  const locale = useLocaleStore((s) => s.locale);
   const [containerWidth, setContainerWidth] = useState(0);
 
   // Spines are a fixed width (see SPINE_WIDTH) — once more books are
@@ -1111,7 +1113,7 @@ export default function Bookshelf({
 
   return (
     <View style={styles.wrap} onLayout={onLayout}>
-      <Text style={styles.label}>Bookshelf</Text>
+      <Text style={styles.label}>{t('library.bookshelfLabel', locale)}</Text>
       {containerWidth > 0 && (
         <ShelfPage
           key={currentShelf}

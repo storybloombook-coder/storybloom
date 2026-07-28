@@ -33,6 +33,7 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { playRange } from '../lib/audio/playRange';
 import { createRecording } from '../lib/db';
+import { t, useLocaleStore } from '../lib/i18n';
 import PulsingDot from './PulsingDot';
 import TactileButton from './TactileButton';
 
@@ -65,6 +66,7 @@ export default function StandaloneRecordModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -97,8 +99,13 @@ export default function StandaloneRecordModal({
   const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const previewStopRef = useRef<(() => void) | null>(null);
 
-  const title = kind === 'ambient' ? 'Record an ambient sound' : 'Record a sound';
+  const title = kind === 'ambient' ? t('recordings.recordAmbientTitle', locale) : t('recordings.recordSoundTitle', locale);
+  // Stored verbatim in the DB (both as Recording.originLabel and compared
+  // against elsewhere via === 'Ambient') -- kept as a fixed English sentinel
+  // regardless of locale, same as page/[id].tsx's saveRecording. Only the
+  // DISPLAYED name/placeholder below get a translated version.
   const originLabel = kind === 'ambient' ? 'Ambient' : 'Sound effect';
+  const originLabelDisplay = kind === 'ambient' ? t('recordings.ambientOrigin', locale) : t('recordings.soundEffectOrigin', locale);
 
   // Derived: 1s fades when the matching checkbox is on, clamped to half the
   // trimmed length so a fade can't outlast what's left to play.
@@ -150,7 +157,7 @@ export default function StandaloneRecordModal({
     setError(null);
     const perm = await requestRecordingPermissionsAsync();
     if (!perm.granted) {
-      setError('Microphone access is required to record a sound.');
+      setError(t('page.micNeededBody', locale));
       return;
     }
     await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -246,7 +253,7 @@ export default function StandaloneRecordModal({
       const fadeOutMs = Math.round(fadeOut * 1000);
 
       await createRecording({
-        name: name.trim() || `${originLabel} ${new Date().toLocaleDateString()}`,
+        name: name.trim() || t('recordings.recordingNameTemplate', locale, originLabelDisplay, new Date().toLocaleDateString()),
         fileUri: dest.uri,
         durationMs: Math.round(recordingDuration * 1000),
         startMs,
@@ -330,14 +337,13 @@ export default function StandaloneRecordModal({
                     </Text>
                   </View>
                   <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={stopRecording}>
-                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop</Text>
+                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.stopGlyph', locale)}</Text>
                   </TactileButton>
                 </>
               ) : recordedUri ? (
                 <>
                   <Text style={[styles.recordHint, { color: subColor }]}>
-                    Drag the edges to trim · {trimStart.toFixed(1)}s–{trimEnd.toFixed(1)}s of{' '}
-                    {recordingDuration.toFixed(1)}s
+                    {t('page.trimHint', locale, trimStart.toFixed(1), trimEnd.toFixed(1), recordingDuration.toFixed(1))}
                   </Text>
 
                   <View style={styles.waveformRow}>
@@ -353,7 +359,7 @@ export default function StandaloneRecordModal({
                         </Text>
                       </TactileButton>
                       <Text style={[styles.waveformSideCaption, { color: subColor }]}>
-                        {previewPlayhead !== null ? 'stop' : 'play'}
+                        {previewPlayhead !== null ? t('common.stop', locale) : t('common.play', locale)}
                       </Text>
                     </View>
 
@@ -405,7 +411,7 @@ export default function StandaloneRecordModal({
                       >
                         <Text style={[styles.waveformSideButtonIcon, { color: '#ff453a' }]}>↻</Text>
                       </TactileButton>
-                      <Text style={[styles.waveformSideCaption, { color: subColor }]}>Re-record</Text>
+                      <Text style={[styles.waveformSideCaption, { color: subColor }]}>{t('common.reRecord', locale)}</Text>
                     </View>
                   </View>
 
@@ -414,20 +420,20 @@ export default function StandaloneRecordModal({
                       <View style={[styles.checkboxBox, fadeInOn && styles.checkboxBoxChecked]}>
                         {fadeInOn && <Text style={styles.checkboxMark}>✓</Text>}
                       </View>
-                      <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade in (1s)</Text>
+                      <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeIn', locale)}</Text>
                     </TactileButton>
                     <TactileButton style={styles.checkbox} onPress={() => setFadeOutOn((v) => !v)}>
                       <View style={[styles.checkboxBox, fadeOutOn && styles.checkboxBoxChecked]}>
                         {fadeOutOn && <Text style={styles.checkboxMark}>✓</Text>}
                       </View>
-                      <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade out (1s)</Text>
+                      <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeOut', locale)}</Text>
                     </TactileButton>
                   </View>
 
                   <TextInput
                     value={name}
                     onChangeText={setName}
-                    placeholder={`Name this ${originLabel.toLowerCase()} (optional) — find it later`}
+                    placeholder={t('recordings.recordingNamePlaceholderTemplate', locale, originLabelDisplay.toLowerCase())}
                     placeholderTextColor={subColor}
                     style={[styles.nameInput, { color: textColor, backgroundColor: inputBackground }]}
                     returnKeyType="done"
@@ -442,7 +448,7 @@ export default function StandaloneRecordModal({
                         onPress={handleClose}
                         disabled={saving}
                       >
-                        <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>Cancel</Text>
+                        <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
                       </TactileButton>
                     </View>
                     <View style={styles.toolBtnWrap}>
@@ -452,7 +458,7 @@ export default function StandaloneRecordModal({
                         disabled={saving}
                       >
                         <Text style={[styles.actionButtonLabel, { color: '#2fb344' }]}>
-                          {saving ? 'Saving…' : '✅ Use this recording'}
+                          {saving ? t('common.saving', locale) : t('common.useThisRecording', locale)}
                         </Text>
                       </TactileButton>
                     </View>
@@ -462,14 +468,14 @@ export default function StandaloneRecordModal({
                 <>
                   {error && <Text style={styles.errorText}>{error}</Text>}
                   <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={startRecording}>
-                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>🎤 Start recording</Text>
+                    <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.startRecording', locale)}</Text>
                   </TactileButton>
                 </>
               )}
 
               {(recorderState.isRecording || !recordedUri) && (
                 <TactileButton style={styles.cancelRow} onPress={handleClose} disabled={saving}>
-                  <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
                 </TactileButton>
               )}
             </Pressable>

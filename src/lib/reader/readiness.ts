@@ -8,6 +8,7 @@
 
 import { isReadablePage, type Cue, type Page } from '../types';
 import { isPlayable } from '../audio/soundResolver';
+import { t, type Locale } from '../i18n';
 
 export type ReadinessWarningKind =
   | 'empty_text' // a story page with no recognized text at all
@@ -97,15 +98,15 @@ export function checkReadiness(
 }
 
 /** A short human-readable line for a warning, for the gate's checklist. */
-export function warningLabel(w: ReadinessWarning): string {
+export function warningLabel(w: ReadinessWarning, locale: Locale = 'en'): string {
   switch (w.kind) {
     case 'empty_text':
-      return `Page ${w.pageNumber}: no text recognized`;
+      return t('readiness.noTextRecognized', locale, w.pageNumber);
     case 'page_no_sounds':
-      return `Page ${w.pageNumber}: no sounds yet`;
+      return t('readiness.noSoundsYet', locale, w.pageNumber);
     case 'silent_cue':
-      return `Page ${w.pageNumber}: “${w.detail}” is highlighted but has no sound`;
+      return t('readiness.highlightedNoSound', locale, w.pageNumber, w.detail);
     case 'unplayable_cue':
-      return `Page ${w.pageNumber}: “${w.detail}” points to a missing sound`;
+      return t('readiness.missingSound', locale, w.pageNumber, w.detail);
   }
 }

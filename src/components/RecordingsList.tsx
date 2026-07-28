@@ -24,14 +24,15 @@ import SwipeableRow from './SwipeableRow';
 import TactileButton from './TactileButton';
 import { playFull } from '../lib/audio/playRange';
 import { deleteRecording, listRecordings, renameRecording } from '../lib/db';
+import { t, useLocaleStore, type Locale } from '../lib/i18n';
 import type { Recording } from '../lib/types';
 
-function originText(rec: Recording): string | null {
+function originText(rec: Recording, locale: Locale): string | null {
   if (rec.originBookTitle) {
     return [
       `“${rec.originBookTitle}”`,
-      rec.originPageNumber != null ? `p.${rec.originPageNumber}` : null,
-      rec.originLabel ? (rec.originLabel === 'Ambient' ? 'Ambient' : `“${rec.originLabel}”`) : null,
+      rec.originPageNumber != null ? t('recordings.pageAbbrev', locale, rec.originPageNumber) : null,
+      rec.originLabel ? (rec.originLabel === 'Ambient' ? t('common.ambient', locale) : `“${rec.originLabel}”`) : null,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -50,6 +51,7 @@ function recordingKind(rec: Recording): 'ambient' | 'sound' {
 }
 
 export default function RecordingsList() {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -155,11 +157,9 @@ export default function RecordingsList() {
       ) : recordings.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emptyEmoji}>🎙️</Text>
-          <Text style={[styles.emptyTitle, { color: textColor }]}>No recordings yet</Text>
+          <Text style={[styles.emptyTitle, { color: textColor }]}>{t('recordings.emptyTitle', locale)}</Text>
           <Text style={[styles.emptyText, { color: subColor }]}>
-            Recordings you make for a word or an ambient sound (tap a word or the Ambient row in a
-            page, then "Record your own") show up here, reusable on any page — or record one ahead
-            of time below and assign it to a word later.
+            {t('recordings.emptyBody', locale)}
           </Text>
         </View>
       ) : (
@@ -168,7 +168,7 @@ export default function RecordingsList() {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search recordings…"
+              placeholder={t('recordings.searchPlaceholder', locale)}
               placeholderTextColor={subColor}
               autoCapitalize="none"
               autoCorrect={false}
@@ -177,7 +177,7 @@ export default function RecordingsList() {
             <View style={styles.kindToggleRow}>
               {(['all', 'ambient', 'sound'] as const).map((k) => {
                 const active = kindFilter === k;
-                const text = k === 'all' ? 'All' : k === 'ambient' ? 'Ambient' : 'Sounds';
+                const text = k === 'all' ? t('recordings.filterAll', locale) : k === 'ambient' ? t('common.ambient', locale) : t('recordings.filterSounds', locale);
                 const color = active ? '#208AEF' : subColor;
                 return (
                   <View key={k} style={styles.kindToggleBtnWrap}>
@@ -200,7 +200,7 @@ export default function RecordingsList() {
 
           {visibleRecordings.length === 0 ? (
             <View style={styles.center}>
-              <Text style={[styles.emptyText, { color: subColor }]}>No recordings match.</Text>
+              <Text style={[styles.emptyText, { color: subColor }]}>{t('recordings.noneMatch', locale)}</Text>
             </View>
           ) : (
             <FlatList
@@ -209,7 +209,7 @@ export default function RecordingsList() {
               contentContainerStyle={styles.list}
               renderItem={({ item }) => {
                 const previewing = previewingId === item.id;
-                const origin = originText(item);
+                const origin = originText(item, locale);
                 return (
                   <SwipeableRow onDelete={() => setPendingDelete(item)}>
                     <View style={[styles.row, { backgroundColor: cardBackground }]}>
@@ -242,13 +242,13 @@ export default function RecordingsList() {
         <View style={styles.recordButtonWrap}>
           <TactileButton style={styles.recordButton} onPress={() => setRecordKind('ambient')}>
             <Text style={styles.recordButtonEmoji}>🎵</Text>
-            <Text style={styles.recordButtonLabel}>Record an Ambient</Text>
+            <Text style={styles.recordButtonLabel}>{t('recordings.recordAnAmbient', locale)}</Text>
           </TactileButton>
         </View>
         <View style={styles.recordButtonWrap}>
           <TactileButton style={styles.recordButton} onPress={() => setRecordKind('sound')}>
             <Text style={styles.recordButtonEmoji}>🔊</Text>
-            <Text style={styles.recordButtonLabel}>Record a Sound</Text>
+            <Text style={styles.recordButtonLabel}>{t('recordings.recordASound', locale)}</Text>
           </TactileButton>
         </View>
       </View>
@@ -269,8 +269,8 @@ export default function RecordingsList() {
 
       <ConfirmDeleteModal
         visible={pendingDelete !== null}
-        title={`Delete "${pendingDelete?.name}"?`}
-        message="This recording will be permanently removed. Any word or ambient still using it keeps playing until you replace it."
+        title={t('recordings.deleteTitle', locale, pendingDelete?.name ?? '')}
+        message={t('recordings.deleteBody', locale)}
         onConfirm={performDelete}
         onCancel={() => setPendingDelete(null)}
       />
@@ -278,13 +278,13 @@ export default function RecordingsList() {
       <Modal visible={renaming !== null} transparent animationType="fade" onRequestClose={() => setRenaming(null)}>
         <Pressable style={styles.processingOverlay} onPress={() => setRenaming(null)}>
           <Pressable style={[styles.renameCard, { backgroundColor: cardBackground }]}>
-            <Text style={[styles.renameTitle, { color: textColor }]}>Rename recording</Text>
+            <Text style={[styles.renameTitle, { color: textColor }]}>{t('recordings.renameRecording', locale)}</Text>
             <TextInput
               value={nameDraft}
               onChangeText={setNameDraft}
               autoFocus
               selectTextOnFocus
-              placeholder="Recording name"
+              placeholder={t('recordings.recordingNamePlaceholder', locale)}
               placeholderTextColor={subColor}
               style={[styles.renameInput, { color: textColor, backgroundColor: chipBackground }]}
               onSubmitEditing={saveRename}
@@ -292,10 +292,10 @@ export default function RecordingsList() {
             />
             <View style={styles.renameActions}>
               <TactileButton style={[styles.renameBtn, { backgroundColor: chipBackground }]} onPress={() => setRenaming(null)}>
-                <Text style={[styles.renameBtnLabel, { color: subColor }]}>Cancel</Text>
+                <Text style={[styles.renameBtnLabel, { color: subColor }]}>{t('common.cancel', locale)}</Text>
               </TactileButton>
               <TactileButton style={[styles.renameBtn, { backgroundColor: '#208AEF' }]} onPress={saveRename}>
-                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Save</Text>
+                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>{t('common.save', locale)}</Text>
               </TactileButton>
             </View>
           </Pressable>

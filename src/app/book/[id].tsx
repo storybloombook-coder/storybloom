@@ -38,6 +38,7 @@ import {
   updateBookTitle,
   updatePagePrepResult,
 } from '../../lib/db';
+import { t, useLocaleStore } from '../../lib/i18n';
 import { checkReadiness, warningLabel } from '../../lib/reader/readiness';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import type { SpeechLang } from '../../lib/speech/types';
@@ -52,17 +53,24 @@ function findCharRange(ocrText: string, triggerText: string): { start: number | 
   return { start: idx, end: idx + triggerText.length };
 }
 
-const STATUS: Record<Book['prepStatus'], { label: string; color: string }> = {
-  pending: { label: 'Pending', color: '#8e8e93' },
-  processing: { label: 'Prepping…', color: '#e8a33d' },
-  ready: { label: 'Ready', color: '#2fb344' },
-  failed: { label: 'Prep failed', color: '#ff453a' },
+const STATUS_COLOR: Record<Book['prepStatus'], string> = {
+  pending: '#8e8e93',
+  processing: '#e8a33d',
+  ready: '#2fb344',
+  failed: '#ff453a',
+};
+const STATUS_KEY: Record<Book['prepStatus'], string> = {
+  pending: 'common.statusPending',
+  processing: 'common.statusPrepping',
+  ready: 'common.statusReady',
+  failed: 'common.statusPrepFailed',
 };
 
 export default function BookDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const bookId = Array.isArray(params.id) ? params.id[0] : params.id;
 
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -184,7 +192,7 @@ export default function BookDetailScreen() {
   async function takePhoto() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permission needed', 'Camera access is required to photograph pages.');
+      Alert.alert(t('common.permissionNeeded', locale), t('common.cameraPermissionBody', locale));
       return;
     }
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 });
@@ -198,7 +206,7 @@ export default function BookDetailScreen() {
   async function pickFromLibrary() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permission needed', 'Photo library access is required to add pages.');
+      Alert.alert(t('common.permissionNeeded', locale), t('common.libraryPermissionBody', locale));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -225,7 +233,7 @@ export default function BookDetailScreen() {
       let nextPageNumber = pages.length + 1;
 
       for (let i = 0; i < newPhotos.length; i++) {
-        setAddProgress(`Adding page ${nextPageNumber} (${i + 1} of ${newPhotos.length})…`);
+        setAddProgress(t('book.addingPage', locale, nextPageNumber, i + 1, newPhotos.length));
         const photo = newPhotos[i];
         const destFile = new ExpoFile(bookDir, `page-${Date.now()}-${i}.jpg`);
         await new ExpoFile(photo.uri).copy(destFile);
@@ -330,7 +338,7 @@ export default function BookDetailScreen() {
       setDictateStatus('listening');
     } catch (e: any) {
       setDictateStatus('idle');
-      Alert.alert('Dictation unavailable', e?.message ?? String(e));
+      Alert.alert(t('common.dictationUnavailable', locale), e?.message ?? String(e));
     }
   }
 
@@ -360,7 +368,7 @@ export default function BookDetailScreen() {
       await closeDictate();
       await load();
     } catch (e: any) {
-      Alert.alert('Could not save page', e?.message ?? String(e));
+      Alert.alert(t('book.couldNotSavePage', locale), e?.message ?? String(e));
     } finally {
       setSavingDictatedPage(false);
     }
@@ -409,7 +417,7 @@ export default function BookDetailScreen() {
   if (loading) {
     return (
       <SafeAreaView style={[styles.safeArea, styles.center, { backgroundColor }]}>
-        <Stack.Screen options={{ headerShown: true, title: 'Book' }} />
+        <Stack.Screen options={{ headerShown: true, title: t('book.headerTitle', locale) }} />
         <ActivityIndicator size="large" color="#208AEF" />
       </SafeAreaView>
     );
@@ -418,13 +426,13 @@ export default function BookDetailScreen() {
   if (!book) {
     return (
       <SafeAreaView style={[styles.safeArea, styles.center, { backgroundColor }]}>
-        <Stack.Screen options={{ headerShown: true, title: 'Book' }} />
-        <Text style={{ color: textColor }}>This book no longer exists.</Text>
+        <Stack.Screen options={{ headerShown: true, title: t('book.headerTitle', locale) }} />
+        <Text style={{ color: textColor }}>{t('book.notFound', locale)}</Text>
       </SafeAreaView>
     );
   }
 
-  const status = STATUS[book.prepStatus];
+  const status = { label: t(STATUS_KEY[book.prepStatus], locale), color: STATUS_COLOR[book.prepStatus] };
   const storyPages = pages.filter((p) => p.pageType === 'story' || p.pageType === 'illustration_only');
   const totalCues = [...cuesByPage.values()].reduce((n, arr) => n + arr.length, 0);
   const readiness = checkReadiness(pages, cuesByPage);
@@ -433,7 +441,7 @@ export default function BookDetailScreen() {
   const AmbientChip = ({ active }: { active: boolean }) => (
     <View style={[styles.chip, styles.ambientChip, { backgroundColor: chipBackground }]}>
       <View style={[styles.ambientDot, { backgroundColor: active ? '#2fb344' : '#ff453a' }]} />
-      <Text style={[styles.chipText, { color: subColor }]}>Ambient</Text>
+      <Text style={[styles.chipText, { color: subColor }]}>{t('common.ambient', locale)}</Text>
     </View>
   );
 
@@ -441,7 +449,7 @@ export default function BookDetailScreen() {
     <View style={[styles.chip, styles.ambientChip, { backgroundColor: chipBackground }]}>
       <View style={[styles.ambientDot, { backgroundColor: count > 0 ? '#2fb344' : '#ff453a' }]} />
       <Text style={[styles.chipText, { color: subColor }]}>
-        {count > 0 ? `🔊 ${count} sound${count === 1 ? '' : 's'}` : 'No sounds'}
+        {count > 0 ? t('book.soundCount', locale, count) : t('book.noSounds', locale)}
       </Text>
     </View>
   );
@@ -470,13 +478,11 @@ export default function BookDetailScreen() {
             <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
           </View>
           <Text style={[styles.summary, { color: subColor }]}>
-            {pages.length} page{pages.length === 1 ? '' : 's'} · {storyPages.length} story · {totalCues} cue
-            {totalCues === 1 ? '' : 's'}
-            {book.hasDialogue ? ' · has dialogue' : ''}
+            {t('book.pageCueSummary', locale, pages.length, storyPages.length, totalCues, book.hasDialogue)}
           </Text>
           {pages.length > 1 && (
             <Text style={[styles.reorderHint, { color: subColor }]}>
-              Long-press a page to reorder it, or swipe it left to delete.
+              {t('book.reorderHint', locale)}
             </Text>
           )}
         </View>
@@ -509,9 +515,9 @@ export default function BookDetailScreen() {
                     )}
                     <View style={styles.pageInfo}>
                       <Text style={[styles.pageNo, { color: textColor }]}>
-                        Page {item.pageNumber}
+                        {t('book.pageNumber', locale, item.pageNumber)}
                       </Text>
-                      <Text style={[styles.pageMeta, { color: subColor }]}>{item.pageType.replace(/_/g, ' ')}</Text>
+                      <Text style={[styles.pageMeta, { color: subColor }]}>{t(`book.pageType.${item.pageType}`, locale)}</Text>
                       <View style={styles.chipRow}>
                         <SoundsChip count={activeCueCount} />
                         <AmbientChip active={!!item.ambientSoundId} />
@@ -525,7 +531,7 @@ export default function BookDetailScreen() {
                       {item.ocrText}
                     </Text>
                   ) : (
-                    <Text style={[styles.ocrEmpty, { color: subColor }]}>No text recognized on this page.</Text>
+                    <Text style={[styles.ocrEmpty, { color: subColor }]}>{t('book.noTextRecognized', locale)}</Text>
                   )}
                 </Pressable>
               </SwipeableRow>
@@ -535,7 +541,7 @@ export default function BookDetailScreen() {
 
         <View style={styles.addPagesDivider}>
           <View style={[styles.addPagesDividerLine, { backgroundColor: chipBackground }]} />
-          <Text style={[styles.addPagesDividerLabel, { color: subColor }]}>Add more pages</Text>
+          <Text style={[styles.addPagesDividerLabel, { color: subColor }]}>{t('book.addMorePages', locale)}</Text>
           <View style={[styles.addPagesDividerLine, { backgroundColor: chipBackground }]} />
         </View>
 
@@ -543,15 +549,15 @@ export default function BookDetailScreen() {
           <View style={styles.squareButtonWrap}>
             <TactileButton style={[styles.squareButton, { backgroundColor: cardBackground }]} onPress={pickFromLibrary}>
               <Text style={styles.squareButtonEmoji}>🖼️</Text>
-              <Text style={[styles.squareButtonLabel, { color: textColor }]}>Add Pictures</Text>
-              <Text style={[styles.squareButtonCaption, { color: subColor }]}>from your library or files</Text>
+              <Text style={[styles.squareButtonLabel, { color: textColor }]}>{t('common.addPictures', locale)}</Text>
+              <Text style={[styles.squareButtonCaption, { color: subColor }]}>{t('common.fromLibraryOrFiles', locale)}</Text>
             </TactileButton>
           </View>
           <View style={styles.squareButtonWrap}>
             <TactileButton style={[styles.squareButton, { backgroundColor: cardBackground }]} onPress={takePhoto}>
               <Text style={styles.squareButtonEmoji}>📷</Text>
-              <Text style={[styles.squareButtonLabel, { color: textColor }]}>Take Photo</Text>
-              <Text style={[styles.squareButtonCaption, { color: subColor }]}>using your camera</Text>
+              <Text style={[styles.squareButtonLabel, { color: textColor }]}>{t('book.takePhoto', locale)}</Text>
+              <Text style={[styles.squareButtonCaption, { color: subColor }]}>{t('common.usingYourCamera', locale)}</Text>
             </TactileButton>
           </View>
         </View>
@@ -561,7 +567,7 @@ export default function BookDetailScreen() {
           onPress={openDictate}
         >
           <Text style={styles.dictatePageEmoji}>🎙️</Text>
-          <Text style={[styles.dictatePageLabel, { color: textColor }]}>Dictate a page</Text>
+          <Text style={[styles.dictatePageLabel, { color: textColor }]}>{t('book.dictateAPage', locale)}</Text>
         </TactileButton>
       </ScrollView>
 
@@ -579,7 +585,7 @@ export default function BookDetailScreen() {
                     router.push({ pathname: '/page/[id]', params: { id: w.pageId } });
                   }}
                 >
-                  <Text style={[styles.warnText, { color: textColor }]}>{warningLabel(w)}</Text>
+                  <Text style={[styles.warnText, { color: textColor }]}>{warningLabel(w, locale)}</Text>
                   <Text style={[styles.chevron, { color: subColor }]}>›</Text>
                 </Pressable>
               ))}
@@ -598,15 +604,14 @@ export default function BookDetailScreen() {
               <>
                 <Text style={styles.readStatusIcon}>✅</Text>
                 <Text style={[styles.readStatusText, { color: '#2fb344' }]} numberOfLines={2}>
-                  Ready · {readiness.storyPageCount} page{readiness.storyPageCount === 1 ? '' : 's'} ·{' '}
-                  {readiness.soundCount} sound{readiness.soundCount === 1 ? '' : 's'}
+                  {t('book.readySummary', locale, readiness.storyPageCount, readiness.soundCount)}
                 </Text>
               </>
             ) : (
               <>
                 <Text style={styles.readStatusIcon}>{warningsOpen ? '▾' : '⚠️'}</Text>
                 <Text style={[styles.readStatusText, { color: '#e8a33d' }]} numberOfLines={2}>
-                  {readiness.warnings.length} thing{readiness.warnings.length === 1 ? '' : 's'} to check
+                  {t('book.thingsToCheck', locale, readiness.warnings.length)}
                 </Text>
               </>
             )}
@@ -619,7 +624,7 @@ export default function BookDetailScreen() {
               router.push({ pathname: '/read/[id]', params: { id: book.id } });
             }}
           >
-            <Text style={styles.readButtonLabel}>▶  Read</Text>
+            <Text style={styles.readButtonLabel}>{t('book.readButton', locale)}</Text>
           </TactileButton>
         </View>
       </View>
@@ -627,7 +632,7 @@ export default function BookDetailScreen() {
       <PhotoEditor
         visible={editingSource !== null}
         source={editingSource}
-        queueLabel={batchTotal > 1 ? `Photo ${batchTotal - editQueue.length} of ${batchTotal}` : undefined}
+        queueLabel={batchTotal > 1 ? t('addBook.photoQueue', locale, batchTotal - editQueue.length, batchTotal) : undefined}
         onCancel={handleEditorCancel}
         onDone={handleEditorDone}
       />
@@ -636,7 +641,7 @@ export default function BookDetailScreen() {
         <View style={styles.processingOverlay}>
           <View style={[styles.processingCard, { backgroundColor: cardBackground }]}>
             <ActivityIndicator size="large" color="#208AEF" />
-            <Text style={{ color: textColor }}>{addProgress || 'Adding pages…'}</Text>
+            <Text style={{ color: textColor }}>{addProgress || t('book.addingPagesFallback', locale)}</Text>
           </View>
         </View>
       </Modal>
@@ -644,13 +649,13 @@ export default function BookDetailScreen() {
       <Modal visible={renaming} transparent animationType="fade" onRequestClose={() => setRenaming(false)}>
         <Pressable style={styles.processingOverlay} onPress={() => setRenaming(false)}>
           <Pressable style={[styles.renameCard, { backgroundColor: cardBackground }]}>
-            <Text style={[styles.renameTitle, { color: textColor }]}>Rename book</Text>
+            <Text style={[styles.renameTitle, { color: textColor }]}>{t('book.renameBook', locale)}</Text>
             <TextInput
               value={titleDraft}
               onChangeText={setTitleDraft}
               autoFocus
               selectTextOnFocus
-              placeholder="Book title"
+              placeholder={t('book.bookTitlePlaceholder', locale)}
               placeholderTextColor={subColor}
               style={[styles.renameInput, { color: textColor, backgroundColor: chipBackground }]}
               onSubmitEditing={saveTitle}
@@ -658,10 +663,10 @@ export default function BookDetailScreen() {
             />
             <View style={styles.renameActions}>
               <TactileButton style={[styles.renameBtn, { backgroundColor: chipBackground }]} onPress={() => setRenaming(false)}>
-                <Text style={[styles.renameBtnLabel, { color: subColor }]}>Cancel</Text>
+                <Text style={[styles.renameBtnLabel, { color: subColor }]}>{t('common.cancel', locale)}</Text>
               </TactileButton>
               <TactileButton style={[styles.renameBtn, { backgroundColor: '#208AEF' }]} onPress={saveTitle}>
-                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Save</Text>
+                <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>{t('common.save', locale)}</Text>
               </TactileButton>
             </View>
           </Pressable>
@@ -672,13 +677,13 @@ export default function BookDetailScreen() {
         <KeyboardAvoidingView style={styles.dictateOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={[styles.dictateSheet, { backgroundColor: cardBackground }]}>
             <Text style={[styles.renameTitle, { color: textColor }]}>
-              Dictate page {pages.length + 1}
+              {t('book.dictatePageTitle', locale, pages.length + 1)}
             </Text>
             <TextInput
               value={dictateDraft}
               onChangeText={setDictateDraft}
               multiline
-              placeholder="Tap 'Start dictating' and read this page aloud, or type it yourself…"
+              placeholder={t('createStory.dictatePlaceholder', locale)}
               placeholderTextColor={subColor}
               style={[styles.dictateInput, { color: textColor, backgroundColor: chipBackground }]}
             />
@@ -686,7 +691,7 @@ export default function BookDetailScreen() {
             {dictateStatus === 'listening' ? (
               <View style={styles.dictateListeningRow}>
                 <PulsingDot size={9} />
-                <Text style={[styles.dictateListeningLabel, { color: subColor }]}>Listening…</Text>
+                <Text style={[styles.dictateListeningLabel, { color: subColor }]}>{t('book.listening', locale)}</Text>
               </View>
             ) : null}
 
@@ -706,7 +711,7 @@ export default function BookDetailScreen() {
                 style={[styles.dictateActionButton, { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' }]}
                 onPress={stopPageDictation}
               >
-                <Text style={[styles.dictateActionLabel, { color: '#ff453a' }]}>Stop dictating</Text>
+                <Text style={[styles.dictateActionLabel, { color: '#ff453a' }]}>{t('common.stopDictating', locale)}</Text>
               </TactileButton>
             ) : (
               <TactileButton
@@ -715,14 +720,14 @@ export default function BookDetailScreen() {
                 disabled={dictateStatus === 'loading'}
               >
                 <Text style={[styles.dictateActionLabel, { color: '#ff453a' }]}>
-                  {dictateStatus === 'loading' ? 'Loading model…' : 'Start dictating'}
+                  {dictateStatus === 'loading' ? t('common.loadingModel', locale) : t('common.startDictating', locale)}
                 </Text>
               </TactileButton>
             )}
 
             <View style={styles.renameActions}>
               <TactileButton style={[styles.renameBtn, { backgroundColor: chipBackground }]} onPress={closeDictate}>
-                <Text style={[styles.renameBtnLabel, { color: subColor }]}>Cancel</Text>
+                <Text style={[styles.renameBtnLabel, { color: subColor }]}>{t('common.cancel', locale)}</Text>
               </TactileButton>
               <TactileButton
                 style={[styles.renameBtn, { backgroundColor: '#208AEF' }]}
@@ -730,7 +735,7 @@ export default function BookDetailScreen() {
                 disabled={!dictateDraft.trim() || savingDictatedPage}
               >
                 <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>
-                  {savingDictatedPage ? 'Saving…' : 'Save page'}
+                  {savingDictatedPage ? t('book.savingPage', locale) : t('book.savePage', locale)}
                 </Text>
               </TactileButton>
             </View>
@@ -747,23 +752,23 @@ export default function BookDetailScreen() {
         <Pressable style={styles.processingOverlay} onPress={() => setReadyPopupOpen(false)}>
           <Pressable style={[styles.readyPopupCard, { backgroundColor: cardBackground }]}>
             <Text style={styles.readyPopupEmoji}>✅</Text>
-            <Text style={[styles.renameTitle, { color: textColor }]}>Ready to read</Text>
+            <Text style={[styles.renameTitle, { color: textColor }]}>{t('book.readyToRead', locale)}</Text>
             <View style={styles.readyPopupChecks}>
               <Text style={[styles.readyPopupCheck, { color: subColor }]}>
-                ✓ {readiness.storyPageCount} story page{readiness.storyPageCount === 1 ? '' : 's'} with recognized text
+                {t('book.readinessStoryPages', locale, readiness.storyPageCount)}
               </Text>
               <Text style={[styles.readyPopupCheck, { color: subColor }]}>
-                ✓ {readiness.soundCount} keyword/character sound{readiness.soundCount === 1 ? '' : 's'} matched
+                {t('book.readinessSounds', locale, readiness.soundCount)}
               </Text>
               <Text style={[styles.readyPopupCheck, { color: subColor }]}>
-                ✓ {readiness.ambientPageCount} page{readiness.ambientPageCount === 1 ? '' : 's'} with an ambient bed
+                {t('book.readinessAmbient', locale, readiness.ambientPageCount)}
               </Text>
             </View>
             <TactileButton
               style={[styles.renameBtn, { backgroundColor: '#208AEF', alignSelf: 'stretch', alignItems: 'center' }]}
               onPress={() => setReadyPopupOpen(false)}
             >
-              <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>Got it</Text>
+              <Text style={[styles.renameBtnLabel, { color: '#fff' }]}>{t('book.gotIt', locale)}</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
@@ -771,8 +776,8 @@ export default function BookDetailScreen() {
 
       <ConfirmDeleteModal
         visible={pendingDeletePage !== null}
-        title={`Delete page ${pendingDeletePage?.pageNumber}?`}
-        message="This page and its sounds will be permanently removed."
+        title={t('book.deletePageTitle', locale, pendingDeletePage?.pageNumber ?? 0)}
+        message={t('book.deletePageBody', locale)}
         onConfirm={performDeletePage}
         onCancel={() => setPendingDeletePage(null)}
       />

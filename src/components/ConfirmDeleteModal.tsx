@@ -4,13 +4,14 @@
 // step rather than deleting immediately on tap.
 
 import { Modal, Pressable, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import { t, useLocaleStore } from '../lib/i18n';
 import TactileButton from './TactileButton';
 
 export default function ConfirmDeleteModal({
   visible,
   title,
   message,
-  confirmLabel = 'Delete',
+  confirmLabel,
   onConfirm,
   onCancel,
 }: {
@@ -21,6 +22,7 @@ export default function ConfirmDeleteModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -36,12 +38,12 @@ export default function ConfirmDeleteModal({
           <Text style={[styles.message, { color: subColor }]}>{message}</Text>
           <View style={styles.buttonWrap}>
             <TactileButton style={[styles.button, styles.deleteButton]} onPress={onConfirm}>
-              <Text style={[styles.buttonLabel, { color: '#ff453a' }]}>{confirmLabel}</Text>
+              <Text style={[styles.buttonLabel, { color: '#ff453a' }]}>{confirmLabel ?? t('common.delete', locale)}</Text>
             </TactileButton>
           </View>
           <View style={styles.buttonWrap}>
             <TactileButton style={[styles.button, { backgroundColor: badgeBackground }]} onPress={onCancel}>
-              <Text style={[styles.buttonLabel, { color: textColor }]}>Cancel</Text>
+              <Text style={[styles.buttonLabel, { color: textColor }]}>{t('common.cancel', locale)}</Text>
             </TactileButton>
           </View>
         </Pressable>

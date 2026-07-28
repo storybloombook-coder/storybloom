@@ -1,4 +1,5 @@
-import { Link } from 'expo-router';
+import { Link, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -26,6 +27,18 @@ export default function HomeScreen() {
     player.play();
   });
 
+  // The player's own .play() above only ever fires once, at creation --
+  // expo-router keeps this screen mounted (not destroyed) when navigating
+  // away, and coming back doesn't re-trigger it. Android in particular can
+  // leave the underlying ExoPlayer paused after the view was hidden behind
+  // another screen, so without this the background freezes on a static
+  // frame the next time this screen regains focus instead of resuming.
+  useFocusEffect(
+    useCallback(() => {
+      backgroundPlayer.play();
+    }, [backgroundPlayer])
+  );
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
       <VideoView
@@ -36,26 +49,26 @@ export default function HomeScreen() {
         pointerEvents="none"
       />
       <View style={styles.container}>
-        <Text style={[styles.title, { color: textColor }]}>{t('title', locale)}</Text>
-        <Text style={[styles.subtitle, { color: textColor }]}>{t('subtitle', locale)}</Text>
+        <Text style={[styles.title, { color: textColor }]}>{t('home.title', locale)}</Text>
+        <Text style={[styles.subtitle, { color: textColor }]}>{t('home.subtitle', locale)}</Text>
 
         <View style={styles.menu}>
           <Link href="/add-book" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('addBook', locale)}</Text>
+              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.addBook', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/create-story" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('createStory', locale)}</Text>
+              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.createStory', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
             <TactileButton style={styles.button}>
               <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('myLibrary', locale)}</Text>
+              <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.myLibrary', locale)}</Text>
             </TactileButton>
           </Link>
         </View>
@@ -77,7 +90,7 @@ export default function HomeScreen() {
       <View style={styles.langButtonWrap}>
         <TactileButton
           accessibilityRole="button"
-          accessibilityLabel={t('switchLanguage', locale)}
+          accessibilityLabel={t('home.switchLanguage', locale)}
           onPress={() => setLocale(locale === 'ru' ? 'en' : 'ru')}
           style={styles.cornerButton}
         >

@@ -23,6 +23,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import TactileButton from '../components/TactileButton';
 import { createBook, createPage, setBookPrepStatus, updatePagePrepResult } from '../lib/db';
+import { t, useLocaleStore } from '../lib/i18n';
 import { createVoskRecognizer } from '../lib/speech/vosk';
 import type { SpeechLang } from '../lib/speech/types';
 import type { BookLanguage } from '../lib/types';
@@ -30,6 +31,7 @@ import type { BookLanguage } from '../lib/types';
 type Phase = 'setup' | 'writing' | 'saving';
 
 export default function CreateStoryScreen() {
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -57,7 +59,7 @@ export default function CreateStoryScreen() {
 
   function startStory() {
     if (!title.trim()) {
-      setInfoModal({ title: 'Name your story', message: 'Give your story a title before you start.' });
+      setInfoModal({ title: t('createStory.nameYourStoryTitle', locale), message: t('createStory.nameYourStoryBody', locale) });
       return;
     }
     setPhase('writing');
@@ -79,7 +81,7 @@ export default function CreateStoryScreen() {
       setDictateStatus('listening');
     } catch (e: any) {
       setDictateStatus('idle');
-      setInfoModal({ title: 'Dictation unavailable', message: e?.message ?? String(e) });
+      setInfoModal({ title: t('common.dictationUnavailable', locale), message: e?.message ?? String(e) });
     }
   }
 
@@ -114,8 +116,8 @@ export default function CreateStoryScreen() {
     const allPages = finalText ? [...pages, finalText] : pages;
     if (allPages.length === 0) {
       setInfoModal({
-        title: 'Nothing to save yet',
-        message: 'Dictate (or type) at least one page before finishing.',
+        title: t('createStory.nothingToSaveTitle', locale),
+        message: t('createStory.nothingToSaveBody', locale),
       });
       return;
     }
@@ -135,13 +137,13 @@ export default function CreateStoryScreen() {
       router.replace({ pathname: '/book/[id]', params: { id: book.id } });
     } catch (e: any) {
       setPhase('writing');
-      setInfoModal({ title: 'Could not save story', message: e?.message ?? String(e) });
+      setInfoModal({ title: t('createStory.couldNotSave', locale), message: e?.message ?? String(e) });
     }
   }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor }]}>
-      <Stack.Screen options={{ headerShown: true, title: 'Create a Story' }} />
+      <Stack.Screen options={{ headerShown: true, title: t('createStory.headerTitle', locale) }} />
 
       <KeyboardAvoidingView
         style={styles.safe}
@@ -151,21 +153,20 @@ export default function CreateStoryScreen() {
         <ScrollView contentContainerStyle={styles.content}>
           {phase === 'setup' && (
             <View style={styles.setupWrap}>
-              <Text style={[styles.setupTitle, { color: textColor }]}>Create a Story</Text>
+              <Text style={[styles.setupTitle, { color: textColor }]}>{t('createStory.headerTitle', locale)}</Text>
               <Text style={[styles.setupSubtitle, { color: subColor }]}>
-                Dictate your own fairytale, page by page — then add sound effects and ambient just
-                like a photographed book.
+                {t('createStory.subtitle', locale)}
               </Text>
 
               <TextInput
                 value={title}
                 onChangeText={setTitle}
-                placeholder="Story title, e.g. The Brave Little Fox"
+                placeholder={t('createStory.titlePlaceholder', locale)}
                 placeholderTextColor={subColor}
                 style={[styles.titleInput, { color: textColor, backgroundColor: cardBackground }]}
               />
 
-              <Text style={[styles.langLabel, { color: textColor }]}>What language?</Text>
+              <Text style={[styles.langLabel, { color: textColor }]}>{t('createStory.whatLanguage', locale)}</Text>
               <View style={styles.langToggleRow}>
                 <View style={styles.langBtnWrap}>
                   <TactileButton
@@ -178,7 +179,7 @@ export default function CreateStoryScreen() {
                     onPress={() => setLanguage('en')}
                   >
                     <Text style={[styles.langBtnLabel, { color: language === 'en' ? '#208AEF' : textColor }]}>
-                      English
+                      {t('common.englishLabel', locale)}
                     </Text>
                   </TactileButton>
                 </View>
@@ -193,7 +194,7 @@ export default function CreateStoryScreen() {
                     onPress={() => setLanguage('ru')}
                   >
                     <Text style={[styles.langBtnLabel, { color: language === 'ru' ? '#208AEF' : textColor }]}>
-                      Русский
+                      {t('common.russianLabel', locale)}
                     </Text>
                   </TactileButton>
                 </View>
@@ -201,7 +202,7 @@ export default function CreateStoryScreen() {
 
               <View style={styles.dictateStartWrap}>
                 <TactileButton style={[styles.primaryButton, styles.dictateStartButton]} onPress={startStory}>
-                  <Text style={[styles.primaryButtonLabel, styles.dictateStartLabel]}>Start dictating</Text>
+                  <Text style={[styles.primaryButtonLabel, styles.dictateStartLabel]}>{t('common.startDictating', locale)}</Text>
                 </TactileButton>
               </View>
             </View>
@@ -209,13 +210,13 @@ export default function CreateStoryScreen() {
 
           {phase === 'writing' && (
             <View style={styles.writingWrap}>
-              <Text style={[styles.pageIndicator, { color: subColor }]}>Page {pages.length + 1}</Text>
+              <Text style={[styles.pageIndicator, { color: subColor }]}>{t('createStory.pageNumber', locale, pages.length + 1)}</Text>
 
               <TextInput
                 value={draft}
                 onChangeText={setDraft}
                 multiline
-                placeholder="Tap 'Start dictating' and read this page aloud, or type it yourself…"
+                placeholder={t('createStory.dictatePlaceholder', locale)}
                 placeholderTextColor={subColor}
                 style={[styles.draftInput, { color: textColor, backgroundColor: cardBackground, borderColor: cardBackground }]}
               />
@@ -236,7 +237,7 @@ export default function CreateStoryScreen() {
                   style={[styles.actionButton, { backgroundColor: 'rgba(255,69,58,0.15)', borderWidth: 2, borderColor: '#ff453a' }]}
                   onPress={stopDictation}
                 >
-                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>Stop dictating</Text>
+                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.stopDictating', locale)}</Text>
                 </TactileButton>
               ) : (
                 <TactileButton
@@ -245,27 +246,27 @@ export default function CreateStoryScreen() {
                   disabled={dictateStatus === 'loading'}
                 >
                   <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>
-                    {dictateStatus === 'loading' ? 'Loading model…' : 'Start dictating'}
+                    {dictateStatus === 'loading' ? t('common.loadingModel', locale) : t('common.startDictating', locale)}
                   </Text>
                 </TactileButton>
               )}
 
               <View style={styles.writingActionsRow}>
                 <TactileButton style={[styles.smallBtn, { backgroundColor: cardBackground }]} onPress={discardCurrentPage}>
-                  <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Clear page</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('createStory.clearPage', locale)}</Text>
                 </TactileButton>
                 <TactileButton
                   style={[styles.smallBtn, { backgroundColor: cardBackground }]}
                   onPress={addPageAndContinue}
                   disabled={!draft.trim()}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>Add page & continue</Text>
+                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>{t('createStory.addPageContinue', locale)}</Text>
                 </TactileButton>
               </View>
 
               {pages.length > 0 && (
                 <Text style={[styles.hint, { color: subColor }]}>
-                  {pages.length} page{pages.length === 1 ? '' : 's'} saved so far
+                  {t('createStory.pagesSavedSoFar', locale, pages.length)}
                 </Text>
               )}
 
@@ -273,7 +274,7 @@ export default function CreateStoryScreen() {
                 style={[styles.primaryButton, { backgroundColor: 'rgba(47,179,68,0.15)', borderWidth: 2, borderColor: '#2fb344' }]}
                 onPress={finishStory}
               >
-                <Text style={[styles.primaryButtonLabel, { color: '#2fb344' }]}>Finish story</Text>
+                <Text style={[styles.primaryButtonLabel, { color: '#2fb344' }]}>{t('createStory.finishStory', locale)}</Text>
               </TactileButton>
             </View>
           )}
@@ -281,7 +282,7 @@ export default function CreateStoryScreen() {
           {phase === 'saving' && (
             <View style={styles.savingWrap}>
               <ActivityIndicator size="large" color="#208AEF" />
-              <Text style={{ color: textColor }}>Saving your story…</Text>
+              <Text style={{ color: textColor }}>{t('createStory.savingStory', locale)}</Text>
             </View>
           )}
         </ScrollView>
@@ -296,7 +297,7 @@ export default function CreateStoryScreen() {
               style={[styles.primaryButton, { backgroundColor: 'rgba(32,138,239,0.15)', borderWidth: 2, borderColor: '#208AEF' }]}
               onPress={() => setInfoModal(null)}
             >
-              <Text style={[styles.primaryButtonLabel, { color: '#208AEF' }]}>OK</Text>
+              <Text style={[styles.primaryButtonLabel, { color: '#208AEF' }]}>{t('common.ok', locale)}</Text>
             </TactileButton>
           </View>
         </View>

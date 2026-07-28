@@ -48,6 +48,7 @@ import {
 } from '../../lib/ai/soundLibrary';
 import { playFull, playRange, playRangeLooping } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
+import { t, useLocaleStore, type Locale } from '../../lib/i18n';
 import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import {
   applyAmbientToAllPages,
@@ -123,8 +124,8 @@ type RecordTarget = CueTarget | 'ambient';
 /** The word (or "Ambient") a recording is FOR — used to both pre-fill and
  *  fall back the "My recordings" name, so a recording is always findable by
  *  the word it was made for even if the parent never types a custom name. */
-function defaultRecordingName(target: RecordTarget): string {
-  if (target === 'ambient') return 'Ambient';
+function defaultRecordingName(target: RecordTarget, locale: Locale): string {
+  if (target === 'ambient') return t('common.ambient', locale);
   if ('cue' in target) return target.cue.triggerText;
   return target.token.text;
 }
@@ -135,9 +136,9 @@ const CUSTOM_PREFIX = 'custom:';
 function isCustomSound(soundId: string | null): boolean {
   return !!soundId && soundId.startsWith(CUSTOM_PREFIX);
 }
-function soundLabel(soundId: string | null): string {
-  if (!soundId) return 'no sound';
-  return isCustomSound(soundId) ? '🎤 your recording' : soundId;
+function soundLabel(soundId: string | null, locale: Locale): string {
+  if (!soundId) return t('page.noSoundFallback', locale);
+  return isCustomSound(soundId) ? t('page.yourRecordingFallback', locale) : soundId;
 }
 
 /** Fixed number of bars the waveform always renders, regardless of how long
@@ -164,6 +165,7 @@ export default function PageEditorScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const pageId = Array.isArray(params.id) ? params.id[0] : params.id;
 
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -361,8 +363,8 @@ export default function PageEditorScreen() {
     if (!source) {
       setInfoModal({
         emoji: '🔈',
-        title: 'No sound for this',
-        message: `"${soundId}" has no audio yet. Pick another sound, or record your own.`,
+        title: t('common.noSoundForThis', locale),
+        message: t('page.noSoundBody', locale, soundId),
       });
       return;
     }
@@ -435,7 +437,7 @@ export default function PageEditorScreen() {
       setDictateStatus('idle');
       setInfoModal({
         emoji: '🎙️',
-        title: 'Dictation unavailable',
+        title: t('common.dictationUnavailable', locale),
         message: e?.message ?? String(e),
       });
     }
@@ -467,8 +469,8 @@ export default function PageEditorScreen() {
       () =>
         setInfoModal({
           emoji: '⚠️',
-          title: 'Could not open image',
-          message: 'The page image could not be measured.',
+          title: t('page.couldNotOpenImage', locale),
+          message: t('page.imageNotMeasured', locale),
         })
     );
   }
@@ -509,11 +511,11 @@ export default function PageEditorScreen() {
       await reload();
       setInfoModal(
         result.ocr_text
-          ? { emoji: '✅', title: 'Re-scanned', message: 'Updated the page text from the marked area.' }
-          : { emoji: 'ℹ️', title: 'No text found', message: 'No text was found in that area.' }
+          ? { emoji: '✅', title: t('page.rescannedTitle', locale), message: t('page.rescannedBody', locale) }
+          : { emoji: 'ℹ️', title: t('page.noTextFoundTitle', locale), message: t('page.noTextFoundBody', locale) }
       );
     } catch (e: any) {
-      setInfoModal({ emoji: '⚠️', title: 'Re-scan failed', message: e?.message ?? String(e) });
+      setInfoModal({ emoji: '⚠️', title: t('page.rescanFailed', locale), message: e?.message ?? String(e) });
     } finally {
       setRescanning(false);
     }
@@ -592,7 +594,7 @@ export default function PageEditorScreen() {
     // Pre-fill the "My recordings" name with the word being recorded, so it's
     // findable later without the parent having to type anything — still
     // editable if they want something more specific.
-    setRecordingName(defaultRecordingName(wordDetail));
+    setRecordingName(defaultRecordingName(wordDetail, locale));
     setWordDetail(null);
   }
 
@@ -607,7 +609,7 @@ export default function PageEditorScreen() {
     setAmbientDetailOpen(false);
     setRecordTarget('ambient');
     setRecordedUri(null);
-    setRecordingName(defaultRecordingName('ambient'));
+    setRecordingName(defaultRecordingName('ambient', locale));
   }
 
   async function removeAmbient() {
@@ -679,8 +681,8 @@ export default function PageEditorScreen() {
     if (!source) {
       setInfoModal({
         emoji: '🔈',
-        title: 'No sound yet',
-        message: `"${id}" has no audio bundled yet.`,
+        title: t('common.noSoundForThis', locale),
+        message: t('page.noSoundYetBody', locale, id),
       });
       return;
     }
@@ -710,8 +712,8 @@ export default function PageEditorScreen() {
     if (!source) {
       setInfoModal({
         emoji: '🔈',
-        title: 'No sound for this',
-        message: `"${page.ambientSoundId}" has no audio yet. Pick another ambient, or record your own.`,
+        title: t('common.noSoundForThis', locale),
+        message: t('page.noAmbientBody', locale, page.ambientSoundId),
       });
       return;
     }
@@ -744,8 +746,8 @@ export default function PageEditorScreen() {
     if (!perm.granted) {
       setInfoModal({
         emoji: '🎤',
-        title: 'Microphone access needed',
-        message: 'Allow microphone access to record a sound.',
+        title: t('page.micNeeded', locale),
+        message: t('page.micNeededBody', locale),
       });
       return;
     }
@@ -759,7 +761,7 @@ export default function PageEditorScreen() {
       await recorder.prepareToRecordAsync();
       recorder.record();
     } catch (e: any) {
-      setInfoModal({ emoji: '⚠️', title: 'Could not start recording', message: e?.message ?? String(e) });
+      setInfoModal({ emoji: '⚠️', title: t('page.couldNotStartRecording', locale), message: e?.message ?? String(e) });
     }
   }
 
@@ -912,7 +914,7 @@ export default function PageEditorScreen() {
       setRecordingName('');
       await reload();
     } catch (e: any) {
-      setInfoModal({ emoji: '⚠️', title: 'Could not save recording', message: e?.message ?? String(e) });
+      setInfoModal({ emoji: '⚠️', title: t('page.couldNotSaveRecording', locale), message: e?.message ?? String(e) });
     } finally {
       setSavingRecording(false);
     }
@@ -1072,7 +1074,7 @@ export default function PageEditorScreen() {
   if (loading) {
     return (
       <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
-        <Stack.Screen options={{ headerShown: true, title: 'Page' }} />
+        <Stack.Screen options={{ headerShown: true, title: t('page.headerTitle', locale) }} />
         <ActivityIndicator size="large" color="#208AEF" />
       </SafeAreaView>
     );
@@ -1080,8 +1082,8 @@ export default function PageEditorScreen() {
   if (!page) {
     return (
       <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
-        <Stack.Screen options={{ headerShown: true, title: 'Page' }} />
-        <Text style={{ color: textColor }}>This page no longer exists.</Text>
+        <Stack.Screen options={{ headerShown: true, title: t('page.headerTitle', locale) }} />
+        <Text style={{ color: textColor }}>{t('page.notFound', locale)}</Text>
       </SafeAreaView>
     );
   }
@@ -1135,8 +1137,8 @@ export default function PageEditorScreen() {
     const origin = rec.originBookTitle
       ? [
           `“${rec.originBookTitle}”`,
-          rec.originPageNumber != null ? `p.${rec.originPageNumber}` : null,
-          rec.originLabel ? (rec.originLabel === 'Ambient' ? 'Ambient' : `“${rec.originLabel}”`) : null,
+          rec.originPageNumber != null ? t('recordings.pageAbbrev', locale, rec.originPageNumber) : null,
+          rec.originLabel ? (rec.originLabel === 'Ambient' ? t('common.ambient', locale) : `“${rec.originLabel}”`) : null,
         ]
           .filter(Boolean)
           .join(' · ')
@@ -1164,7 +1166,7 @@ export default function PageEditorScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor }]}>
-      <Stack.Screen options={{ headerShown: true, title: `Page ${page.pageNumber}` }} />
+      <Stack.Screen options={{ headerShown: true, title: t('page.pageNumber', locale, page.pageNumber) }} />
 
       <KeyboardAvoidingView
         style={styles.safe}
@@ -1184,16 +1186,16 @@ export default function PageEditorScreen() {
 
         {editing && (
           <>
-            <Text style={[styles.hint, { color: subColor }]}>Fix any OCR mistakes, then save.</Text>
+            <Text style={[styles.hint, { color: subColor }]}>{t('page.fixOcrHint', locale)}</Text>
             <TactileButton style={styles.dictateFrame} onPress={openDictation}>
-              <Text style={styles.dictateFrameLabel}>🎙️ Dictate instead — read the page aloud</Text>
+              <Text style={styles.dictateFrameLabel}>{t('page.dictateInstead', locale)}</Text>
             </TactileButton>
             <View style={styles.editActions}>
               <TactileButton style={[styles.smallBtn, { backgroundColor: cardBackground }]} onPress={() => setEditing(false)}>
-                <Text style={[styles.smallBtnLabel, { color: subColor }]}>Cancel</Text>
+                <Text style={[styles.smallBtnLabel, { color: subColor }]}>{t('common.cancel', locale)}</Text>
               </TactileButton>
               <TactileButton style={[styles.smallBtn, styles.softBlue]} onPress={saveText}>
-                <Text style={[styles.smallBtnLabel, { color: '#208AEF' }]}>Save text</Text>
+                <Text style={[styles.smallBtnLabel, { color: '#208AEF' }]}>{t('page.saveText', locale)}</Text>
               </TactileButton>
             </View>
           </>
@@ -1205,7 +1207,7 @@ export default function PageEditorScreen() {
               {page.imagePath ? (
                 <View style={styles.toolBtnWrap}>
                   <TactileButton style={[styles.smallBtn, { backgroundColor: cardBackground }]} onPress={openRegion}>
-                    <Text style={[styles.smallBtnLabel, { color: textColor }]}>🔲 Re-scan area</Text>
+                    <Text style={[styles.smallBtnLabel, { color: textColor }]}>{t('page.rescanArea', locale)}</Text>
                   </TactileButton>
                 </View>
               ) : null}
@@ -1217,7 +1219,7 @@ export default function PageEditorScreen() {
                     setEditing(true);
                   }}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>✏️ Correct text</Text>
+                  <Text style={[styles.smallBtnLabel, { color: textColor }]}>{t('page.correctText', locale)}</Text>
                 </TactileButton>
               </View>
             </View>
@@ -1227,16 +1229,16 @@ export default function PageEditorScreen() {
               onPress={() => setAmbientDetailOpen(true)}
             >
               <Text style={[styles.ambientRowLabel, { color: textColor }]}>
-                {page.ambientSoundId ? `🎵 Ambient: ${soundLabel(page.ambientSoundId)}` : '🎵 Add ambient'}
+                {page.ambientSoundId ? t('page.ambientWithLabel', locale, soundLabel(page.ambientSoundId, locale)) : t('page.addAmbient', locale)}
               </Text>
             </TactileButton>
 
             <View style={styles.hintCard}>
               <Text style={[styles.hintPrimary, { color: textColor }]}>
-                Tap a word below to attach a sound effect
+                {t('page.tapWordHint', locale)}
               </Text>
               <Text style={[styles.hint, { color: subColor }]}>
-                {activeCueCount} cue{activeCueCount === 1 ? '' : 's'} so far
+                {t('page.cueSoFar', locale, activeCueCount)}
               </Text>
             </View>
           </>
@@ -1249,7 +1251,7 @@ export default function PageEditorScreen() {
               onChangeText={setDraft}
               multiline
               style={[styles.input, { color: textColor, backgroundColor: inputBackground, borderColor: cardBackground }]}
-              placeholder="Type the page's story text…"
+              placeholder={t('page.pageTextPlaceholder', locale)}
               placeholderTextColor={subColor}
               onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 250)}
             />
@@ -1295,7 +1297,7 @@ export default function PageEditorScreen() {
               </Text>
             ) : (
               <Text style={[styles.empty, { color: subColor }]}>
-                No text was recognized. Tap “Correct text” to type it in.
+                {t('page.noTextRecognizedHint', locale)}
               </Text>
             )}
           </View>
@@ -1304,12 +1306,12 @@ export default function PageEditorScreen() {
         {!editing && unplaced.length > 0 && (
           <View style={styles.unplaced}>
             <Text style={[styles.unplacedTitle, { color: subColor }]}>
-              Cues not found in the text (tap to change / remove):
+              {t('page.cuesNotFoundHint', locale)}
             </Text>
             {unplaced.map((c) => (
               <Pressable key={c.id} onPress={() => onUnplacedPress(c)}>
                 <Text style={[styles.unplacedCue, { color: textColor }]}>
-                  🔊 “{c.triggerText}” → {soundLabel(c.soundId)}
+                  {t('page.cueWithSound', locale, c.triggerText, soundLabel(c.soundId, locale))}
                 </Text>
               </Pressable>
             ))}
@@ -1325,8 +1327,9 @@ export default function PageEditorScreen() {
             {wordDetail && 'cue' in wordDetail ? (
               <>
                 <Text style={[styles.sheetTitle, { color: textColor }]}>
-                  “{wordDetail.cue.triggerText}”
-                  {wordDetail.cue.reviewState === 'removed' ? ' — removed' : ` → ${soundLabel(wordDetail.cue.soundId)}`}
+                  {wordDetail.cue.reviewState === 'removed'
+                    ? t('page.cueRemoved', locale, wordDetail.cue.triggerText)
+                    : t('page.cueMapped', locale, wordDetail.cue.triggerText, soundLabel(wordDetail.cue.soundId, locale))}
                 </Text>
                 {wordDetail.cue.reviewState === 'removed' ? (
                   <View style={styles.wordGridRow}>
@@ -1336,7 +1339,7 @@ export default function PageEditorScreen() {
                         onPress={openLibraryPicker}
                       >
                         <Text style={styles.wordGridIcon}>🎵</Text>
-                        <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
+                        <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.changeFromLibrary', locale)}</Text>
                       </TactileButton>
                     </View>
                     <View style={styles.wordGridCell}>
@@ -1345,7 +1348,7 @@ export default function PageEditorScreen() {
                         onPress={openRecorder}
                       >
                         <Text style={styles.wordGridIcon}>🎤</Text>
-                        <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                        <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.recordYourOwn', locale)}</Text>
                       </TactileButton>
                     </View>
                     <View style={styles.wordGridCell}>
@@ -1362,7 +1365,7 @@ export default function PageEditorScreen() {
                         }}
                       >
                         <Text style={styles.wordGridIcon}>↩️</Text>
-                        <Text style={[styles.wordGridLabel, { color: '#2fb344' }]}>Restore</Text>
+                        <Text style={[styles.wordGridLabel, { color: '#2fb344' }]}>{t('common.restore', locale)}</Text>
                       </TactileButton>
                     </View>
                   </View>
@@ -1387,7 +1390,7 @@ export default function PageEditorScreen() {
                         >
                           <Text style={styles.wordGridIcon}>{wordSoundPlaying ? '⏹' : '▶️'}</Text>
                           <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                            {wordSoundPlaying ? 'Stop' : 'Play sound'}
+                            {wordSoundPlaying ? t('common.stopLabel', locale) : t('page.playSound', locale)}
                           </Text>
                         </TactileButton>
                       </View>
@@ -1413,7 +1416,7 @@ export default function PageEditorScreen() {
                           }}
                         >
                           <Text style={styles.wordGridIcon}>🗑️</Text>
-                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>{t('common.remove', locale)}</Text>
                         </TactileButton>
                       </View>
                     </View>
@@ -1430,14 +1433,14 @@ export default function PageEditorScreen() {
                       ]}
                       onPress={feelingLuckySound}
                     >
-                      <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+                      <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>{t('common.feelingLucky', locale)}</Text>
                     </TactileButton>
                   </>
                 )}
               </>
             ) : wordDetail ? (
               <>
-                <Text style={[styles.sheetTitle, { color: textColor }]}>Add a sound for “{wordDetail.token.text}”</Text>
+                <Text style={[styles.sheetTitle, { color: textColor }]}>{t('page.addSoundFor', locale, wordDetail.token.text)}</Text>
                 <View style={styles.wordGridRow}>
                   <View style={styles.wordGridCell}>
                     <TactileButton
@@ -1445,7 +1448,7 @@ export default function PageEditorScreen() {
                       onPress={openLibraryPicker}
                     >
                       <Text style={styles.wordGridIcon}>🎵</Text>
-                      <Text style={[styles.wordGridLabel, { color: textColor }]}>Add from library</Text>
+                      <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.addFromLibrary', locale)}</Text>
                     </TactileButton>
                   </View>
                   <View style={styles.wordGridCell}>
@@ -1454,7 +1457,7 @@ export default function PageEditorScreen() {
                       onPress={openRecorder}
                     >
                       <Text style={styles.wordGridIcon}>🎤</Text>
-                      <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                      <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.recordYourOwn', locale)}</Text>
                     </TactileButton>
                   </View>
                 </View>
@@ -1466,12 +1469,12 @@ export default function PageEditorScreen() {
                   ]}
                   onPress={feelingLuckyNewWord}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>{t('common.feelingLucky', locale)}</Text>
                 </TactileButton>
               </>
             ) : null}
             <TactileButton style={styles.cancelRow} onPress={() => setWordDetail(null)}>
-              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
@@ -1496,7 +1499,7 @@ export default function PageEditorScreen() {
         >
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
             <Text style={[styles.sheetTitle, { color: textColor }]}>
-              🎵 Ambient — {soundLabel(page.ambientSoundId)}
+              {t('page.ambientHeader', locale, soundLabel(page.ambientSoundId, locale))}
             </Text>
             {page.ambientSoundId ? (
               <>
@@ -1506,7 +1509,7 @@ export default function PageEditorScreen() {
                 <View style={styles.wordGridOuterRow}>
                   <View style={[styles.wordGridTallButton, styles.softAmber]}>
                     <Text style={styles.wordGridIcon}>📖</Text>
-                    <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>Apply to all pages</Text>
+                    <Text style={[styles.wordGridLabel, { color: '#e8a33d' }]}>{t('page.applyToAllPages', locale)}</Text>
                     <LightSwitch
                       on={ambientAppliedToAll}
                       onToggle={() => {
@@ -1529,14 +1532,14 @@ export default function PageEditorScreen() {
                           onPress={openAmbientLibraryPicker}
                         >
                           <Text style={styles.wordGridIcon}>🎵</Text>
-                          <Text style={[styles.wordGridLabel, { color: textColor }]}>Change from library</Text>
+                          <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.changeFromLibrary', locale)}</Text>
                         </TactileButton>
                       </View>
                       <View style={styles.wordGridCell}>
                         <TactileButton style={[styles.wordGridButton, styles.softBlue]} onPress={playAmbient}>
                           <Text style={styles.wordGridIcon}>{ambientPlaying ? '⏹' : '▶️'}</Text>
                           <Text style={[styles.wordGridLabel, { color: '#208AEF' }]}>
-                            {ambientPlaying ? 'Stop' : 'Play ambient'}
+                            {ambientPlaying ? t('common.stopLabel', locale) : t('page.playAmbient', locale)}
                           </Text>
                         </TactileButton>
                       </View>
@@ -1554,7 +1557,7 @@ export default function PageEditorScreen() {
                       <View style={styles.wordGridCell}>
                         <TactileButton style={[styles.wordGridButton, styles.destructiveButton]} onPress={removeAmbient}>
                           <Text style={styles.wordGridIcon}>🗑️</Text>
-                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>Remove</Text>
+                          <Text style={[styles.wordGridLabel, { color: '#ff453a' }]}>{t('common.remove', locale)}</Text>
                         </TactileButton>
                       </View>
                     </View>
@@ -1572,7 +1575,7 @@ export default function PageEditorScreen() {
                   ]}
                   onPress={feelingLuckyAmbient}
                 >
-                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+                  <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>{t('common.feelingLucky', locale)}</Text>
                 </TactileButton>
               </>
             ) : (
@@ -1583,7 +1586,7 @@ export default function PageEditorScreen() {
                     onPress={openAmbientLibraryPicker}
                   >
                     <Text style={styles.wordGridIcon}>🎵</Text>
-                    <Text style={[styles.wordGridLabel, { color: textColor }]}>Add from library</Text>
+                    <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.addFromLibrary', locale)}</Text>
                   </TactileButton>
                 </View>
                 <View style={styles.wordGridCell}>
@@ -1592,7 +1595,7 @@ export default function PageEditorScreen() {
                     onPress={openAmbientRecorder}
                   >
                     <Text style={styles.wordGridIcon}>🎤</Text>
-                    <Text style={[styles.wordGridLabel, { color: textColor }]}>Record your own</Text>
+                    <Text style={[styles.wordGridLabel, { color: textColor }]}>{t('common.recordYourOwn', locale)}</Text>
                   </TactileButton>
                 </View>
               </View>
@@ -1606,7 +1609,7 @@ export default function PageEditorScreen() {
                 ]}
                 onPress={feelingLuckyAmbient}
               >
-                <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>🍀 Feeling lucky</Text>
+                <Text style={[styles.smallBtnLabel, { color: '#e8a33d' }]}>{t('common.feelingLucky', locale)}</Text>
               </TactileButton>
             )}
             <TactileButton
@@ -1616,7 +1619,7 @@ export default function PageEditorScreen() {
                 setAmbientDetailOpen(false);
               }}
             >
-              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
@@ -1634,8 +1637,8 @@ export default function PageEditorScreen() {
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
             <Text style={[styles.sheetTitle, { color: textColor }]}>
               {recordTarget === 'ambient'
-                ? 'Record an ambient sound for this page'
-                : `Record a sound for “${recordTarget && 'cue' in recordTarget ? recordTarget.cue.triggerText : recordTarget?.token.text ?? ''}”`}
+                ? t('page.recordAmbientTitle', locale)
+                : t('page.recordSoundTitle', locale, recordTarget && 'cue' in recordTarget ? recordTarget.cue.triggerText : recordTarget?.token.text ?? '')}
             </Text>
 
             {recorderState.isRecording ? (
@@ -1647,13 +1650,13 @@ export default function PageEditorScreen() {
                   </Text>
                 </View>
                 <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={stopRecording}>
-                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop</Text>
+                  <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.stopGlyph', locale)}</Text>
                 </TactileButton>
               </>
             ) : recordedUri ? (
               <>
                 <Text style={[styles.recordHint, { color: subColor }]}>
-                  Drag the edges to trim · {trimStart.toFixed(1)}s–{trimEnd.toFixed(1)}s of {recordingDuration.toFixed(1)}s
+                  {t('page.trimHint', locale, trimStart.toFixed(1), trimEnd.toFixed(1), recordingDuration.toFixed(1))}
                 </Text>
 
                 {/* Play/re-record sit outside the waveform's own bounds — gives
@@ -1668,7 +1671,7 @@ export default function PageEditorScreen() {
                       </Text>
                     </TactileButton>
                     <Text style={[styles.waveformSideCaption, { color: subColor }]}>
-                      {previewPlayhead !== null ? 'stop' : 'play'}
+                      {previewPlayhead !== null ? t('common.stop', locale) : t('common.play', locale)}
                     </Text>
                   </View>
 
@@ -1720,7 +1723,7 @@ export default function PageEditorScreen() {
                     >
                       <Text style={[styles.waveformSideButtonIcon, { color: '#ff453a' }]}>↻</Text>
                     </TactileButton>
-                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>Re-record</Text>
+                    <Text style={[styles.waveformSideCaption, { color: subColor }]}>{t('common.reRecord', locale)}</Text>
                   </View>
                 </View>
 
@@ -1729,20 +1732,20 @@ export default function PageEditorScreen() {
                     <View style={[styles.checkboxBox, fadeInOn && styles.checkboxBoxChecked]}>
                       {fadeInOn && <Text style={styles.checkboxMark}>✓</Text>}
                     </View>
-                    <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade in (1s)</Text>
+                    <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeIn', locale)}</Text>
                   </TactileButton>
                   <TactileButton style={styles.checkbox} onPress={() => setFadeOutOn((v) => !v)}>
                     <View style={[styles.checkboxBox, fadeOutOn && styles.checkboxBoxChecked]}>
                       {fadeOutOn && <Text style={styles.checkboxMark}>✓</Text>}
                     </View>
-                    <Text style={[styles.checkboxLabel, { color: textColor }]}>Fade out (1s)</Text>
+                    <Text style={[styles.checkboxLabel, { color: textColor }]}>{t('common.fadeOut', locale)}</Text>
                   </TactileButton>
                 </View>
 
                 <TextInput
                   value={recordingName}
                   onChangeText={setRecordingName}
-                  placeholder="Name this sound (optional) — find it later"
+                  placeholder={t('page.recordingNamePlaceholder', locale)}
                   placeholderTextColor={subColor}
                   style={[styles.pickerSearchInput, { color: textColor, backgroundColor: cardBackground, marginBottom: 10 }]}
                   returnKeyType="done"
@@ -1755,7 +1758,7 @@ export default function PageEditorScreen() {
                       onPress={cancelRecording}
                       disabled={savingRecording}
                     >
-                      <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>Cancel</Text>
+                      <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
                     </TactileButton>
                   </View>
                   <View style={styles.toolBtnWrap}>
@@ -1765,7 +1768,7 @@ export default function PageEditorScreen() {
                       disabled={savingRecording}
                     >
                       <Text style={[styles.actionButtonLabel, { color: '#2fb344' }]}>
-                        {savingRecording ? 'Saving…' : '✅ Use this recording'}
+                        {savingRecording ? t('common.saving', locale) : t('common.useThisRecording', locale)}
                       </Text>
                     </TactileButton>
                   </View>
@@ -1773,13 +1776,13 @@ export default function PageEditorScreen() {
               </>
             ) : (
               <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={startRecording}>
-                <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>🎤 Start recording</Text>
+                <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.startRecording', locale)}</Text>
               </TactileButton>
             )}
 
             {(recorderState.isRecording || !recordedUri) && (
               <TactileButton style={styles.cancelRow} onPress={cancelRecording} disabled={savingRecording}>
-                <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+                <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
               </TactileButton>
             )}
           </Pressable>
@@ -1791,7 +1794,7 @@ export default function PageEditorScreen() {
       <Modal visible={dictateOpen} transparent animationType="slide" onRequestClose={closeDictation}>
         <Pressable style={styles.backdrop} onPress={dictateStatus === 'listening' ? undefined : closeDictation}>
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
-            <Text style={[styles.sheetTitle, { color: textColor }]}>🎙️ Read the page aloud</Text>
+            <Text style={[styles.sheetTitle, { color: textColor }]}>{t('page.readThePageAloud', locale)}</Text>
 
             <View style={styles.langToggleRow}>
               <View style={styles.toolBtnWrap}>
@@ -1805,7 +1808,7 @@ export default function PageEditorScreen() {
                   onPress={() => setDictateLang('en')}
                   disabled={dictateStatus === 'listening'}
                 >
-                  <Text style={[styles.langBtnLabel, { color: dictateLang === 'en' ? '#208AEF' : textColor }]}>English</Text>
+                  <Text style={[styles.langBtnLabel, { color: dictateLang === 'en' ? '#208AEF' : textColor }]}>{t('common.englishLabel', locale)}</Text>
                 </TactileButton>
               </View>
               <View style={styles.toolBtnWrap}>
@@ -1819,7 +1822,7 @@ export default function PageEditorScreen() {
                   onPress={() => setDictateLang('ru')}
                   disabled={dictateStatus === 'listening'}
                 >
-                  <Text style={[styles.langBtnLabel, { color: dictateLang === 'ru' ? '#208AEF' : textColor }]}>Русский</Text>
+                  <Text style={[styles.langBtnLabel, { color: dictateLang === 'ru' ? '#208AEF' : textColor }]}>{t('common.russianLabel', locale)}</Text>
                 </TactileButton>
               </View>
             </View>
@@ -1832,14 +1835,14 @@ export default function PageEditorScreen() {
                 </Text>
               ) : (
                 <Text style={{ color: subColor, fontSize: 14, fontStyle: 'italic' }}>
-                  Recognized text will appear here as you read…
+                  {t('page.recognizedTextPlaceholder', locale)}
                 </Text>
               )}
             </ScrollView>
 
             {dictateStatus === 'listening' ? (
               <TactileButton style={[styles.actionButton, styles.destructiveButton]} onPress={stopDictation}>
-                <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>⏹ Stop</Text>
+                <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>{t('common.stopGlyph', locale)}</Text>
               </TactileButton>
             ) : (
               <TactileButton
@@ -1848,19 +1851,19 @@ export default function PageEditorScreen() {
                 disabled={dictateStatus === 'loading'}
               >
                 <Text style={[styles.actionButtonLabel, { color: '#ff453a' }]}>
-                  {dictateStatus === 'loading' ? 'Loading model…' : '🎙️ Start reading'}
+                  {dictateStatus === 'loading' ? t('common.loadingModel', locale) : t('page.startReading', locale)}
                 </Text>
               </TactileButton>
             )}
 
             {(dictateFinal || dictatePartial) && dictateStatus !== 'listening' && (
               <TactileButton style={[styles.actionButton, styles.softGreen]} onPress={useDictatedText}>
-                <Text style={[styles.actionButtonLabel, { color: '#2fb344' }]}>✅ Use this text</Text>
+                <Text style={[styles.actionButtonLabel, { color: '#2fb344' }]}>{t('page.useThisText', locale)}</Text>
               </TactileButton>
             )}
 
             <TactileButton style={styles.cancelRow} onPress={closeDictation} disabled={dictateStatus === 'loading'}>
-              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
@@ -1877,7 +1880,7 @@ export default function PageEditorScreen() {
               style={[styles.actionButton, styles.softBlue, styles.infoOkButton]}
               onPress={() => setInfoModal(null)}
             >
-              <Text style={[styles.actionButtonLabel, { color: '#208AEF' }]}>OK</Text>
+              <Text style={[styles.actionButtonLabel, { color: '#208AEF' }]}>{t('common.ok', locale)}</Text>
             </TactileButton>
           </View>
         </View>
@@ -1893,14 +1896,14 @@ export default function PageEditorScreen() {
           <Pressable style={[styles.sheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff' }]}>
             <Text style={[styles.sheetTitle, { color: subColor }]}>
               {picker?.mode === 'add'
-                ? `Add a sound for “${picker.token.text}”`
+                ? t('page.addSoundForModal', locale, picker.token.text)
                 : picker?.mode === 'ambient'
-                  ? 'Choose an ambient sound'
-                  : 'Choose a sound'}
+                  ? t('page.chooseAmbientSound', locale)
+                  : t('page.chooseSound', locale)}
             </Text>
             <TextInput
               style={[styles.pickerSearchInput, { backgroundColor: inputBackground, color: textColor }]}
-              placeholder="Search sounds…"
+              placeholder={t('page.searchSoundsPlaceholder', locale)}
               placeholderTextColor={subColor}
               value={pickerSearch}
               onChangeText={setPickerSearch}
@@ -1915,7 +1918,7 @@ export default function PageEditorScreen() {
                     onPress={() => toggleCategory('My recordings')}
                   >
                     <Text style={[styles.categoryHeaderLabel, { color: textColor }]}>
-                      {pickerSearching || expandedCategories.has('My recordings') ? '▾' : '▸'} My recordings
+                      {t('page.myRecordingsSection', locale, pickerSearching || expandedCategories.has('My recordings') ? '▾' : '▸')}
                     </Text>
                     <Text style={[styles.categoryHeaderCount, { color: subColor }]}>{visibleRecordings.length}</Text>
                   </Pressable>
@@ -1924,11 +1927,11 @@ export default function PageEditorScreen() {
                 </View>
               )}
               {pickerSuggested.length > 0 && (
-                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>Suggested</Text>
+                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>{t('page.suggested', locale)}</Text>
               )}
               {pickerSuggested.map(renderSoundRow)}
               {pickerSuggested.length > 0 && pickerRest.length > 0 && (
-                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>All sounds</Text>
+                <Text style={[styles.pickerSectionLabel, { color: subColor }]}>{t('page.allSounds', locale)}</Text>
               )}
               {pickerRestCategories === null
                 ? pickerRest.map(renderSoundRow)
@@ -1947,11 +1950,11 @@ export default function PageEditorScreen() {
                     );
                   })}
               {pickerSearched.length === 0 && visibleRecordings.length === 0 && (
-                <Text style={[styles.pickerEmpty, { color: subColor }]}>No sounds match “{pickerSearch}”.</Text>
+                <Text style={[styles.pickerEmpty, { color: subColor }]}>{t('page.noSoundsMatch', locale, pickerSearch)}</Text>
               )}
             </ScrollView>
             <TactileButton style={styles.cancelRow} onPress={() => setPicker(null)}>
-              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>Cancel</Text>
+              <Text style={[styles.smallBtnLabel, { color: '#ff453a' }]}>{t('common.cancel', locale)}</Text>
             </TactileButton>
           </Pressable>
         </Pressable>
@@ -1970,7 +1973,7 @@ export default function PageEditorScreen() {
         <View style={styles.rescanOverlay}>
           <View style={[styles.rescanCard, { backgroundColor: cardBackground }]}>
             <ActivityIndicator size="large" color="#208AEF" />
-            <Text style={{ color: textColor }}>Re-scanning the marked area…</Text>
+            <Text style={{ color: textColor }}>{t('page.rescanningArea', locale)}</Text>
           </View>
         </View>
       </Modal>
@@ -1993,7 +1996,7 @@ export default function PageEditorScreen() {
               <Text style={styles.viewerCircleGlyph}>✕</Text>
             </TactileButton>
             <TactileButton style={[styles.viewerCircleButton, styles.viewerEditButton]} onPress={openEditFromViewer}>
-              <Text style={styles.viewerEditLabel}>✏️ Edit</Text>
+              <Text style={styles.viewerEditLabel}>{t('page.edit', locale)}</Text>
             </TactileButton>
           </View>
         </GestureHandlerRootView>

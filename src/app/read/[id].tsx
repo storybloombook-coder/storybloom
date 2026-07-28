@@ -52,6 +52,7 @@ import TactileButton from '../../components/TactileButton';
 import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/audio/playRange';
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
+import { t, useLocaleStore, type Locale } from '../../lib/i18n';
 import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import { NEXT_PAGE_PHRASES, type RecognizedWord, type SpeechLang } from '../../lib/speech/types';
@@ -234,35 +235,35 @@ const BALL_ARC_HALF_DURATION_MS = 130;
 const AMBIENT_DUCK_VOLUME = 0.18;
 const AMBIENT_DUCK_MS = 350;
 
-function micDisplay(status: MicStatus, error: string | null): { label: string; color: string; bg: string } {
+function micDisplay(status: MicStatus, error: string | null, locale: Locale): { label: string; color: string; bg: string } {
   switch (status) {
     case 'listening':
-      return { label: 'Listening…', color: '#2fb344', bg: 'rgba(47,179,68,0.15)' };
+      return { label: t('read.micListening', locale), color: '#2fb344', bg: 'rgba(47,179,68,0.15)' };
     case 'muted':
-      return { label: 'Mic paused — tap to resume', color: '#8e8e93', bg: 'rgba(142,142,147,0.15)' };
+      return { label: t('read.micPaused', locale), color: '#8e8e93', bg: 'rgba(142,142,147,0.15)' };
     case 'error':
-      return { label: error ?? 'Mic unavailable — tap to retry', color: '#ff453a', bg: 'rgba(255,69,58,0.15)' };
+      return { label: error ?? t('read.micUnavailable', locale), color: '#ff453a', bg: 'rgba(255,69,58,0.15)' };
     case 'loading':
     case 'idle':
     default:
-      return { label: 'Starting up…', color: '#e8a33d', bg: 'rgba(232,163,61,0.15)' };
+      return { label: t('read.startingUp', locale), color: '#e8a33d', bg: 'rgba(232,163,61,0.15)' };
   }
 }
 
 /** Label + color for the dedicated listen-toggle button — action-oriented
  *  ("stop"/"start"), unlike micDisplay's status-oriented pill wording. */
-function listenToggleDisplay(status: MicStatus): { label: string; color: string } {
+function listenToggleDisplay(status: MicStatus, locale: Locale): { label: string; color: string } {
   switch (status) {
     case 'listening':
-      return { label: 'Stop Listening', color: '#ff453a' };
+      return { label: t('read.stopListening', locale), color: '#ff453a' };
     case 'error':
-      return { label: 'Retry Mic', color: '#ff453a' };
+      return { label: t('read.retryMic', locale), color: '#ff453a' };
     case 'loading':
-      return { label: 'Starting up…', color: '#8e8e93' };
+      return { label: t('read.startingUp', locale), color: '#8e8e93' };
     case 'muted':
     case 'idle':
     default:
-      return { label: 'Start Listening', color: '#2fb344' };
+      return { label: t('read.startListening', locale), color: '#2fb344' };
   }
 }
 
@@ -270,6 +271,7 @@ export default function ReaderScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const bookId = Array.isArray(params.id) ? params.id[0] : params.id;
 
+  const locale = useLocaleStore((s) => s.locale);
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const subColor = isDark ? '#9a9a9e' : '#6b6b70';
@@ -715,7 +717,7 @@ export default function ReaderScreen() {
       const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         setMicStatus('error');
-        setMicError('Microphone access needed to listen while you read.');
+        setMicError(t('read.micNeededBody', locale));
         return;
       }
       let recognizer = recognizerRef.current;
@@ -738,7 +740,7 @@ export default function ReaderScreen() {
       setMicStatus('error');
       setMicError(e?.message ?? String(e));
     }
-  }, []);
+  }, [locale]);
 
   // Start listening once the book's loaded, and stop for good on unmount.
   useEffect(() => {
@@ -1083,9 +1085,9 @@ export default function ReaderScreen() {
     return (
       <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
         <Stack.Screen options={{ headerShown: false }} />
-        <Text style={{ color: textColor, marginBottom: 16 }}>This book has no story pages to read.</Text>
+        <Text style={{ color: textColor, marginBottom: 16 }}>{t('read.noStoryPages', locale)}</Text>
         <TactileButton style={[styles.secondaryBtn, { backgroundColor: cardBackground }]} onPress={() => router.back()}>
-          <Text style={[styles.secondaryLabel, { color: textColor }]}>Back</Text>
+          <Text style={[styles.secondaryLabel, { color: textColor }]}>{t('read.back', locale)}</Text>
         </TactileButton>
       </SafeAreaView>
     );
@@ -1096,9 +1098,9 @@ export default function ReaderScreen() {
       <SafeAreaView style={[styles.safe, styles.center, { backgroundColor }]}>
         <Stack.Screen options={{ headerShown: false }} />
         <Text style={styles.endEmoji}>🌸</Text>
-        <Text style={[styles.endTitle, { color: textColor }]}>The End</Text>
+        <Text style={[styles.endTitle, { color: textColor }]}>{t('read.theEnd', locale)}</Text>
         <Text style={[styles.endSub, { color: subColor }]}>
-          {book?.title ? `You finished “${book.title}.”` : 'You finished the book.'}
+          {book?.title ? t('read.finishedWithTitle', locale, book.title) : t('read.finishedNoTitle', locale)}
         </Text>
         <View style={styles.endActions}>
           <TactileButton
@@ -1108,10 +1110,10 @@ export default function ReaderScreen() {
               setIndex(0);
             }}
           >
-            <Text style={[styles.secondaryLabel, { color: textColor }]}>↻  Read again</Text>
+            <Text style={[styles.secondaryLabel, { color: textColor }]}>{t('read.readAgain', locale)}</Text>
           </TactileButton>
           <TactileButton style={[styles.secondaryBtn, { backgroundColor: cardBackground }]} onPress={() => router.back()}>
-            <Text style={[styles.secondaryLabel, { color: subColor }]}>Done</Text>
+            <Text style={[styles.secondaryLabel, { color: subColor }]}>{t('common.done', locale)}</Text>
           </TactileButton>
         </View>
       </SafeAreaView>
@@ -1132,13 +1134,13 @@ export default function ReaderScreen() {
           <Text style={[styles.exit, { color: subColor }]}>✕</Text>
         </Pressable>
         <Text style={[styles.pageCount, { color: subColor }]}>
-          Page {index + 1} of {storyPages.length}
+          {t('read.pageOf', locale, index + 1, storyPages.length)}
         </Text>
         <View style={{ width: 24 }} />
       </View>
 
       {(() => {
-        const mic = micDisplay(micStatus, micError);
+        const mic = micDisplay(micStatus, micError, locale);
         return (
           <Pressable onPress={toggleMic} style={styles.micRow}>
             <View style={[styles.micPill, { backgroundColor: mic.bg, borderColor: mic.color }]}>
@@ -1254,17 +1256,16 @@ export default function ReaderScreen() {
               })()}
             </Animated.View>
           ) : (
-            <Text style={[styles.noText, { color: subColor }]}>No text on this page — just turn the page.</Text>
+            <Text style={[styles.noText, { color: subColor }]}>{t('read.noTextJustTurn', locale)}</Text>
           )}
           <Text style={[styles.hint, { color: subColor }]}>
-            Tap a highlighted word to play its sound. Tap any word to jump the reading position
-            there — handy for a reread or to fix a mis-tracked spot.
+            {t('read.tapWordHint', locale)}
           </Text>
         </ScrollView>
       </View>
 
       {(() => {
-        const listen = listenToggleDisplay(micStatus);
+        const listen = listenToggleDisplay(micStatus, locale);
         return (
           <View style={styles.footer}>
             {/* TactileButton only sizes its own inner view — these wrappers are
@@ -1276,12 +1277,12 @@ export default function ReaderScreen() {
                   style={[styles.navBack, { opacity: index === 0 ? 0.4 : 1 }]}
                   onPress={goPrev}
                 >
-                  <Text style={styles.navBackLabel}>← Previous page</Text>
+                  <Text style={styles.navBackLabel}>{t('read.previousPage', locale)}</Text>
                 </TactileButton>
               </View>
               <View style={styles.footerHalf}>
                 <TactileButton style={styles.navNext} onPress={goNext}>
-                  <Text style={styles.navNextLabel}>{isLast ? 'Finish  ✓' : 'Next page  →'}</Text>
+                  <Text style={styles.navNextLabel}>{isLast ? t('read.finish', locale) : t('read.nextPage', locale)}</Text>
                 </TactileButton>
               </View>
             </View>
@@ -1291,7 +1292,7 @@ export default function ReaderScreen() {
                   style={[styles.toLibraryBtn, { backgroundColor: cardBackground }]}
                   onPress={() => router.replace('/library')}
                 >
-                  <Text style={[styles.toLibraryLabel, { color: textColor }]}>To Library</Text>
+                  <Text style={[styles.toLibraryLabel, { color: textColor }]}>{t('read.toLibrary', locale)}</Text>
                 </TactileButton>
               </View>
               <View style={styles.footerHalf}>
