@@ -16,10 +16,10 @@ export default function HomeScreen() {
   const isDark = useColorScheme() === 'dark';
   const textColor = isDark ? '#fff' : '#000';
   const backgroundColor = isDark ? '#000' : '#fff';
-  // 10% opacity so the blurred background video reads through the buttons
-  // themselves, not just around them; the light border (see styles.button/
-  // cornerButton) is what actually defines each button's edge now.
-  const buttonBackground = isDark ? 'rgba(28,28,30,0.1)' : 'rgba(242,242,242,0.1)';
+  // 0% opacity (was 10%, reduced by 10) -- fully transparent fill, so the
+  // light border (see styles.button/cornerButton) is the only thing left
+  // defining each button's edge over the background video.
+  const buttonBackground = isDark ? 'rgba(28,28,30,0)' : 'rgba(242,242,242,0)';
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
 
