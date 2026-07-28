@@ -22,9 +22,9 @@ const STRINGS = {
   ru: {
     title: 'Kolobook',
     subtitle: 'Читайте — и книга оживёт.',
-    addBook: 'Добавить книгу',
-    createStory: 'Создать историю',
-    myLibrary: 'Моя библиотека',
+    addBook: 'Новая книга',
+    createStory: 'Своя история',
+    myLibrary: 'Библиотека',
     switchLanguage: 'Switch to English',
   },
 } as const satisfies Record<Locale, Record<string, string>>;

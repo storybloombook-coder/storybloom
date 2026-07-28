@@ -99,26 +99,31 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
   },
+  // Matches the 3D scene's own menuButton coordinates exactly
+  // (features/kolobok/src/Scene3D.jsx: left:14, bottom:96, 40x40) -- that
+  // button is this one's mirror (labelled "2D", returns here), so keeping
+  // both at the identical screen position makes the swap between the two
+  // screens read as one continuous button instead of two unrelated ones.
   cornerButtonWrap: {
     position: 'absolute',
-    left: 16,
-    bottom: 16,
-    width: 44,
-    height: 44,
+    left: 14,
+    bottom: 96,
+    width: 40,
+    height: 40,
   },
-  // Immediately to the right of cornerButtonWrap (left:16 + width:44 + an
-  // 8px gap).
+  // Matches the 3D scene's own localeButton coordinates exactly (stacked
+  // directly above menuButton there: bottom:144 = 96 + 40 + 8 gap).
   langButtonWrap: {
     position: 'absolute',
-    left: 68,
-    bottom: 16,
-    width: 44,
-    height: 44,
+    left: 14,
+    bottom: 144,
+    width: 40,
+    height: 40,
   },
   cornerButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },

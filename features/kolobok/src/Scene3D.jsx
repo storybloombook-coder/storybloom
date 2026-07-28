@@ -270,7 +270,12 @@ export function Scene3D({ onNavigate, focused = true }) {
       </TactileButton>
 
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
-          pause button on the opposite side of the screen. */}
+          pause button on the opposite side of the screen. Labelled "2D"
+          (not a hamburger glyph) so leaving the scene reads as the exact
+          mirror of the home screen's "3D" button that got you in here --
+          same coordinates too (see MainScreen/home screen styles), so the
+          swap between the two screens feels like one continuous control
+          rather than two unrelated buttons. */}
       <TactileButton
         accessibilityRole="button"
         accessibilityLabel={t('ui.mainMenu', locale)}
@@ -279,7 +284,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
-        <Text style={styles.storyButtonText}>☰</Text>
+        <Text style={styles.storyButtonText}>2D</Text>
       </TactileButton>
 
       {/* Language toggle: identical 40x40 circle, stacked directly above the
