@@ -208,13 +208,15 @@ export function StoryDirector() {
             // stopStory('stopped') here: that calls resetStoryMotion() +
             // setFadeBlack(false), which would instantly un-fade the screen
             // and reveal Kolobok again before the user ever presses restart.
-            // Leave everything exactly as the finale left it (black,
-            // narration still reading "...and SNAP!...") -- the restart
-            // button (Scene3D's storyCompleted) is the only way forward,
-            // and pressing it plays the rebirth via startRebirthResume above.
+            // Leave the screen black, but DO clear narration -- live
+            // feedback: no dialogue bubble should be showing once the tale
+            // has ended, "...and SNAP!..." included. The restart button
+            // (Scene3D's storyCompleted) is still the only way forward, and
+            // pressing it plays the rebirth via startRebirthResume above.
             story.loopCount += 1;
             st.setStoryPlaying(false);
             st.setStoryCompleted(true);
+            st.setNarration(null);
             orbit.mode = 'user';
             story.mode = 'stopped';
             story.idleClock = 0;

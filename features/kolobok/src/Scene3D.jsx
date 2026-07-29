@@ -202,6 +202,13 @@ export function Scene3D({ onNavigate, focused = true }) {
           <Text style={styles.zoneHint}>{t('ui.hint', locale)}</Text>
         </View>
 
+        {/* Camera-control tip, bottom-center just above the nav row -- the
+            pan gesture (Scene3D's own `pan`, Gesture.Pan().minPointers(1)
+            .maxPointers(1)) is a plain single-finger drag, so the copy here
+            must say that and nothing fancier (no pinch/two-finger gesture
+            exists to describe). */}
+        <Text style={styles.cameraTip} pointerEvents="none">{t('ui.cameraTip', locale)}</Text>
+
         {/* The crossroads stone's accessibility twin (SPEC.md "Navigation"):
             mirrors the 3D plaques 1:1 so the menu never depends on tapping
             precisely inside the Canvas. Zone travel stays gesture-only.
@@ -400,6 +407,13 @@ const styles = StyleSheet.create({
     borderLeftColor: '#d9a441',
   },
   bubbleText: { fontSize: 15, color: '#2e2a22', textAlign: 'center' },
+  cameraTip: {
+    alignSelf: 'center',
+    fontSize: 12,
+    color: '#2e2a22',
+    opacity: 0.55,
+    marginBottom: 8,
+  },
   navRow: {
     flexDirection: 'row',
     justifyContent: 'center',

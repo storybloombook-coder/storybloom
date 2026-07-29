@@ -51,6 +51,7 @@ export const STRINGS = {
     },
     ui: {
       hint: 'Swipe to travel · tap a friend to say hello',
+      cameraTip: 'Drag anywhere to look around',
       playTale: 'Play the tale',
       pauseTale: 'Pause the tale',
       restartTale: 'Play the tale again',
@@ -118,6 +119,7 @@ export const STRINGS = {
     },
     ui: {
       hint: 'Проведите пальцем — и в путь · нажмите на героя',
+      cameraTip: 'Проведите пальцем в любом месте, чтобы осмотреться',
       playTale: 'Рассказать сказку',
       pauseTale: 'Остановить сказку',
       restartTale: 'Рассказать сказку снова',
