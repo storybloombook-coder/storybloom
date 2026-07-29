@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Animated, AppState, StyleSheet, View, Text, Pressable,
+  Animated, AppState, StyleSheet, View, Text,
 } from 'react-native';
 import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -13,7 +13,6 @@ import {
 } from './state/sceneStore';
 import { refreshWeather } from './services/weather';
 import { ZONES } from './config/zones';
-import { MENU } from './config/menu';
 import { t } from './config/strings';
 
 const SWIPE_SENSITIVITY = 0.005;   // px -> radians
@@ -25,7 +24,7 @@ const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
 // tap-count entries (grandpa/fox); the rest fire through their own
 // dedicated eggManager methods (tapSpruce/tapMushroom/tapMoon/tapCloud/
 // tapChimney) and aren't represented as REGISTRY rows.
-const TOTAL_EGGS = 8;
+const TOTAL_EGGS = 7;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
@@ -212,7 +211,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         </View>
 
         {/* Easter-egg discovery counter, top-right -- see TOTAL_EGGS' own
-            comment for what's counted. Deliberately unlabeled (just "N/8"):
+            comment for what's counted. Deliberately unlabeled (just "N/7"):
             EASTER_EGGS.md never specifies UI copy for this, and a bare
             fraction reads as "there's more to find" without spelling out
             what, which fits the hidden/discoverable spirit of the feature. */}
@@ -220,33 +219,12 @@ export function Scene3D({ onNavigate, focused = true }) {
           <Text style={styles.eggCounterText}>{discoveredEggCount}/{TOTAL_EGGS}</Text>
         </View>
 
-        {/* Camera-control tip, bottom-center just above the nav row -- the
-            pan gesture (Scene3D's own `pan`, Gesture.Pan().minPointers(1)
-            .maxPointers(1)) is a plain single-finger drag, so the copy here
-            must say that and nothing fancier (no pinch/two-finger gesture
-            exists to describe). */}
+        {/* Camera-control tip, bottom-center -- the pan gesture (Scene3D's
+            own `pan`, Gesture.Pan().minPointers(1).maxPointers(1)) is a
+            plain single-finger drag, so the copy here must say that and
+            nothing fancier (no pinch/two-finger gesture exists to
+            describe). */}
         <Text style={styles.cameraTip} pointerEvents="none">{t('ui.cameraTip', locale)}</Text>
-
-        {/* The crossroads stone's accessibility twin (SPEC.md "Navigation"):
-            mirrors the 3D plaques 1:1 so the menu never depends on tapping
-            precisely inside the Canvas. Zone travel stays gesture-only.
-            Dimmed to 60% while the tale plays (STORY_SPEC §1) -- still
-            tappable: stone/menu navigation always works, even mid-story. */}
-        <View style={[styles.navRow, storyPlaying && styles.navRowDimmed]}>
-          {MENU.map((item) => (
-            <Pressable
-              key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={t(item.labelKey, locale)}
-              onPress={() => requestNavigation(item.route)}
-              style={styles.menuPill}
-            >
-              <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={14} intensity={0.4} />
-              <Text style={styles.menuPillText}>{t(item.labelKey, locale)}</Text>
-              <View style={[styles.menuPillUnderline, { backgroundColor: item.accent }]} />
-            </Pressable>
-          ))}
-        </View>
       </View>
 
       {/* Dialogue bubble: anchored above whoever is actually speaking
@@ -442,29 +420,6 @@ const styles = StyleSheet.create({
     opacity: 0.55,
     marginBottom: 8,
   },
-  navRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 42,
-    paddingHorizontal: 16,
-  },
-  navRowDimmed: { opacity: 0.6 },
-  menuPill: {
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 6,
-    borderRadius: 14,
-    // Translucent (was 0.92, near-solid) so GlassGlare's light-colored rim
-    // and hotspot actually show contrast against it -- against a near-opaque
-    // white, the same light-colored glare has nothing to catch on.
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  menuPillText: { fontSize: 13, fontWeight: '600', color: '#2e2a22', textAlign: 'center' },
-  menuPillUnderline: { width: 22, height: 3, borderRadius: 2, marginTop: 6 },
   // Position/size only -- this is the OUTER TactileButton Pressable's own
   // style (it owns the touch target since these are laid out via
   // position:absolute). Visual look lives in buttonVisual below, on the

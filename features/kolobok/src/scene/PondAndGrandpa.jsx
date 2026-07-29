@@ -37,6 +37,38 @@ const WILLOW_SWAY_AMPLITUDE = rad(4);
 const RECAST_INTERVAL = 30;
 const RIPPLE_COUNT = 3;
 
+// Live feedback: the rod's rest angle read as too steep -- "a slight
+// upward angle relative to the horizontal" instead (was rad(-40), ~50deg
+// above horizontal since the cylinder's own rest axis is vertical).
+const ROD_REST_ANGLE = rad(-75); // ~15deg above horizontal at rest
+
+// Live feedback: "grandpa doesn't have any arms" -- GRANDPA_GRIP is the
+// exact point the rod group already pivots from (its own position, below),
+// so it never moves even as the rod sweeps/pitches -- both arms below
+// reach to this same fixed point, matching a real two-handed grip.
+const GRANDPA_GRIP = [0.14, 0.45, 0.12];
+/** Static kaftan-sleeved arm, baked into the merged body mesh: a capsule
+ *  spanning shoulder -> GRANDPA_GRIP, oriented via a scratch quaternion
+ *  (CapsuleGeometry is authored along +Y; setFromUnitVectors finds the
+ *  rotation from that rest axis to the actual shoulder->grip direction). */
+function armPart(shoulder, color) {
+  const start = new Vector3(...shoulder);
+  const end = new Vector3(...GRANDPA_GRIP);
+  const mid = start.clone().lerp(end, 0.5);
+  const dir = end.clone().sub(start);
+  const length = dir.length();
+  dir.normalize();
+  const quat = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), dir);
+  const euler = new Euler().setFromQuaternion(quat);
+  const ARM_RADIUS = 0.045;
+  return {
+    geometry: new CapsuleGeometry(ARM_RADIUS, Math.max(0.001, length - ARM_RADIUS * 2), 3, 6),
+    color,
+    position: [mid.x, mid.y, mid.z],
+    rotation: [euler.x, euler.y, euler.z],
+  };
+}
+
 // Live feedback: the bridge should curve to match the path's own radius,
 // not cut a straight chord across it. Bridge points are sampled directly
 // on the WORLD path circle (radius PATH_RADIUS) around POND_ANGLE, then
@@ -309,6 +341,8 @@ export function PondAndGrandpa() {
     { geometry: new CapsuleGeometry(0.17, 0.24, 3, 8), color: '#8a7862', position: [0, 0.42, 0] }, // kaftan body
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#4a4038', position: [0.08, 0.06, 0.12] },  // boots
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#4a4038', position: [-0.08, 0.06, 0.12] },
+    armPart([-0.14, 0.62, 0.04], '#8a7862'), // left arm, reaching to the grip
+    armPart([0.14, 0.62, 0.04], '#8a7862'),  // right arm, reaching to the grip
   ]), []);
 
   const headGeometry = useMemo(() => mergeColoredParts([
@@ -398,7 +432,7 @@ export function PondAndGrandpa() {
     }
     const recastSweep = s.recastT >= 0 ? Math.sin(s.recastT * Math.PI) * rad(35) : 0;
 
-    if (rodRef.current) rodRef.current.rotation.x = rad(-40) + recastSweep + eggMotion.rodPitch;
+    if (rodRef.current) rodRef.current.rotation.x = ROD_REST_ANGLE + recastSweep + eggMotion.rodPitch;
     if (headRef.current) headRef.current.rotation.z = eggMotion.headShake;
 
     // Float: gentle bob, lifted by the yank.
@@ -568,12 +602,13 @@ export function PondAndGrandpa() {
         <group ref={headRef} position={[0, 0.72, 0]}>
           <mesh geometry={headGeometry} material={grandpaMaterials.head} />
         </group>
-        <group ref={rodRef} position={[0.14, 0.45, 0.12]} rotation={[rad(-40), 0, 0]}>
+        <group ref={rodRef} position={GRANDPA_GRIP} rotation={[ROD_REST_ANGLE, 0, 0]}>
           <mesh geometry={rodGeometry} material={grandpaMaterials.rod} />
         </group>
-        {/* Generous hitbox */}
+        {/* Generous hitbox -- live feedback: 0.8 was still hard to land on
+            mobile, enlarged further. */}
         <mesh position={[0, 0.4, 0]} visible={false}>
-          <sphereGeometry args={[0.8, 6, 6]} />
+          <sphereGeometry args={[1.1, 6, 6]} />
           <meshBasicMaterial transparent opacity={0} />
         </mesh>
       </group>

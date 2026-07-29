@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber/native';
+import { useFrame, useThree } from '@react-three/fiber/native';
 import { ConeGeometry, Object3D, SphereGeometry } from 'three';
 import { atmosphereLive } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
@@ -51,6 +51,7 @@ export function Owl() {
   }), []);
 
   const ui = useRef({ blinkSeen: 0, blinkMs: -1, pulseMs: -1 });
+  const { camera } = useThree();
 
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
@@ -71,6 +72,14 @@ export function Owl() {
     const popT = eggMotion.owlPopT;
     rootRef.current.scale.setScalar(Math.max(0.001, popT));
     rootRef.current.position.y += 0.05 + popT * 0.1;
+
+    // Live feedback: "it should look in the camera" -- face is on local +Z
+    // (see eyeGeometry/beak's own +Z offsets above), so yaw the whole owl
+    // toward wherever the camera currently is, then let the head's own
+    // swivel ride on top of that base orientation instead of a fixed 0.
+    const dx = camera.position.x - rootRef.current.position.x;
+    const dz = camera.position.z - rootRef.current.position.z;
+    rootRef.current.rotation.y = Math.atan2(dx, dz);
 
     if (headRef.current) headRef.current.rotation.y = eggMotion.owlSwivel;
 

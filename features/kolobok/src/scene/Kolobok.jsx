@@ -12,7 +12,6 @@ import { makeDoughTexture, makeRadialAlphaTexture } from './textures/proceduralT
 import { makeToonMaterial } from './materials/toonMaterial';
 import { getSharedTexture } from './BlobShadow';
 import { polish } from '../config/devFlags';
-import { eggMotion } from './easterEggs';
 
 // ANIMATION_SPEC Â§4/Â§5: how far Kolobok rolls forward during a beat's react
 // phase, and the extra target-angle offset it rides on top of the normal
@@ -165,8 +164,6 @@ export function Kolobok() {
   const rightEyelid = useRef();
   const leftBrow = useRef();
   const rightBrow = useRef();
-  const leftPupil = useRef();
-  const rightPupil = useRef();
   const smileMesh = useRef();
   const openMouthMesh = useRef();
   const shadowMesh = useRef();
@@ -234,10 +231,6 @@ export function Kolobok() {
     // Story-mode request channels (STORY_SPEC Â§3), edge-detected.
     blinkBurstWas: 0,
     storyExpressionWas: null,
-
-    // dizzy (EASTER_EGGS.md Â§2 dizzy), edge-detected off eggMotion.dizzyT.
-    dizzyWas: false,
-    dizzyPhase: 0, // pupil-orbit phase, radians, only advances while dizzy
   });
 
   function startBlink(s, isDouble = false) {
@@ -374,32 +367,11 @@ export function Kolobok() {
     const speed = Math.min(Math.abs(step) * 40, 1);
     const rollBounce = speed > 0.15 ? Math.abs(Math.sin(s.spin * 2)) * 0.02 : 0;
 
-    // --- dizzy (EASTER_EGGS.md Â§2): edge-detect eggMotion.dizzyT going
-    // active, kick off the one hiccup-hop right at the start. ---
-    const dizzyActive = eggMotion.dizzyT >= 0;
-    if (dizzyActive && !s.dizzyWas) {
-      s.dizzyPhase = 0;
-      startHop(s);
-    }
-    s.dizzyWas = dizzyActive;
-    if (dizzyActive) s.dizzyPhase += dt;
-    // Body sway (Â±8Â° at 1.2Hz) + a lighter off-phase yaw stagger standing in
-    // for the "stagger step" (Kolobok has no legs to actually step with).
-    const dizzySway = dizzyActive ? Math.sin(s.dizzyPhase * 1.2 * Math.PI * 2) * ((8 * Math.PI) / 180) : 0;
-    const dizzyStagger = dizzyActive ? Math.sin(s.dizzyPhase * 1.2 * Math.PI * 2 + Math.PI / 2) * ((4 * Math.PI) / 180) : 0;
-    // Last 20% of the 2s window: a quick decaying head shake before "back to
-    // normal" (EASTER_EGGS.md Â§2 dizzy).
-    let dizzyHeadShake = 0;
-    if (dizzyActive && eggMotion.dizzyT > 0.8) {
-      const shakeT = (eggMotion.dizzyT - 0.8) / 0.2;
-      dizzyHeadShake = Math.sin(shakeT * Math.PI * 3) * (1 - shakeT) * ((12 * Math.PI) / 180);
-    }
-
     // --- Blink state machine ---
     if (s.blinkTimeline) {
       s.blinkTimeline.tick(dt);
-    } else if (!s.singing && !dizzyActive) {
-      // Suppressed while singing (ANIMATION_SPEC Â§2) or dizzy (EASTER_EGGS.md Â§2).
+    } else if (!s.singing) {
+      // Suppressed while singing (ANIMATION_SPEC Â§2).
       s.nextBlinkIn -= dt;
       if (s.nextBlinkIn <= 0) startBlink(s);
     }
@@ -448,8 +420,8 @@ export function Kolobok() {
       // Face along the tangent of the circle, plus the defiant 360 spin
       // (ANIMATION_SPEC Â§4/Â§5) riding on top during its own beat window,
       // plus the story's windowsill-wobble/snout-balance body tilt.
-      root.current.rotation.y = s.angle + Math.PI / 2 + s.spinAngle + dizzyStagger;
-      root.current.rotation.z = storyMotion.bodyTilt + dizzySway;
+      root.current.rotation.y = s.angle + Math.PI / 2 + s.spinAngle;
+      root.current.rotation.z = storyMotion.bodyTilt;
       // Birth pop (0 -> 1) / finale gulp (1 -> 0). setScalar would fight
       // the dough's own squash scaling below, so scale the root instead.
       root.current.scale.setScalar(storyMotion.scale);
@@ -498,24 +470,7 @@ export function Kolobok() {
       // storyMotion.faceYaw adds the birth chapter's look-around. The
       // specular highlight lives under this group too, so it turns WITH the
       // face during the look-around instead of sliding off it.
-      face.current.rotation.y = -Math.PI / 2 + storyMotion.faceYaw + dizzyHeadShake;
-    }
-
-    // dizzy: pupils orbit their eye whites in circles (0.03 radius at 3Hz),
-    // both sides sharing the same phase (each already sits in its own
-    // side-mirrored eye group, so an identical local Y/Z offset reads
-    // correctly on both without a sign flip).
-    const pupilOrbitBase = 0.06 * FACE_SCALE;
-    const pupilOrbitR = 0.03 * FACE_SCALE;
-    if (dizzyActive) {
-      const orbitAngle = s.dizzyPhase * 3 * Math.PI * 2;
-      const oy = Math.sin(orbitAngle) * pupilOrbitR;
-      const oz = Math.cos(orbitAngle) * pupilOrbitR;
-      if (leftPupil.current) leftPupil.current.position.set(pupilOrbitBase, oy, oz);
-      if (rightPupil.current) rightPupil.current.position.set(pupilOrbitBase, oy, oz);
-    } else {
-      if (leftPupil.current) leftPupil.current.position.set(pupilOrbitBase, 0, 0);
-      if (rightPupil.current) rightPupil.current.position.set(pupilOrbitBase, 0, 0);
+      face.current.rotation.y = -Math.PI / 2 + storyMotion.faceYaw;
     }
 
     // Eyelids: 0 open .. 1 closed. Live feedback: the old rotation-based
@@ -632,7 +587,7 @@ export function Kolobok() {
             <mesh material={materials.eyeWhite}>
               <sphereGeometry args={[0.11 * FACE_SCALE, 12, 12]} />
             </mesh>
-            <mesh ref={side === 1 ? leftPupil : rightPupil} position={[0.06 * FACE_SCALE, 0, 0]} material={materials.eyePupil}>
+            <mesh position={[0.06 * FACE_SCALE, 0, 0]} material={materials.eyePupil}>
               <sphereGeometry args={[0.055 * FACE_SCALE, 10, 10]} />
             </mesh>
             {/* Eyelid: hemisphere big enough to fully cover the eye white

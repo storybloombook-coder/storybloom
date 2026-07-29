@@ -30,9 +30,6 @@ export const eggMotion = {
   hedgehogT: -1,        // -1 hidden; 0..1 progress across the S-path
   hedgehogMushroomIdx: -1, // which mushroom it's carrying/took, -1 = none
 
-  // dizzy (EASTER_EGGS.md §2 dizzy) -- read directly by Kolobok.jsx
-  dizzyT: -1, // -1 inactive; 0..1 progress through the 2s dizzy sequence
-
   // moon-wink (EASTER_EGGS.md §2 moon-wink)
   moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
 
@@ -155,21 +152,6 @@ function runHedgehog(ctx, mushroomIdx) {
   ]);
 }
 
-// ---------------------------------------------------------------- dizzy
-
-/** 3 camera revolutions within 5s (EASTER_EGGS.md §2 dizzy) -- a `gesture`
- *  trigger, not a tap, so it's driven from tickDizzyGesture() below rather
- *  than eggManager.tap(). Kolobok.jsx reads eggMotion.dizzyT directly (0..1
- *  progress through the 2s reaction) and suppresses its own blink while
- *  dizzyT >= 0, matching the doc's "suppresses his blink during." */
-function runDizzy(ctx) {
-  return createTimeline([
-    { at: 0, dur: 2000, update: (t) => { eggMotion.dizzyT = t; } },
-    { at: 2000, call: () => { eggMotion.dizzyT = -1; } },
-    { at: 2100, call: () => {} },
-  ]);
-}
-
 // ---------------------------------------------------------------- moon-wink
 
 function runMoonWink(ctx) {
@@ -227,12 +209,11 @@ function attemptFire(cooldownKey, cooldownMs, runFn, discoveryId = cooldownKey) 
   return true;
 }
 
-// Per-instance tap logs, keyed by the CALLER's own id space -- separate
-// from REGISTRY's `tapLog` (flat target strings like 'grandpa'/'fox') since
-// these track many dynamic instances (one entry per spruce/mushroom) rather
-// than a handful of fixed targets.
+// Per-instance tap log, keyed by the CALLER's own id space -- separate from
+// REGISTRY's `tapLog` (flat target strings like 'grandpa'/'fox') since this
+// tracks many dynamic instances (one entry per spruce) rather than a
+// handful of fixed targets.
 const instanceTapLog = {};  // key (e.g. 'owl-3') -> [timestamps]
-let mushroomTapLog = [];    // [{ idx, t }] -- shared across ALL mushrooms, for distinct-count
 
 /** Triple-tap-ONE-spruce (owl). `treeIdx` is the logical tree index (0..13,
  *  i.e. `e.instanceId % spruce.length` -- see Vegetation.jsx's onTreeGrab
@@ -249,49 +230,10 @@ function tapSpruce(treeIdx) {
   return attemptFire(key, 10000, (ctx) => runOwl(ctx, treeIdx), 'owl');
 }
 
-/** 3 DISTINCT mushrooms within 4s (hedgehog) -- unlike tapSpruce, this
- *  counts how many different mushroom ids were touched, not how many times
- *  ONE was. `mushroomIdx` is whichever mushroom this particular tap landed
- *  on; if it's the tap that completes the distinct-3 set, IT is the one the
- *  hedgehog carries off (matches the doc: "the third TAPPED mushroom"). */
+/** Tap any mushroom (hedgehog) -- a single tap fires it immediately, that
+ *  mushroom is the one it carries off. */
 function tapMushroom(mushroomIdx) {
-  if (suppressed() || active) return false;
-  const t = now();
-  mushroomTapLog = mushroomTapLog.filter((e) => t - e.t <= 4000);
-  mushroomTapLog.push({ idx: mushroomIdx, t });
-  const distinct = new Set(mushroomTapLog.map((e) => e.idx));
-  if (distinct.size < 3) return false;
-  mushroomTapLog = [];
   return attemptFire('hedgehog', 45000, (ctx) => runHedgehog(ctx, mushroomIdx), 'hedgehog');
-}
-
-// dizzy: continuous gesture, not tap-based -- accumulate |Δorbit.angle|
-// over a rolling 5s window, ticked every frame from eggManager.tick below.
-let dizzyAccumRad = 0;
-let dizzyWindowStartedAt = 0;
-let dizzyLastAngle = null;
-const DIZZY_REVOLUTIONS = 3;
-const DIZZY_WINDOW_MS = 5000;
-
-function tickDizzyGesture() {
-  const t = now();
-  const angle = orbit.angle;
-  if (dizzyLastAngle === null) {
-    dizzyLastAngle = angle;
-    dizzyWindowStartedAt = t;
-    return;
-  }
-  const delta = Math.abs(angle - dizzyLastAngle);
-  dizzyLastAngle = angle;
-  if (t - dizzyWindowStartedAt > DIZZY_WINDOW_MS) {
-    dizzyAccumRad = 0;
-    dizzyWindowStartedAt = t;
-  }
-  dizzyAccumRad += delta;
-  if (dizzyAccumRad >= Math.PI * 2 * DIZZY_REVOLUTIONS) {
-    dizzyAccumRad = 0;
-    attemptFire('dizzy', 20000, runDizzy, 'dizzy');
-  }
 }
 
 export const eggManager = {
@@ -339,7 +281,6 @@ export const eggManager = {
   },
 
   tick(dt) {
-    tickDizzyGesture();
     if (active) {
       active.tick(dt);
       if (active.done) active = null;

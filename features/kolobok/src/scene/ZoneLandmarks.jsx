@@ -30,18 +30,25 @@ const AMBIENCE = {
  *  the opening, not out of thin air above it or from inside a solid pipe. */
 function IzbaChimney({ material }) {
   return (
-    <mesh
-      position={[0.55, 1.8, 0.15]}
-      material={material}
-      onClick={(e) => {
-        // smoke-rings (EASTER_EGGS.md §2): stopPropagation so this doesn't
-        // also fire the izba Landmark's own onTap encounter below it.
-        e.stopPropagation();
-        eggManager.tapChimney();
-      }}
-    >
-      <cylinderGeometry args={[0.055, 0.065, 0.3, 8]} />
-    </mesh>
+    <group position={[0.55, 1.8, 0.15]}>
+      <mesh material={material}>
+        <cylinderGeometry args={[0.055, 0.065, 0.3, 8]} />
+      </mesh>
+      {/* Generous invisible hitbox -- live feedback: the bare pipe (radius
+          ~0.06) was too small to reliably land a tap on. */}
+      <mesh
+        visible={false}
+        onClick={(e) => {
+          // smoke-rings (EASTER_EGGS.md §2): stopPropagation so this doesn't
+          // also fire the izba Landmark's own onTap encounter below it.
+          e.stopPropagation();
+          eggManager.tapChimney();
+        }}
+      >
+        <sphereGeometry args={[0.3, 8, 8]} />
+        <meshBasicMaterial transparent opacity={0} />
+      </mesh>
+    </group>
   );
 }
 

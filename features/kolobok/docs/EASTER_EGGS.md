@@ -47,18 +47,10 @@ back at 2.8 s. At night its eyes are emissive `#ffd27a` and it hoots — no
 audio, so the "hoot" is two body-scale pulses. Cooldown 10 s per tree.
 
 ### `hedgehog` — mushroom picker
-Trigger: tap 3 DISTINCT mushrooms within 4 s. A hedgehog (ART_SPEC §14)
-trundles across the bear arc along a gentle S over 6 s, carrying one
-mushroom on its spines; the third tapped mushroom pops out of the ground
-scale 1→0 as it "takes" it (respawns scale 0→1 after 20 s). Waddle: body
-roll ±6° at 3 Hz. Cooldown 45 s.
-
-### `dizzy` — spin the world too fast
-Trigger: 3 full camera revolutions within 5 s (track cumulative
-|Δorbit.angle|). Kolobok goes dizzy for 2 s: pupils orbit their eye whites
-in circles (0.03 radius at 3 Hz), body sways ±8° at 1.2 Hz with a stagger
-step, one hiccup-hop, then a head shake and back to normal. Suppresses his
-blink during. Cooldown 20 s.
+Trigger: tap any mushroom. A hedgehog (ART_SPEC §14) trundles across the
+bear arc along a gentle S over 6 s, carrying that mushroom on its spines;
+the tapped mushroom pops out of the ground scale 1→0 as it "takes" it
+(respawns scale 0→1 after 20 s). Waddle: body roll ±6° at 3 Hz. Cooldown 45 s.
 
 ### `moon-wink` — tap the moon (night only)
 The moon gets a generous hitbox; on tap, one crater scales to a closed-eye

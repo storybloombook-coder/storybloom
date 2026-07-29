@@ -39,7 +39,11 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   );
 
   const ringRef = useRef();
-  const ringTexture = useMemo(() => makeRingAlphaTexture(16), []);
+  // Live feedback: the default bandWidth (0.35, almost the whole disc) made
+  // this read as a soft blob indistinguishable from normal smoke -- a
+  // narrower band gives a genuinely see-through hole with a crisp bright
+  // ring around it.
+  const ringTexture = useMemo(() => makeRingAlphaTexture(24, 0.6, 0.15), []);
   const ringGeometry = useMemo(() => {
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(new Float32Array(RING_COUNT * 3), 3));
@@ -216,7 +220,9 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.55} depthWrite={false} />
       </points>
       <points ref={ringRef} geometry={ringGeometry}>
-        <pointsMaterial map={ringTexture} color="#c8c4bc" size={0.36} transparent opacity={0.6} depthWrite={false} />
+        {/* Clearly bigger than the normal smoke puffs (size=0.18) -- ART_SPEC
+            calls for "2x size", pushed further so it reads unmistakably. */}
+        <pointsMaterial map={ringTexture} color="#e8e4da" size={0.55} transparent opacity={0.85} depthWrite={false} />
       </points>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />

@@ -1,6 +1,6 @@
 import { Link, useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle, useColorScheme } from 'react-native';
+import { StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { BlurView } from 'expo-blur';
@@ -8,21 +8,6 @@ import GlassGlare from '../components/GlassGlare';
 import TactileButton from '../components/TactileButton';
 import { t, useLocaleStore } from '../lib/i18n';
 import { useDeviceTilt } from '../lib/useDeviceTilt';
-
-// TEMPORARY: the dev-client APK currently installed for on-device testing
-// predates expo-blur being added, so it has no native ExpoBlurView linked --
-// rendering one crashes to the dev-client's own blank error screen. Flip
-// this back to true (and delete GlassPane, using BlurView directly again)
-// once a rebuilt dev-client/preview is available.
-const USE_BLUR = false;
-
-/** Swaps between the real frosted-glass BlurView and a flat semi-transparent
- *  tint with the exact same footprint, so every call site below doesn't
- *  need its own if/else -- see USE_BLUR above. */
-function GlassPane({ tint, style }: { tint: 'light' | 'dark'; style: StyleProp<ViewStyle> }) {
-  if (USE_BLUR) return <BlurView intensity={40} tint={tint} style={style} />;
-  return <View style={[style, { backgroundColor: tint === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)' }]} />;
-}
 
 // Looping background: a short (10s, already 2x slow-motion), cropped,
 // blurred, and darkened capture of the 3D scene's own opening establishing
@@ -75,21 +60,21 @@ export default function HomeScreen() {
         <View style={styles.menu}>
           <Link href="/add-book" asChild>
             <TactileButton style={styles.button}>
-              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.addBook', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/create-story" asChild>
             <TactileButton style={styles.button}>
-              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.createStory', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
             <TactileButton style={styles.button}>
-              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.myLibrary', locale)}</Text>
             </TactileButton>
@@ -100,7 +85,7 @@ export default function HomeScreen() {
       <View style={styles.cornerButtonWrap}>
         <Link href="/kolobok-preview" asChild>
           <TactileButton style={styles.cornerButton}>
-            <GlassPane tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+            <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
             <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
             <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>3D</Text>
           </TactileButton>
@@ -118,7 +103,7 @@ export default function HomeScreen() {
           onPress={() => setLocale(locale === 'ru' ? 'en' : 'ru')}
           style={styles.cornerButton}
         >
-          <GlassPane tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+          <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
           <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
           <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>
             {locale === 'ru' ? 'EN' : 'RU'}

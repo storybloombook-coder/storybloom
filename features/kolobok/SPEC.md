@@ -56,8 +56,8 @@ The greybox in `src/` is the baseline and its architecture contract is final:
 6. **Localization** — every user-visible string in EN and RU per
    docs/STRINGS.md.
 7. **Easter eggs** — the hidden-interaction registry and full egg set per
-   docs/EASTER_EGGS.md (Grandpa fishing, owl, hedgehog, dizzy Kolobok,
-   moon wink, cloud drizzle, smoke rings).
+   docs/EASTER_EGGS.md (Grandpa fishing, owl, hedgehog, moon wink, cloud
+   drizzle, smoke rings).
 8. **Depth & life polish** — fake shadows, layered fog and mist, aerial
    perspective, global wind, reactive grass, ambient micro-motion per
    docs/POLISH_SPEC.md.

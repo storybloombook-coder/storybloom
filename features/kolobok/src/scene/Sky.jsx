@@ -75,7 +75,11 @@ export function Sky() {
     return new Array(CLOUD_MAX).fill(0).map(() => ({
       angle: rng() * Math.PI * 2,
       radius: 16 + rng() * 4,
-      height: 9 + rng() * 3,
+      // Live feedback: clouds at 9-12 sat above the camera's normal resting
+      // view (CAMERA_HEIGHT ~6.5, lookAtY ~1.1-1.4 -- a level-to-downward
+      // gaze), so they were invisible without a deliberate look-up drag.
+      // Lowered to sit around eye height instead, comfortably in frame.
+      height: 6 + rng() * 2,
       speed: 0.004 + rng() * 0.005,
       bobPhase: rng() * Math.PI * 2,
       puffs: new Array(3).fill(0).map((_, i) => ({
