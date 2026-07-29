@@ -221,8 +221,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       </points>
       <points ref={ringRef} geometry={ringGeometry}>
         {/* Clearly bigger than the normal smoke puffs (size=0.18) -- ART_SPEC
-            calls for "2x size", pushed further so it reads unmistakably. */}
-        <pointsMaterial map={ringTexture} color="#e8e4da" size={0.55} transparent opacity={0.85} depthWrite={false} />
+            calls for "2x size", pushed further so it reads unmistakably. A
+            darker soot gray (not near-white) so the ring contrasts against
+            the bright sky instead of washing out into it. */}
+        <pointsMaterial map={ringTexture} color="#7a756c" size={0.6} transparent opacity={0.95} depthWrite={false} />
       </points>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />

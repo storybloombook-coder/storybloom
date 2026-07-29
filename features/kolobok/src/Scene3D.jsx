@@ -182,6 +182,20 @@ export function Scene3D({ onNavigate, focused = true }) {
     setCameraFollow(orbit.cameraFollow);
   };
 
+  // Live feedback: on the 2D->3D fade, the Canvas visibly "resized smaller
+  // twice then stretched" -- expo-gl creates its GL surface at a default
+  // size the instant it mounts (mid-transition, before layout settles) then
+  // corrects in a couple of steps. Fix: measure THIS container once via
+  // onLayout (the real post-layout box, NOT useWindowDimensions -- that
+  // over-measured and split the layout in an earlier attempt) and don't
+  // mount the Canvas until we can hand it that exact pixel size, so the
+  // surface is born full-size and only ever fades in.
+  const [canvasSize, setCanvasSize] = useState(null);
+  const onRootLayout = (e) => {
+    const { width, height } = e.nativeEvent.layout;
+    setCanvasSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+  };
+
   const onMainMenu = () => requestNavigation('/');
   const onToggleLocale = () => setLocale(locale === 'ru' ? 'en' : 'ru');
 
@@ -190,17 +204,21 @@ export function Scene3D({ onNavigate, focused = true }) {
   const bubbleText = narration ?? encounter?.line;
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} onLayout={onRootLayout}>
       <GestureDetector gesture={pan}>
-        <Canvas
-          style={StyleSheet.absoluteFill}
-          dpr={2}
-          gl={{ antialias: true }}
-          frameloop={frameloop}
-          camera={{ fov: 45, near: 0.5, far: 60 }}
-        >
-          <KolobokScene />
-        </Canvas>
+        <View style={StyleSheet.absoluteFill} collapsable={false}>
+          {canvasSize ? (
+            <Canvas
+              style={{ width: canvasSize.width, height: canvasSize.height }}
+              dpr={2}
+              gl={{ antialias: true }}
+              frameloop={frameloop}
+              camera={{ fov: 45, near: 0.5, far: 60 }}
+            >
+              <KolobokScene />
+            </Canvas>
+          ) : null}
+        </View>
       </GestureDetector>
 
       {/* UI overlay: real RN views, screen-reader friendly */}

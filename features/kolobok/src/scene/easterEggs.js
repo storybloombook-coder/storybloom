@@ -47,7 +47,15 @@ export const eggs = { forceCatch: null };
 const now = () => Date.now();
 
 function suppressed() {
-  return story.mode === 'playing' || !!useSceneStore.getState().encounter;
+  // User feedback: "eastereggs should be available during story mode." So
+  // the autoplaying tale (story.mode === 'playing') no longer blocks the
+  // ambient discovery eggs -- only a USER-initiated encounter does (an
+  // animal dialogue the user tapped into). A story-driven encounter
+  // (encounter.story) is part of the tale and must NOT suppress, matching
+  // the same "story visits don't count as a real encounter" logic
+  // ZoneLandmarks.jsx already uses.
+  const encounter = useSceneStore.getState().encounter;
+  return !!encounter && !encounter.story;
 }
 
 function eggCtx() {

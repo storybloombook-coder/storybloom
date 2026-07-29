@@ -37,32 +37,57 @@ const WILLOW_SWAY_AMPLITUDE = rad(4);
 const RECAST_INTERVAL = 30;
 const RIPPLE_COUNT = 3;
 
-// Live feedback: the rod's rest angle read as too steep -- "a slight
-// upward angle relative to the horizontal" instead (was rad(-40), ~50deg
-// above horizontal since the cylinder's own rest axis is vertical).
-const ROD_REST_ANGLE = rad(-75); // ~15deg above horizontal at rest
+// Live feedback: the rod was pointing BACKWARD over Grandpa (rad(-75)
+// rotates the cylinder's +Y rest axis to (0, cos, -sin) -> the -Z/back
+// side), which read as "arms oriented the opposite direction". Positive
+// rotation.x tilts it toward +Z (forward, over the water); rad(75) leaves
+// the rod 15deg above horizontal -- the "slight upward angle" asked for.
+const ROD_REST_ANGLE = rad(75);
+const ROD_LENGTH = 0.7; // matches the rod cylinder's own length below
 
-// Live feedback: "grandpa doesn't have any arms" -- GRANDPA_GRIP is the
-// exact point the rod group already pivots from (its own position, below),
-// so it never moves even as the rod sweeps/pitches -- both arms below
-// reach to this same fixed point, matching a real two-handed grip.
+// GRANDPA_GRIP is the exact point the rod group pivots from (its own
+// position, below) -- the rod's REAR, where both hands hold it -- so it
+// never moves even as the rod sweeps/pitches. Both arms reach here.
 const GRANDPA_GRIP = [0.14, 0.45, 0.12];
-/** Static kaftan-sleeved arm, baked into the merged body mesh: a capsule
- *  spanning shoulder -> GRANDPA_GRIP, oriented via a scratch quaternion
- *  (CapsuleGeometry is authored along +Y; setFromUnitVectors finds the
- *  rotation from that rest axis to the actual shoulder->grip direction). */
-function armPart(shoulder, color) {
-  const start = new Vector3(...shoulder);
-  const end = new Vector3(...GRANDPA_GRIP);
-  const mid = start.clone().lerp(end, 0.5);
-  const dir = end.clone().sub(start);
+
+// The rod's FRONT tip at rest = grip + the rod's own length rotated by the
+// rest angle. The fishing line hangs from here down to the float.
+const ROD_TIP_REST = new Vector3(0, ROD_LENGTH, 0)
+  .applyAxisAngle(new Vector3(1, 0, 0), ROD_REST_ANGLE)
+  .add(new Vector3(...GRANDPA_GRIP));
+
+// The float (floatRef below) lives in the POND group's space, but the line
+// is drawn inside Grandpa's own (translated + rad(35)-yawed) group -- so
+// convert the float's rest position into Grandpa-local space once, via the
+// inverse of that group transform, and point the line at it.
+const FLOAT_POND_POS = new Vector3(0.35, 0.03, 0.45); // must match floatRef's JSX position
+const GRANDPA_GROUP_INV = new Matrix4()
+  .compose(
+    new Vector3(-1.15, 0.22, -0.6),
+    new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), rad(35)),
+    new Vector3(1, 1, 1),
+  )
+  .invert();
+const FLOAT_GRANDPA_LOCAL = FLOAT_POND_POS.clone().applyMatrix4(GRANDPA_GROUP_INV);
+
+/** A cylinder/capsule spanning two points, baked into a merged mesh:
+ *  oriented via a scratch quaternion (the geometry is authored along +Y;
+ *  setFromUnitVectors finds the rotation from that rest axis to the actual
+ *  start->end direction). Used for Grandpa's arms and his fishing line. */
+function segmentPart(start, end, radius, color, capsule = true) {
+  const a = start instanceof Vector3 ? start : new Vector3(...start);
+  const b = end instanceof Vector3 ? end : new Vector3(...end);
+  const mid = a.clone().lerp(b, 0.5);
+  const dir = b.clone().sub(a);
   const length = dir.length();
   dir.normalize();
   const quat = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), dir);
   const euler = new Euler().setFromQuaternion(quat);
-  const ARM_RADIUS = 0.045;
+  const geometry = capsule
+    ? new CapsuleGeometry(radius, Math.max(0.001, length - radius * 2), 3, 6)
+    : new CylinderGeometry(radius, radius, Math.max(0.001, length), 5);
   return {
-    geometry: new CapsuleGeometry(ARM_RADIUS, Math.max(0.001, length - ARM_RADIUS * 2), 3, 6),
+    geometry,
     color,
     position: [mid.x, mid.y, mid.z],
     rotation: [euler.x, euler.y, euler.z],
@@ -341,8 +366,10 @@ export function PondAndGrandpa() {
     { geometry: new CapsuleGeometry(0.17, 0.24, 3, 8), color: '#8a7862', position: [0, 0.42, 0] }, // kaftan body
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#4a4038', position: [0.08, 0.06, 0.12] },  // boots
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#4a4038', position: [-0.08, 0.06, 0.12] },
-    armPart([-0.14, 0.62, 0.04], '#8a7862'), // left arm, reaching to the grip
-    armPart([0.14, 0.62, 0.04], '#8a7862'),  // right arm, reaching to the grip
+    segmentPart([-0.14, 0.62, 0.04], GRANDPA_GRIP, 0.045, '#8a7862'), // left arm -> grip
+    segmentPart([0.14, 0.62, 0.04], GRANDPA_GRIP, 0.045, '#8a7862'),  // right arm -> grip
+    // Fishing line: from the rod's front tip out to the float on the water.
+    segmentPart(ROD_TIP_REST, FLOAT_GRANDPA_LOCAL, 0.004, '#e8e4da', false),
   ]), []);
 
   const headGeometry = useMemo(() => mergeColoredParts([
@@ -352,10 +379,10 @@ export function PondAndGrandpa() {
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#8a6444', position: [0, 0.15, 0] },
   ]), []);
 
+  // Rod only (the line now lives in grandpaGeometry, drawn straight from the
+  // rod tip to the float rather than dangling partway along the rod).
   const rodGeometry = useMemo(() => mergeColoredParts([
-    { geometry: new CylinderGeometry(0.008, 0.012, 0.7, 5), color: '#6b4c33', position: [0, 0.35, 0] },
-    // Line: thin cylinder from tip angled down toward the float area.
-    { geometry: new CylinderGeometry(0.003, 0.003, 0.55, 3), color: '#e8e4da', position: [0, 0.44, 0.26], rotation: [rad(65), 0, 0] },
+    { geometry: new CylinderGeometry(0.008, 0.012, ROD_LENGTH, 5), color: '#6b4c33', position: [0, ROD_LENGTH / 2, 0] },
   ]), []);
 
   const fishGeometry = useMemo(() => mergeColoredParts([
