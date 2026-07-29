@@ -226,6 +226,33 @@ export function makeRadialAlphaTexture(size = 32) {
   return texture;
 }
 
+/** Ring-shaped alpha sprite (EASTER_EGGS.md §2 smoke-rings: "ring-shaped
+ *  16x16 DataTexture sprite") -- transparent center AND transparent rim,
+ *  opaque only in a band around `ringRadius` (fraction of the half-size),
+ *  soft-edged via the same linear falloff makeRadialAlphaTexture uses, just
+ *  applied on BOTH sides of the band instead of one solid disc. */
+export function makeRingAlphaTexture(size = 16, ringRadius = 0.6, bandWidth = 0.35) {
+  const data = new Uint8Array(size * size * 4);
+  const c = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.sqrt((x - c) ** 2 + (y - c) ** 2) / c;
+      const distFromRing = Math.abs(d - ringRadius);
+      const a = clamp255((1 - Math.min(1, distFromRing / bandWidth)) * 255);
+      const o = (y * size + x) * 4;
+      data[o] = 255;
+      data[o + 1] = 255;
+      data[o + 2] = 255;
+      data[o + 3] = a;
+    }
+  }
+  const texture = new DataTexture(data, size, size, RGBAFormat, UnsignedByteType);
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 /** Kolobok's dough (ART_SPEC §2): stays `base` through the equator and
  *  bottom, only browning toward `crust` on the top pole (a real loaf browns
  *  on top, not underneath) -- NOT a plain top-to-bottom lerp, which is why

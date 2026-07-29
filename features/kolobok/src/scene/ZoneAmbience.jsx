@@ -7,6 +7,8 @@ import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
+import { eggMotion } from './easterEggs';
+import { makeRingAlphaTexture } from './textures/proceduralTextures';
 
 const dummy = new Object3D();
 
@@ -14,6 +16,13 @@ const dummy = new Object3D();
 // ART_SPEC §11 + ANIMATION_SPEC §9. Chimney smoke is always-on (a Points
 // pool); grandma's silhouette + the ridge bird are izba's "active" extras.
 const SMOKE_COUNT = 24;
+
+// smoke-rings (EASTER_EGGS.md §2): a separate tiny pool of ring-sprite
+// puffs, "stolen" from the next 3 normal-smoke spawn (wrap) events after a
+// chimney tap -- same fixed-pool-with-per-particle-t idiom as the smoke
+// itself, just rendered via a ring-shaped alpha texture instead of the
+// flat round one, at 2x size, per the doc.
+const RING_COUNT = 3;
 
 export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
   const smokeRef = useRef();
@@ -28,6 +37,20 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   const smokeState = useRef(
     new Array(SMOKE_COUNT).fill(0).map(() => ({ t: Math.random(), drift: Math.random() * Math.PI * 2 })),
   );
+
+  const ringRef = useRef();
+  const ringTexture = useMemo(() => makeRingAlphaTexture(16), []);
+  const ringGeometry = useMemo(() => {
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(RING_COUNT * 3), 3));
+    return geo;
+  }, []);
+  // t >= 1 = parked/inactive slot; ringSlot round-robins which one the next
+  // stolen wrap-event lands in.
+  const ringState = useRef({
+    slot: 0,
+    puffs: new Array(RING_COUNT).fill(0).map(() => ({ t: 1, drift: 0 })),
+  });
 
   const grandmaGeometry = useMemo(() => mergeColoredParts([
     { geometry: new SphereGeometry(0.09, 8, 6), color: '#3a3229', position: [0, 0.62, 0] },
@@ -61,7 +84,20 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       const positions = smokeGeometry.attributes.position;
       smokeState.current.forEach((p, i) => {
         p.t += dt * rate * 0.4;
-        if (p.t > 1) { p.t = 0; p.drift = Math.random() * Math.PI * 2; }
+        if (p.t > 1) {
+          p.t = 0;
+          p.drift = Math.random() * Math.PI * 2;
+          // smoke-rings: this wrap becomes a ring-sprite puff instead of a
+          // normal one, "stealing" one of the next 3 spawns after a tap.
+          if (eggMotion.smokeRingsRemaining > 0) {
+            eggMotion.smokeRingsRemaining -= 1;
+            const rs = ringState.current;
+            const puff = rs.puffs[rs.slot % RING_COUNT];
+            rs.slot += 1;
+            puff.t = 0;
+            puff.drift = Math.random() * Math.PI * 2;
+          }
+        }
         const rise = p.t * 1.5;
         const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
         // Live feedback: "the wind should gently rustle... the smoke" --
@@ -80,6 +116,40 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       });
       positions.needsUpdate = true;
       smokeGeometry.computeBoundingSphere();
+    }
+
+    // smoke-rings: same rise/sway/wind shape as the normal puffs above, at
+    // 2x rise speed's slower cousin -- t 0..1 once, then the slot parks
+    // (position pinned at the chimney, texture faded via its own opacity)
+    // until the next tap steals it again.
+    if (ringRef.current) {
+      const ringPositions = ringGeometry.attributes.position;
+      ringState.current.puffs.forEach((p, i) => {
+        if (p.t >= 1) {
+          // Parked well below the ground plane -- depth-occluded there, so
+          // a finished/never-triggered slot simply isn't visible, without
+          // needing per-point alpha (PointsMaterial has none).
+          ringPositions.setXYZ(i, chimneyPos[0], -5, chimneyPos[2]);
+          return;
+        }
+        p.t += dt * 0.3;
+        const rise = Math.min(p.t, 1) * 1.5;
+        // A slow orbiting drift stands in for "spin" -- a true ring alpha
+        // texture is radially symmetric, so an actual per-sprite roll
+        // would be invisible anyway; this sells the same lazy-turning read.
+        const orbit = p.t * Math.PI * 1.4 + p.drift;
+        const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15 + Math.cos(orbit) * 0.05;
+        const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
+        const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
+        ringPositions.setXYZ(
+          i,
+          chimneyPos[0] + sway + windDriftX,
+          chimneyPos[1] + rise,
+          chimneyPos[2] + sway * 0.6 + windDriftZ,
+        );
+      });
+      ringPositions.needsUpdate = true;
+      ringGeometry.computeBoundingSphere();
     }
 
     // --- Birth chapter: kneading/shaping motion takes over the same
@@ -144,6 +214,9 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     <group>
       <points ref={smokeRef} geometry={smokeGeometry}>
         <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.55} depthWrite={false} />
+      </points>
+      <points ref={ringRef} geometry={ringGeometry}>
+        <pointsMaterial map={ringTexture} color="#c8c4bc" size={0.36} transparent opacity={0.6} depthWrite={false} />
       </points>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />

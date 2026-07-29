@@ -18,6 +18,14 @@ import { t } from './config/strings';
 
 const SWIPE_SENSITIVITY = 0.005;   // px -> radians
 const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
+// Matches easterEggs.js's REGISTRY entries + the per-instance eggs
+// (owl/hedgehog/moon-wink/cloud-drizzle/smoke-rings) exactly -- see
+// EASTER_EGGS.md §2 for the full list. Kept as a constant here rather than
+// derived from the registry itself since REGISTRY only lists the two
+// tap-count entries (grandpa/fox); the rest fire through their own
+// dedicated eggManager methods (tapSpruce/tapMushroom/tapMoon/tapCloud/
+// tapChimney) and aren't represented as REGISTRY rows.
+const TOTAL_EGGS = 8;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
@@ -46,6 +54,7 @@ export function Scene3D({ onNavigate, focused = true }) {
   const setLocale = useSceneStore((s) => s.setLocale);
   const requestNavigation = useSceneStore((s) => s.requestNavigation);
   const consumeNavigation = useSceneStore((s) => s.consumeNavigation);
+  const discoveredEggCount = useSceneStore((s) => s.discoveredEggs.length);
   // One accelerometer subscription shared by every button's own GlassGlare
   // below -- see useDeviceTilt's own comment for why.
   const { tiltX, tiltY } = useDeviceTilt();
@@ -200,6 +209,15 @@ export function Scene3D({ onNavigate, focused = true }) {
         <View style={styles.zoneCard} pointerEvents="none">
           <Text style={styles.zoneTitle}>{active ? t(`zone.${active.id}`, locale) : ''}</Text>
           <Text style={styles.zoneHint}>{t('ui.hint', locale)}</Text>
+        </View>
+
+        {/* Easter-egg discovery counter, top-right -- see TOTAL_EGGS' own
+            comment for what's counted. Deliberately unlabeled (just "N/8"):
+            EASTER_EGGS.md never specifies UI copy for this, and a bare
+            fraction reads as "there's more to find" without spelling out
+            what, which fits the hidden/discoverable spirit of the feature. */}
+        <View style={styles.eggCounterWrap} pointerEvents="none">
+          <Text style={styles.eggCounterText}>{discoveredEggCount}/{TOTAL_EGGS}</Text>
         </View>
 
         {/* Camera-control tip, bottom-center just above the nav row -- the
@@ -383,6 +401,16 @@ const styles = StyleSheet.create({
   zoneCard: { alignItems: 'center', marginTop: 64 },
   zoneTitle: { fontSize: 22, fontWeight: '600', color: '#2e2a22' },
   zoneHint: { fontSize: 13, color: '#4a463c', marginTop: 4, opacity: 0.8 },
+  eggCounterWrap: {
+    position: 'absolute',
+    top: 64,
+    right: 14,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  eggCounterText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
   // Absolutely positioned (left/bottom driven by the rAF loop above) rather
   // than laid out in the flex overlay, so it can track wherever the actual
   // speaker projects to on screen. Fixed width (matching BUBBLE_WRAP_WIDTH)

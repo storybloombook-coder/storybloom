@@ -14,6 +14,7 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { windSway, wind } from './wind';
 import { polish } from '../config/devFlags';
 import { getSharedTexture } from './BlobShadow';
+import { eggManager, eggMotion } from './easterEggs';
 
 const dummy = new Object3D();
 const tiltAxisTmp = new Vector3();
@@ -271,6 +272,26 @@ export function Vegetation() {
     }, TREE_CANOPY_R.birch, occupied);
   }, []);
   const spruce = SPRUCE_PLANTS;
+  const mushroom = useMemo(() => {
+    const rng = makeRng(40);
+    return makePlants(rng, 8, ['bear'], {
+      radiusMin: ISLAND_RADIUS * 0.45, radiusMax: ISLAND_RADIUS * 0.75, scaleMin: 0.8, scaleMax: 1.3,
+    });
+  }, []);
+
+  // hedgehog (EASTER_EGGS.md §2): refs to the mushroom instancedMeshes so
+  // whichever ONE gets "taken" can have its own matrix re-driven per frame
+  // (pop out of the ground, hide, respawn) without touching the other 7,
+  // whose static matrices (mushroomStemM/mushroomCapM below) never change.
+  // Declared here (ahead of the collision useFrame below, which reads them)
+  // rather than alongside bush/flower further down, matching birch/spruce's
+  // own placement -- referencing them from useFrame before their original,
+  // later declaration point was itself flagged by the linter.
+  const mushroomStemRef = useRef();
+  const mushroomCapRef = useRef();
+  const mushroomState = useRef({ hiddenIdx: -1, sinceMs: 0, was: -1 });
+  const mushroomStemM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.05, 0])), [mushroom]);
+  const mushroomCapM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1])), [mushroom]);
 
   // Kolobok<->tree collision bookkeeping: world XZ per tree (for distance
   // checks) and a per-tree spring state, both keyed by index into
@@ -308,6 +329,11 @@ export function Vegetation() {
     e.stopPropagation();
     const count = type === 'birch' ? birch.length : spruce.length;
     const idx = e.instanceId % count;
+    // owl (EASTER_EGGS.md Â§2): every press here is also a "tap" for the
+    // triple-tap-a-spruce trigger -- doesn't gate/skip the grab-and-bend
+    // reaction below, matching the doc's "taps still give their normal
+    // reactions" even while an egg is running.
+    if (type === 'spruce') eggManager.tapSpruce(idx);
     const bendArr = type === 'birch' ? birchBend.current : spruceBend.current;
     const worldXZArr = type === 'birch' ? birchWorldXZ : spruceWorldXZ;
     const b = bendArr[idx];
@@ -462,6 +488,51 @@ export function Vegetation() {
       spruceTouched = true;
     });
     if (spruceTouched && spruceRef.current) spruceRef.current.instanceMatrix.needsUpdate = true;
+
+    // hedgehog (EASTER_EGGS.md Â§2): edge-detect eggMotion.hedgehogMushroomIdx
+    // landing on a fresh index -- starts THIS mushroom's own pop-out (scale
+    // 1->0), 20s hidden, then respawn (scale 0->1) clock. Every other
+    // mushroom's matrix was already set once in InstancedPart's onMesh and
+    // never needs touching again.
+    const ms = mushroomState.current;
+    if (eggMotion.hedgehogMushroomIdx >= 0 && eggMotion.hedgehogMushroomIdx !== ms.was) {
+      ms.was = eggMotion.hedgehogMushroomIdx;
+      ms.hiddenIdx = eggMotion.hedgehogMushroomIdx;
+      ms.sinceMs = 0;
+    }
+    if (ms.hiddenIdx >= 0) {
+      ms.sinceMs += dt * 1000;
+      const POP_MS = 300;
+      const HIDE_MS = 20000;
+      let popScale;
+      if (ms.sinceMs < POP_MS) {
+        popScale = 1 - ms.sinceMs / POP_MS;
+      } else if (ms.sinceMs < HIDE_MS) {
+        popScale = 0;
+      } else if (ms.sinceMs < HIDE_MS + POP_MS) {
+        popScale = (ms.sinceMs - HIDE_MS) / POP_MS;
+      } else {
+        popScale = 1;
+      }
+      const idx = ms.hiddenIdx;
+      if (mushroomStemRef.current) {
+        dummy.matrix.copy(mushroomStemM[idx]);
+        dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+        dummy.scale.multiplyScalar(popScale);
+        dummy.updateMatrix();
+        mushroomStemRef.current.setMatrixAt(idx, dummy.matrix);
+        mushroomStemRef.current.instanceMatrix.needsUpdate = true;
+      }
+      if (mushroomCapRef.current) {
+        dummy.matrix.copy(mushroomCapM[idx]);
+        dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+        dummy.scale.multiplyScalar(popScale);
+        dummy.updateMatrix();
+        mushroomCapRef.current.setMatrixAt(idx, dummy.matrix);
+        mushroomCapRef.current.instanceMatrix.needsUpdate = true;
+      }
+      if (ms.sinceMs >= HIDE_MS + POP_MS) ms.hiddenIdx = -1;
+    }
   });
 
   const bush = useMemo(() => {
@@ -469,12 +540,6 @@ export function Vegetation() {
     // No home arc specified for bushes (ART_SPEC §5) -- scattered freely.
     return makePlants(rng, 10, [], {
       scatterChance: 1, radiusMin: ISLAND_RADIUS * 0.3, radiusMax: ISLAND_RADIUS * 0.9, scaleMin: 0.85, scaleMax: 1.2,
-    });
-  }, []);
-  const mushroom = useMemo(() => {
-    const rng = makeRng(40);
-    return makePlants(rng, 8, ['bear'], {
-      radiusMin: ISLAND_RADIUS * 0.45, radiusMax: ISLAND_RADIUS * 0.75, scaleMin: 0.8, scaleMax: 1.3,
     });
   }, []);
   const flower = useMemo(() => {
@@ -660,9 +725,6 @@ export function Vegetation() {
     return out;
   }, [bush]);
 
-  const mushroomStemM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.05, 0])), [mushroom]);
-  const mushroomCapM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1])), [mushroom]);
-
   const flowerStemM = useMemo(() => flower.map((p) => matrixAt(p, [0, 0.06, 0])), [flower]);
   const flowerHeadM = useMemo(() => flower.map((p) => matrixAt(p, [0, 0.13, 0])), [flower]);
   const flowerColors = useMemo(() => {
@@ -756,12 +818,24 @@ export function Vegetation() {
         <meshStandardMaterial color="#6f9b52" roughness={0.9} />
       </InstancedPart>
 
-      {/* Mushroom (bear arc): stem + speckled cap */}
-      <InstancedPart count={mushroom.length} matrices={mushroomStemM}>
+      {/* Mushroom (bear arc): stem + speckled cap. hedgehog (EASTER_EGGS.md
+          Â§2): tappable on either part -- e.instanceId is already this
+          InstancedPart's own 0..mushroom.length-1 space, no mod needed. */}
+      <InstancedPart
+        count={mushroom.length}
+        matrices={mushroomStemM}
+        onMesh={(m) => { mushroomStemRef.current = m; }}
+        onPointerDown={(e) => { e.stopPropagation(); eggManager.tapMushroom(e.instanceId); }}
+      >
         <cylinderGeometry args={[0.03, 0.03, 0.1, 6]} />
         <meshStandardMaterial color="#efeeea" roughness={0.9} />
       </InstancedPart>
-      <InstancedPart count={mushroom.length} matrices={mushroomCapM}>
+      <InstancedPart
+        count={mushroom.length}
+        matrices={mushroomCapM}
+        onMesh={(m) => { mushroomCapRef.current = m; }}
+        onPointerDown={(e) => { e.stopPropagation(); eggManager.tapMushroom(e.instanceId); }}
+      >
         <sphereGeometry args={[0.08, 8, 8]} />
         <meshStandardMaterial map={mushroomCapTexture} roughness={0.8} />
       </InstancedPart>

@@ -19,6 +19,29 @@ export const eggMotion = {
   fishKind: null,  // 'silver' | 'gold' | 'boot'
   rippleBurst: 0,  // increment -> PondAndGrandpa spawns a 3-ring ripple
   headShake: 0,    // grandpa head shake amount (boot catch)
+
+  // owl (EASTER_EGGS.md §2 owl)
+  owlTreeIdx: -1,     // which spruce (index into Vegetation's SPRUCE_PLANTS) is hosting the owl, -1 = none
+  owlPopT: 0,         // 0..1 popped-out amount (canopy -> perched)
+  owlSwivel: 0,       // radians, head yaw (±90°, the "owl-neck joke")
+  owlBlinkBurst: 0,   // increment -> Owl plays its one slow blink
+
+  // hedgehog (EASTER_EGGS.md §2 hedgehog)
+  hedgehogT: -1,        // -1 hidden; 0..1 progress across the S-path
+  hedgehogMushroomIdx: -1, // which mushroom it's carrying/took, -1 = none
+
+  // dizzy (EASTER_EGGS.md §2 dizzy) -- read directly by Kolobok.jsx
+  dizzyT: -1, // -1 inactive; 0..1 progress through the 2s dizzy sequence
+
+  // moon-wink (EASTER_EGGS.md §2 moon-wink)
+  moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
+
+  // cloud-drizzle (EASTER_EGGS.md §2 cloud-drizzle)
+  cloudDrizzleCluster: -1, // which cloud cluster index (Sky.jsx cloudState) to darken+drizzle, -1 = none
+  cloudDrizzleBurst: 0,    // increment -> Sky.jsx (re)starts that cluster's drizzle
+
+  // smoke-rings (EASTER_EGGS.md §2 smoke-rings)
+  smokeRingsRemaining: 0, // next N puffs spawned by ZoneAmbience's IzbaAmbience are ring sprites
 };
 
 // Dev override (EASTER_EGGS.md §3): 'silver' | 'boot' | 'gold' | null.
@@ -96,14 +119,180 @@ function runFoxCatch(ctx) {
   ]);
 }
 
+// ---------------------------------------------------------------- owl
+
+/** Triple-tap-a-spruce (EASTER_EGGS.md §2 owl). Pop out, swivel twice, one
+ *  blink, duck back. Night-only emissive eyes / hoot pulses are the OWL
+ *  COMPONENT's own concern (it can read the same day/night signal Sky.jsx
+ *  uses), not modeled as extra eggMotion fields here. */
+function runOwl(ctx, treeIdx) {
+  eggMotion.owlTreeIdx = treeIdx;
+  const swivelDeg = 90 * (Math.PI / 180);
+  return createTimeline([
+    { at: 0, dur: 250, ease: 'easeOutBack', update: (t) => { eggMotion.owlPopT = t; } },
+    { at: 250, dur: 600, ease: 'easeInOutSine', update: (t) => { eggMotion.owlSwivel = Math.sin(t * Math.PI) * swivelDeg; } },
+    { at: 850, dur: 600, ease: 'easeInOutSine', update: (t) => { eggMotion.owlSwivel = -Math.sin(t * Math.PI) * swivelDeg; } },
+    { at: 1500, call: () => { eggMotion.owlSwivel = 0; eggMotion.owlBlinkBurst += 1; } },
+    { at: 2800, dur: 250, ease: 'easeOutCubic', update: (t) => { eggMotion.owlPopT = 1 - t; } },
+    { at: 3050, call: () => { eggMotion.owlPopT = 0; eggMotion.owlTreeIdx = -1; eggMotion.owlSwivel = 0; } },
+    { at: 3150, call: () => {} },
+  ]);
+}
+
+// ---------------------------------------------------------------- hedgehog
+
+/** 3 distinct mushrooms within 4s (EASTER_EGGS.md §2 hedgehog). Waddles
+ *  across over 6s carrying the third-tapped mushroom, which pops back out
+ *  of the ground (respawns) 20s later -- that respawn is handled by
+ *  whatever component owns the mushroom props (reading hedgehogMushroomIdx
+ *  + a timestamp), not this timeline, since it long outlives the 6s walk. */
+function runHedgehog(ctx, mushroomIdx) {
+  eggMotion.hedgehogMushroomIdx = mushroomIdx;
+  return createTimeline([
+    { at: 0, dur: 6000, update: (t) => { eggMotion.hedgehogT = t; } },
+    { at: 6000, call: () => { eggMotion.hedgehogT = -1; } },
+    { at: 6100, call: () => {} },
+  ]);
+}
+
+// ---------------------------------------------------------------- dizzy
+
+/** 3 camera revolutions within 5s (EASTER_EGGS.md §2 dizzy) -- a `gesture`
+ *  trigger, not a tap, so it's driven from tickDizzyGesture() below rather
+ *  than eggManager.tap(). Kolobok.jsx reads eggMotion.dizzyT directly (0..1
+ *  progress through the 2s reaction) and suppresses its own blink while
+ *  dizzyT >= 0, matching the doc's "suppresses his blink during." */
+function runDizzy(ctx) {
+  return createTimeline([
+    { at: 0, dur: 2000, update: (t) => { eggMotion.dizzyT = t; } },
+    { at: 2000, call: () => { eggMotion.dizzyT = -1; } },
+    { at: 2100, call: () => {} },
+  ]);
+}
+
+// ---------------------------------------------------------------- moon-wink
+
+function runMoonWink(ctx) {
+  return createTimeline([
+    { at: 0, call: () => { eggMotion.moonWinkBurst += 1; } },
+    { at: 400, call: () => {} },
+  ]);
+}
+
+// ---------------------------------------------------------------- cloud-drizzle
+
+function runCloudDrizzle(ctx, clusterIdx) {
+  eggMotion.cloudDrizzleCluster = clusterIdx;
+  return createTimeline([
+    { at: 0, call: () => { eggMotion.cloudDrizzleBurst += 1; } },
+    { at: 2000, call: () => { eggMotion.cloudDrizzleCluster = -1; } },
+    { at: 2100, call: () => {} },
+  ]);
+}
+
+// ---------------------------------------------------------------- smoke-rings
+
+function runSmokeRings(ctx) {
+  eggMotion.smokeRingsRemaining = 3;
+  return createTimeline([
+    { at: 0, call: () => {} },
+  ]);
+}
+
 const REGISTRY = [
   { id: 'grandpa-fishing', target: 'grandpa', count: 1, windowMs: 0, cooldownMs: 8000, run: runFishing },
   { id: 'fox-catch', target: 'fox', count: 5, windowMs: 6000, cooldownMs: 30000, run: runFoxCatch },
 ];
 
 const tapLog = {};      // target -> [timestamps]
-const lastFired = {};   // id -> timestamp
+const lastFired = {};   // cooldown key -> timestamp (REGISTRY uses egg.id; per-instance eggs use their own composite key)
 let active = null;      // running timeline
+
+/** Shared "am I actually allowed to fire, and if so do the bookkeeping"
+ *  gate -- every trigger mechanism below (plain tap-count via REGISTRY,
+ *  per-instance tap-count, distinct-tap-count, continuous gesture) ends
+ *  here. `cooldownKey` is what per-egg (or per-instance, e.g. `owl-3` for
+ *  the 4th spruce) cooldown is tracked under; `discoveryId` is what's
+ *  reported to the counter/host callback (the egg's species-level id, e.g.
+ *  `'owl'`, shared across every tree). */
+function attemptFire(cooldownKey, cooldownMs, runFn, discoveryId = cooldownKey) {
+  if (suppressed() || active) return false;
+  const t = now();
+  if (t - (lastFired[cooldownKey] ?? 0) < cooldownMs) return false;
+  lastFired[cooldownKey] = t;
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  active = runFn(eggCtx());
+  useSceneStore.getState().recordEggFound(discoveryId);
+  useSceneStore.getState().onEasterEgg?.(discoveryId);
+  return true;
+}
+
+// Per-instance tap logs, keyed by the CALLER's own id space -- separate
+// from REGISTRY's `tapLog` (flat target strings like 'grandpa'/'fox') since
+// these track many dynamic instances (one entry per spruce/mushroom) rather
+// than a handful of fixed targets.
+const instanceTapLog = {};  // key (e.g. 'owl-3') -> [timestamps]
+let mushroomTapLog = [];    // [{ idx, t }] -- shared across ALL mushrooms, for distinct-count
+
+/** Triple-tap-ONE-spruce (owl). `treeIdx` is the logical tree index (0..13,
+ *  i.e. `e.instanceId % spruce.length` -- see Vegetation.jsx's onTreeGrab
+ *  for the same recovery), so each tree gets its own independent count AND
+ *  its own independent 10s cooldown ("Cooldown 10 s per tree"). */
+function tapSpruce(treeIdx) {
+  if (suppressed() || active) return false;
+  const t = now();
+  const key = `owl-${treeIdx}`;
+  instanceTapLog[key] = (instanceTapLog[key] ?? []).filter((x) => t - x <= 1200);
+  instanceTapLog[key].push(t);
+  if (instanceTapLog[key].length < 3) return false;
+  instanceTapLog[key] = [];
+  return attemptFire(key, 10000, (ctx) => runOwl(ctx, treeIdx), 'owl');
+}
+
+/** 3 DISTINCT mushrooms within 4s (hedgehog) -- unlike tapSpruce, this
+ *  counts how many different mushroom ids were touched, not how many times
+ *  ONE was. `mushroomIdx` is whichever mushroom this particular tap landed
+ *  on; if it's the tap that completes the distinct-3 set, IT is the one the
+ *  hedgehog carries off (matches the doc: "the third TAPPED mushroom"). */
+function tapMushroom(mushroomIdx) {
+  if (suppressed() || active) return false;
+  const t = now();
+  mushroomTapLog = mushroomTapLog.filter((e) => t - e.t <= 4000);
+  mushroomTapLog.push({ idx: mushroomIdx, t });
+  const distinct = new Set(mushroomTapLog.map((e) => e.idx));
+  if (distinct.size < 3) return false;
+  mushroomTapLog = [];
+  return attemptFire('hedgehog', 45000, (ctx) => runHedgehog(ctx, mushroomIdx), 'hedgehog');
+}
+
+// dizzy: continuous gesture, not tap-based -- accumulate |Δorbit.angle|
+// over a rolling 5s window, ticked every frame from eggManager.tick below.
+let dizzyAccumRad = 0;
+let dizzyWindowStartedAt = 0;
+let dizzyLastAngle = null;
+const DIZZY_REVOLUTIONS = 3;
+const DIZZY_WINDOW_MS = 5000;
+
+function tickDizzyGesture() {
+  const t = now();
+  const angle = orbit.angle;
+  if (dizzyLastAngle === null) {
+    dizzyLastAngle = angle;
+    dizzyWindowStartedAt = t;
+    return;
+  }
+  const delta = Math.abs(angle - dizzyLastAngle);
+  dizzyLastAngle = angle;
+  if (t - dizzyWindowStartedAt > DIZZY_WINDOW_MS) {
+    dizzyAccumRad = 0;
+    dizzyWindowStartedAt = t;
+  }
+  dizzyAccumRad += delta;
+  if (dizzyAccumRad >= Math.PI * 2 * DIZZY_REVOLUTIONS) {
+    dizzyAccumRad = 0;
+    attemptFire('dizzy', 20000, runDizzy, 'dizzy');
+  }
+}
 
 export const eggManager = {
   /** Report a tap on a named target. Returns true if an egg consumed it
@@ -124,6 +313,7 @@ export const eggManager = {
         tapLog[target] = [];
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         active = egg.run(eggCtx());
+        useSceneStore.getState().recordEggFound(egg.id);
         useSceneStore.getState().onEasterEgg?.(egg.id);
         return true;
       }
@@ -131,7 +321,25 @@ export const eggManager = {
     return false;
   },
 
+  /** Triple-tap-a-spruce (owl) -- see tapSpruce above. */
+  tapSpruce,
+
+  /** 3-distinct-mushrooms (hedgehog) -- see tapMushroom above. */
+  tapMushroom,
+
+  /** One-shot, no counting: moon-wink / cloud-drizzle / smoke-rings. */
+  tapMoon() {
+    return attemptFire('moon-wink', 15000, runMoonWink, 'moon-wink');
+  },
+  tapCloud(clusterIdx) {
+    return attemptFire(`cloud-${clusterIdx}`, 12000, (ctx) => runCloudDrizzle(ctx, clusterIdx), 'cloud-drizzle');
+  },
+  tapChimney() {
+    return attemptFire('smoke-rings', 10000, runSmokeRings, 'smoke-rings');
+  },
+
   tick(dt) {
+    tickDizzyGesture();
     if (active) {
       active.tick(dt);
       if (active.done) active = null;

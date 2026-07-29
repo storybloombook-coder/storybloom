@@ -3,6 +3,8 @@ import { ZoneLandmarks } from './ZoneLandmarks';
 import { Kolobok } from './Kolobok';
 import { CameraRig } from './CameraRig';
 import { Vegetation } from './Vegetation';
+import { Owl } from './Owl';
+import { Hedgehog } from './Hedgehog';
 import { Sky } from './Sky';
 import { BackgroundForest } from './BackgroundForest';
 import { CrossroadsStone } from './CrossroadsStone';
@@ -32,6 +34,8 @@ export function KolobokScene() {
       <BackgroundForest />
       <Island />
       <Vegetation />
+      <Owl />
+      <Hedgehog />
       <WeatherSystems />
       <PondAndGrandpa />
       <GoldenHourExtras />

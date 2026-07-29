@@ -167,6 +167,12 @@ export const useSceneStore = create((set, get) => ({
   storyCompleted: false,
   fadeBlack: false,            // finale gulp: RN overlay fades to black (out 300ms/in 900ms)
   weatherState: 'clear',       // discrete mapped state (WEATHER_SPEC §1)
+  // Which easter eggs (EASTER_EGGS.md §2) have fired at least once this
+  // session -- species-level ids ('owl', not 'owl-3'), so tapping 3
+  // different spruces still only ever adds ONE 'owl' entry. Powers
+  // Scene3D's top-right "N/total" counter. Plain array (not a Set): this
+  // store uses plain object spreads, no Immer/structural-sharing for Sets.
+  discoveredEggs: [],
 
   setActiveZone: (id) => set({ activeZone: id }),
 
@@ -220,4 +226,10 @@ export const useSceneStore = create((set, get) => ({
   setFadeBlack: (fadeBlack) => set({ fadeBlack }),
 
   setWeatherState: (weatherState) => set({ weatherState }),
+
+  // No-op if already recorded -- eggManager calls this every time an egg
+  // fires, not just the first time (same "no-op if already true" guard
+  // style as setEncounterPhase/setStoryEncounterPhase above).
+  recordEggFound: (id) =>
+    set((s) => (s.discoveredEggs.includes(id) ? {} : { discoveredEggs: [...s.discoveredEggs, id] })),
 }));
