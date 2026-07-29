@@ -6,6 +6,8 @@ import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { KolobokScene } from './scene/KolobokScene';
 import { TactileButton } from './TactileButton';
+import GlassGlare from './GlassGlare';
+import { useDeviceTilt } from './useDeviceTilt';
 import {
   orbit, story, bubbleAnchor, useSceneStore,
 } from './state/sceneStore';
@@ -44,6 +46,9 @@ export function Scene3D({ onNavigate, focused = true }) {
   const setLocale = useSceneStore((s) => s.setLocale);
   const requestNavigation = useSceneStore((s) => s.requestNavigation);
   const consumeNavigation = useSceneStore((s) => s.consumeNavigation);
+  // One accelerometer subscription shared by every button's own GlassGlare
+  // below -- see useDeviceTilt's own comment for why.
+  const { tiltX, tiltY } = useDeviceTilt();
 
   // Encounter beat lifecycle (show bubble, fade, clear) is owned by the
   // directors' timelines; this component only renders the current text.
@@ -211,6 +216,7 @@ export function Scene3D({ onNavigate, focused = true }) {
               onPress={() => requestNavigation(item.route)}
               style={styles.menuPill}
             >
+              <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={14} intensity={0.4} />
               <Text style={styles.menuPillText}>{t(item.labelKey, locale)}</Text>
               <View style={[styles.menuPillUnderline, { backgroundColor: item.accent }]} />
             </Pressable>
@@ -249,6 +255,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
       </TactileButton>
 
@@ -266,6 +273,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         innerStyle={[styles.buttonVisual, !cameraFollow && styles.followButtonOff]}
         hitSlop={8}
       >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>👁</Text>
       </TactileButton>
 
@@ -284,6 +292,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>2D</Text>
       </TactileButton>
 
@@ -300,6 +309,7 @@ export function Scene3D({ onNavigate, focused = true }) {
         innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>{locale === 'ru' ? 'EN' : 'RU'}</Text>
       </TactileButton>
 
@@ -404,8 +414,12 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 6,
     borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    // Translucent (was 0.92, near-solid) so GlassGlare's light-colored rim
+    // and hotspot actually show contrast against it -- against a near-opaque
+    // white, the same light-colored glare has nothing to catch on.
+    backgroundColor: 'rgba(255,255,255,0.55)',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   menuPillText: { fontSize: 13, fontWeight: '600', color: '#2e2a22', textAlign: 'center' },
   menuPillUnderline: { width: 22, height: 3, borderRadius: 2, marginTop: 6 },
@@ -422,13 +436,15 @@ const styles = StyleSheet.create({
   },
   buttonVisual: {
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    // Translucent (was 0.85) -- same reasoning as menuPill above, so the
+    // GlassGlare rim/hotspot riding on top actually reads against it.
+    backgroundColor: 'rgba(255,255,255,0.45)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
-  followButtonOff: { backgroundColor: 'rgba(255,255,255,0.4)' },
+  followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
   menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
   localeButton: { left: 14, right: undefined, bottom: 144 }, // stacked above menuButton
   fadeOverlay: { backgroundColor: '#000000' },

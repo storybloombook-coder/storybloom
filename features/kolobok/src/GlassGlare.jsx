@@ -1,76 +1,31 @@
-// GlassGlare.tsx — liquid-glass edge lighting for a frosted (BlurView) button.
-// A specular hotspot TRAVELS around the button's rim as the phone tilts (see
-// lib/useDeviceTilt), so the button reads as a solid piece of glass catching a
-// fixed light rather than wearing a painted highlight. Render it as a sibling
-// right after the button's BlurView -- TactileButton's own overflow:'hidden'
-// wrapper clips it to the rounded rect for free.
+// GlassGlare.jsx — liquid-glass edge lighting for a frosted button. A
+// specular hotspot TRAVELS around the button's rim as the phone tilts (see
+// useDeviceTilt.js), so the button reads as a solid piece of glass catching a
+// fixed light rather than wearing a painted highlight. Render it as a
+// sibling right after the button's own tinted background -- TactileButton's
+// own overflow:'hidden' wrapper clips it to the rounded rect for free.
 //
-// IMPORTANT: pass `radius` matching the button's actual borderRadius. The rim
-// and the hotspot's travel path are both derived from it, so a mismatch shows
-// up as the glare cutting across the corners.
+// Local/JS port of the app shell's src/components/GlassGlare.tsx (same
+// reasoning as this package's own local TactileButton.jsx: features/kolobok
+// is a self-contained package, CLAUDE.md), stripped of TypeScript types --
+// see that file for the full design rationale (rim dispersion, arc-length
+// hotspot travel, etc.) if the comments here feel abbreviated.
 //
-// ---------------------------------------------------------------------------
-// Why the glare lives on the rim, and why it travels by ARC LENGTH
-// ---------------------------------------------------------------------------
-// Two earlier versions got this wrong in instructive ways:
-//
-//   v1 swept a bright bar across the button's FACE. Thick glass doesn't do
-//      that -- essentially all of its optical interest is at the rim, where the
-//      material is thickest and most steeply curved. A bar across the middle
-//      reads as a scratch, especially on a wide button where it stretches into
-//      a long thin line.
-//
-//   v2 drew the rim as a UNIFORM outline plus four fixed side-arcs that
-//      crossfaded. Two problems: an evenly-bright ring reads as a stroke on a
-//      flat shape rather than light on a curved edge, and four discrete sides
-//      can't travel -- they pop at the corners.
-//
-// So the light is now a single hotspot at a continuous position on the rim.
-// The obvious way to place it -- cast a ray from the center in the light's
-// direction -- turns out to feel wrong on non-square buttons: on a 330x56 pill
-// a 2-degree tilt change near horizontal moves the hotspot ~20px, whipping it
-// along the long edges and stalling at the short ends. Measured, not guessed.
-//
-// Instead the hotspot is parametrized by ARC LENGTH along the true rounded-rect
-// perimeter (buildPerimeter below samples it at constant spacing -- verified to
-// 1.00 uniformity). Slightly less optically literal on a wide pill, but the
-// light GLIDES at an even rate, which is the whole point. Physical accuracy
-// that reads worse isn't accuracy worth having.
-//
-// Supporting cast, all deliberately quiet:
-//   * a faint static rim, barely top-biased, purely for edge definition. Low
-//     enough that it can't fight the hotspot -- that was v2's mistake.
-//   * an antipodal cool hotspot: light entering one side of a lens exits the
-//     other, disperses further on the way, and lands bluer.
-//   * an interior bloom trailing the primary hotspot inward, at the noise
-//     floor. This is the only thing on the face, and it's barely there.
-//
-// No gradient library in this app, so every soft edge is faked by stacking
-// concentric shapes: the rim is nested rounded borders, the hotspots and bloom
-// are concentric discs.
+// IMPORTANT: pass `radius` matching the button's actual borderRadius.
 
 import { useMemo, useState } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { StyleSheet, View } from 'react-native';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 
 // ---------------------------------------------------------------- color
 
-type Rgb = readonly [number, number, number];
-
-function rgba(c: Rgb, a: number) {
+function rgba(c, a) {
   return `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a.toFixed(4)})`;
 }
 
 // ---------------------------------------------------------------- rim
 
-// Dispersion ladder, outermost -> inward: cool fringe, near-white band, warm
-// fringe. That blue->white->warm ORDER is the strongest "thick glass" cue
-// there is; the same rim in flat white reads as a border stroke.
-//
-// Alphas are ~40% of v2's. The rim's job here is only to define the edge --
-// the travelling hotspot carries the light. Bands overlap slightly because
-// adjacent-but-touching bands leave hairline seams once their radii differ.
-const RIM_BANDS: { inset: number; width: number; color: Rgb; alpha: number }[] = [
+const RIM_BANDS = [
   { inset: 0.0, width: 1.7, color: [122, 172, 255], alpha: 0.20 }, // cool outer fringe
   { inset: 1.4, width: 1.2, color: [203, 227, 255], alpha: 0.14 }, // blue -> white
   { inset: 2.3, width: 1.1, color: [255, 253, 248], alpha: 0.22 }, // rim core
@@ -79,15 +34,9 @@ const RIM_BANDS: { inset: number; width: number; color: Rgb; alpha: number }[] =
 ];
 const RIM_UNITS_TOTAL = 7.6; // last band's inset + width
 
-// Only a slight top bias -- ambient light does come from above, but a strong
-// baked direction would contradict the hotspot whenever it travels elsewhere.
 const RIM_SIDE_MUL = { Top: 1.0, Bottom: 0.85, Left: 0.55, Right: 0.55 };
 
-/** Rim thickness scale, bounded by BOTH the short side and the corner radius:
- *  on a shallow-radius rect an unbounded rim eats the whole corner curve, and
- *  RN then clamps borderRadius against borderWidth and the corners visibly go
- *  square. 0.55 keeps it safely inside the tightest corner. */
-function rimScale(unit: number, radius: number) {
+function rimScale(unit, radius) {
   return Math.max(0.65, Math.min(1.25, Math.min(unit / 52, (radius * 0.55) / RIM_UNITS_TOTAL)));
 }
 
@@ -95,16 +44,10 @@ function rimScale(unit: number, radius: number) {
 
 const PERIMETER_SAMPLES = 96;
 
-type Perimeter = { xs: number[]; ys: number[]; txs: number[]; tys: number[] };
-
 /** Samples the rounded-rect perimeter at CONSTANT arc-length spacing, starting
- *  at top-center and running clockwise. Returns positions (relative to center)
- *  plus unit tangents, which the hotspot uses to smear itself ALONG the edge
- *  rather than across it.
- *
- *  Tangents are stored as vectors, not angles, so the worklet can lerp them
- *  without special-casing the +-180 wrap. */
-function buildPerimeter(w: number, h: number, r: number): Perimeter {
+ *  at top-center and running clockwise. Returns positions (relative to
+ *  center) plus unit tangents. */
+function buildPerimeter(w, h, r) {
   const A = w / 2;
   const B = h / 2;
   const rr = Math.max(0, Math.min(r, Math.min(A, B)));
@@ -112,12 +55,12 @@ function buildPerimeter(w: number, h: number, r: number): Perimeter {
   const b = B - rr;
   const q = (Math.PI * rr) / 2; // quarter-arc length
 
-  const arc = (cx: number, cy: number, from: number) => (u: number) => {
+  const arc = (cx, cy, from) => (u) => {
     const t = ((from + u * 90) * Math.PI) / 180;
     return [cx + rr * Math.cos(t), cy + rr * Math.sin(t), -Math.sin(t), Math.cos(t)];
   };
 
-  const segs: { len: number; f: (u: number) => number[] }[] = [
+  const segs = [
     { len: a, f: (u) => [u * a, -B, 1, 0] },
     { len: q, f: arc(a, -b, -90) },
     { len: 2 * b, f: (u) => [A, -b + u * 2 * b, 0, 1] },
@@ -130,10 +73,10 @@ function buildPerimeter(w: number, h: number, r: number): Perimeter {
   ];
 
   const total = segs.reduce((s, x) => s + x.len, 0);
-  const xs: number[] = [];
-  const ys: number[] = [];
-  const txs: number[] = [];
-  const tys: number[] = [];
+  const xs = [];
+  const ys = [];
+  const txs = [];
+  const tys = [];
 
   for (let i = 0; i < PERIMETER_SAMPLES; i += 1) {
     let d = (i / PERIMETER_SAMPLES) * total;
@@ -156,25 +99,17 @@ function buildPerimeter(w: number, h: number, r: number): Perimeter {
 
 // ---------------------------------------------------------------- hotspots
 
-// How far full tilt swings the light direction. 2.2 lets vertical tilt carry
-// the hotspot from top-center all the way to bottom-center, with diagonals
-// covering the sides, so the full rim is reachable.
 const ORBIT_GAIN = 2.2;
 
-const HOT_WARM: Rgb = [255, 246, 226];
-const HOT_COOL: Rgb = [150, 196, 255];
+const HOT_WARM = [255, 246, 226];
+const HOT_COOL = [150, 196, 255];
 
-// Concentric discs -> soft blob. Accumulated center opacity is ~0.29 for the
-// primary, which sits clearly above the faint rim without blowing out.
 const HOT_RINGS = [
   { scale: 1.0, alpha: 0.06 },
   { scale: 0.62, alpha: 0.10 },
   { scale: 0.33, alpha: 0.16 },
 ];
 
-// `offset` is a fraction of the perimeter: 0 = at the light, 0.5 = antipodal
-// (the exit point). `tangential`/`radial` stretch the blob ALONG the edge and
-// squash it across, turning a dot into an arc.
 const HOTSPOTS = [
   {
     key: 'entry', offset: 0, radiusFraction: 0.34, tangential: 2.6, radial: 0.62,
@@ -186,31 +121,22 @@ const HOTSPOTS = [
   },
 ];
 
-// The only thing on the face: a wide, very faint bloom trailing the entry
-// hotspot inward. INTERIOR_PULL is how far toward the center it sits.
 const INTERIOR_RINGS = [
   { scale: 1.0, alpha: 0.014 },
   { scale: 0.6, alpha: 0.018 },
 ];
-const INTERIOR_TINT: Rgb = [208, 228, 255];
+const INTERIOR_TINT = [208, 228, 255];
 const INTERIOR_RADIUS_FRACTION = 0.55;
 const INTERIOR_PULL = 0.55;
 
 // ---------------------------------------------------------------- worklets
 
-/** Smooth saturating map: near-linear for small tilts, sublinear after, so a
- *  hard phone flick eases toward its limit instead of popping at a clamp.
- *  Normalized so tilt = 1 maps to exactly 1. */
-function saturate(v: number) {
+function saturate(v) {
   'worklet';
   return (v * Math.SQRT2) / Math.sqrt(1 + v * v);
 }
 
-/** Tilt -> position along the perimeter, in turns [0,1). Rest is top-center.
- *  The light direction is the rest direction (straight up) plus the tilt
- *  vector; its ANGLE maps linearly onto arc length, which is what makes the
- *  travel speed even regardless of the button's aspect ratio. */
-function orbitTurns(tiltX: number, tiltY: number) {
+function orbitTurns(tiltX, tiltY) {
   'worklet';
   const dx = saturate(tiltX) * ORBIT_GAIN;
   const dy = -1 + saturate(tiltY) * ORBIT_GAIN;
@@ -221,22 +147,8 @@ function orbitTurns(tiltX: number, tiltY: number) {
 
 // ---------------------------------------------------------------- pieces
 
-/** A blob pinned to the rim, sliding along it. Samples the precomputed
- *  perimeter table with linear interpolation between neighbours -- 96 samples
- *  on even the largest button is finer than the blob's own softness, so the
- *  motion is smooth without any easing on top. */
 function RimHotspot({
   perimeter, tiltX, tiltY, offset, radius, tangential, radial, color, gain,
-}: {
-  perimeter: Perimeter;
-  tiltX: SharedValue<number>;
-  tiltY: SharedValue<number>;
-  offset: number;
-  radius: number;
-  tangential: number;
-  radial: number;
-  color: Rgb;
-  gain: number;
 }) {
   const { xs, ys, txs, tys } = perimeter;
   const n = xs.length;
@@ -257,8 +169,6 @@ function RimHotspot({
     const deg = (Math.atan2(ty, tx) * 180) / Math.PI;
 
     return {
-      // Listed order applies scale first in local space, then rotate to the
-      // edge's tangent, then translate onto the rim.
       transform: [
         { translateX: x },
         { translateY: y },
@@ -292,14 +202,8 @@ function RimHotspot({
   );
 }
 
-/** The faint bloom on the face, trailing the entry hotspot toward center. */
 function InteriorBloom({
   perimeter, tiltX, tiltY, radius,
-}: {
-  perimeter: Perimeter;
-  tiltX: SharedValue<number>;
-  tiltY: SharedValue<number>;
-  radius: number;
 }) {
   const { xs, ys } = perimeter;
   const n = xs.length;
@@ -345,33 +249,18 @@ function InteriorBloom({
 
 // ---------------------------------------------------------------- component
 
-export default function GlassGlare({
-  tiltX,
-  tiltY,
-  radius,
-  intensity = 1,
-}: {
-  tiltX: SharedValue<number>;
-  tiltY: SharedValue<number>;
-  /** Must match the button's own borderRadius. Defaults to a pill/circle. */
-  radius?: number;
-  /** Scales the whole effect. Over a busy or photographic backdrop, ~0.75
-   *  keeps the rim from competing with the content behind it. */
-  intensity?: number;
-}) {
+export default function GlassGlare({ tiltX, tiltY, radius, intensity = 1 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const { width, height } = size;
   const unit = Math.min(width, height);
   const r = radius ?? unit / 2;
 
-  // Rebuilt only when the measured box changes -- buttons have a handful of
-  // distinct sizes, so this is a few builds per app, never per frame.
   const perimeter = useMemo(
     () => buildPerimeter(width, height, r),
     [width, height, r],
   );
 
-  function onLayout(e: LayoutChangeEvent) {
+  function onLayout(e) {
     const next = e.nativeEvent.layout;
     if (next.width !== size.width || next.height !== size.height) {
       setSize({ width: next.width, height: next.height });
@@ -390,8 +279,6 @@ export default function GlassGlare({
       onLayout={onLayout}
       pointerEvents="none"
     >
-      {/* 1. Interior bloom -- under everything, so the rim reads as being in
-             front of the light that came through it. */}
       <InteriorBloom
         perimeter={perimeter}
         tiltX={tiltX}
@@ -399,9 +286,6 @@ export default function GlassGlare({
         radius={unit * INTERIOR_RADIUS_FRACTION}
       />
 
-      {/* 2. Static rim: edge definition only, deliberately faint. Per-side
-             colors (rather than one uniform borderColor) keep it from reading
-             as a stroke on a flat shape. */}
       {RIM_BANDS.map((band) => {
         const inset = band.inset * scale;
         return (
@@ -425,7 +309,6 @@ export default function GlassGlare({
         );
       })}
 
-      {/* 3. The travelling light. Over the rim it slides along. */}
       {HOTSPOTS.map((h) => (
         <RimHotspot
           key={h.key}
@@ -445,8 +328,6 @@ export default function GlassGlare({
 }
 
 const styles = StyleSheet.create({
-  // Zero-size anchor at the button's center: children are positioned relative
-  // to their own origin, so the animated transform alone places them.
   originBox: {
     position: 'absolute',
     left: '50%',
