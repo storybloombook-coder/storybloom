@@ -1,11 +1,17 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { DoubleSide, Object3D, Vector3 } from 'three';
+import {
+  BoxGeometry, ConeGeometry, CylinderGeometry, DoubleSide, Euler,
+  Object3D, Quaternion, SphereGeometry, Vector3,
+} from 'three';
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager, eggMotion } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
+import { makeNoiseGrain } from './textures/proceduralTextures';
+import { mergeColoredParts } from './builders/mergeColoredParts';
+import { makeRng } from './prng';
 import { BlobShadow } from './BlobShadow';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
@@ -25,6 +31,195 @@ const AMBIENCE = {
 // use there for why the hitbox can't live nested on this component anymore).
 const CHIMNEY_LOCAL = [0.55, 1.8, 0.15];
 const CHIMNEY_HIT_R = 0.3;
+
+// Live feedback: "build the walls of the izba out of logs... make the roof
+// look like it's made of 3D tile elements... small pieces of moss that look
+// like tiny mushrooms, with grass hanging down, along the roof's
+// perimeter." ART_SPEC §4 already speced a log-cabin version of this house
+// (5-6 stacked r=0.11 cylinders per wall, corners protruding) that was never
+// built ("izba keeps its greybox house shape" per this file's own Landmark
+// comment) -- used as the basis here, sized to fit the EXISTING wall
+// footprint (1.7 wide x 1.1 tall x 1.3 deep) so door/window/chimney/roof/
+// blob-shadow positions (all tuned to that footprint already) don't need to
+// change at all.
+const LOG_R = 0.11;
+const LOG_ROWS = 5; // 5 * 2*LOG_R = 1.10 exactly fills the wall height
+const WALL_W = 1.7; // matches the old flat box's own width
+const WALL_D = 1.3; // matches the old flat box's own depth
+// Each log's own axis is pulled IN from the wall footprint's face by LOG_R,
+// so its outer bulge reaches back OUT to exactly where the old flat wall
+// used to be -- door/window (still at their old +/-0.66) therefore sit
+// flush against the logs instead of sinking into them.
+const FRONT_BACK_LOG_LEN = WALL_W + LOG_R * 2 * 1.1; // "corners protrude" past the side walls
+const SIDE_LOG_LEN = WALL_D + LOG_R * 2 * 1.1;
+
+const ROOF_BASE_R = 1.35; // matches the existing backing cone
+const ROOF_HEIGHT = 0.9;
+const ROOF_Y = 1.75;
+// "3D tile elements": rings of small overlapping tile pieces hugging the
+// backing cone's own sloped surface (kept underneath, unlit gaps between
+// tiles would otherwise show through to empty space) rather than one smooth
+// face. Ring-based (not matched to the cone's exact 4 flat faces) -- much
+// simpler than deriving each face's own plane, and at this size/distance
+// reads the same either way.
+const ROOF_TILE_ROWS = 6;
+const ROOF_TILE_MAX_T = 0.82; // stop short of the apex so tiles don't shrink to nothing
+const ROOF_TILE_W = 0.24;
+const ROOF_TILE_H = 0.2;
+const ROOF_TILE_THICK = 0.02;
+// approx arc-length between tile centers in a ring -- ART_SPEC §4 caps the
+// whole izba at ~4k triangles; 0.22 (~137 tiles, 1.6k+ tris on its own)
+// pushed the WHOLE building close to that ceiling once walls/trim/door/
+// window/chimney are added in too, so widened to keep the total comfortable.
+const ROOF_TILE_SPACING = 0.32;
+const ROOF_TILE_COLOR_A = '#a5602f';
+const ROOF_TILE_COLOR_B = '#8f4f26';
+
+// Moss-mushroom clusters + hanging grass blades along the roof's eave
+// (the backing cone's own base circle, in the SAME local frame as the roof
+// group -- Y=-ROOF_HEIGHT/2 is the cone's base since a Three.js cone is
+// centered on its own local origin).
+const MOSS_COUNT = 9;
+const MOSS_RADIUS = ROOF_BASE_R * 0.98;
+const MOSS_Y_LOCAL = -ROOF_HEIGHT / 2;
+const MOSS_CAP_R = 0.055;
+const MOSS_CAP_COLOR = '#5a7a3e';
+const MOSS_STEM_COLOR = '#3f5a2c';
+const HANGING_GRASS_COLOR = '#3f6b2a';
+
+/** ART_SPEC §4's own log-wall design: 4 walls x 5 stacked cylinders, all one
+ *  instancedMesh (one draw call) since every log shares the same radius --
+ *  only position/rotation/length (via Y-scale on a unit-length cylinder)
+ *  differ per instance. */
+function IzbaLogWalls({ material }) {
+  const matrices = useMemo(() => {
+    const list = [];
+    const d = new Object3D();
+    const walls = [
+      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: WALL_D / 2 - LOG_R },
+      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: -(WALL_D / 2 - LOG_R) },
+      { runAlong: 'z', len: SIDE_LOG_LEN, x: WALL_W / 2 - LOG_R, z: 0 },
+      { runAlong: 'z', len: SIDE_LOG_LEN, x: -(WALL_W / 2 - LOG_R), z: 0 },
+    ];
+    walls.forEach((w) => {
+      for (let i = 0; i < LOG_ROWS; i += 1) {
+        const y = LOG_R + i * LOG_R * 2;
+        d.position.set(w.x, y, w.z);
+        // A cylinder's own length runs along local Y by default -- rotate
+        // 90deg around Z to lie along world X, or around X to lie along Z.
+        if (w.runAlong === 'x') d.rotation.set(0, 0, Math.PI / 2);
+        else d.rotation.set(Math.PI / 2, 0, 0);
+        d.scale.set(1, w.len, 1);
+        d.updateMatrix();
+        list.push(d.matrix.clone());
+      }
+    });
+    return list;
+  }, []);
+
+  return (
+    <instancedMesh
+      args={[undefined, undefined, matrices.length]}
+      material={material}
+      ref={(mesh) => {
+        if (!mesh) return;
+        matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+        mesh.instanceMatrix.needsUpdate = true;
+      }}
+    >
+      <cylinderGeometry args={[LOG_R, LOG_R, 1, 8]} />
+    </instancedMesh>
+  );
+}
+
+const roofNormalTmp = new Vector3();
+const ROOF_UP = new Vector3(0, 1, 0);
+const roofQuatTmp = new Quaternion();
+const roofEulerTmp = new Euler();
+
+/** "Make the roof look like it's made of 3D tile elements" -- small flat
+ *  tiles in shrinking rings from base to apex, each oriented flush against
+ *  the roof's own slope via setFromUnitVectors (guarantees correct flush
+ *  alignment regardless of the exact pyramid angle, same technique
+ *  KolobokParticles.jsx's own ray-direction orientation uses) rather than
+ *  hand-derived Euler signs. Alternating rows are angle-offset and
+ *  alternating tiles get a slightly darker shade, both just for a less
+ *  mechanically regular shingle read. Static -- built once, merged into one
+ *  draw call via mergeColoredParts. */
+function makeIzbaRoofTiles() {
+  const slantLen = Math.sqrt(ROOF_BASE_R ** 2 + ROOF_HEIGHT ** 2);
+  const normalR = ROOF_HEIGHT / slantLen;
+  const normalY = ROOF_BASE_R / slantLen;
+  const parts = [];
+  for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
+    const t = (row / (ROOF_TILE_ROWS - 1)) * ROOF_TILE_MAX_T;
+    const ringR = ROOF_BASE_R * (1 - t);
+    const y = -ROOF_HEIGHT / 2 + t * ROOF_HEIGHT;
+    const circumference = 2 * Math.PI * Math.max(0.05, ringR);
+    const count = Math.max(4, Math.round(circumference / ROOF_TILE_SPACING));
+    const rowOffset = (row % 2) * (Math.PI / count); // stagger alternate rows
+    for (let i = 0; i < count; i += 1) {
+      const angle = (i / count) * Math.PI * 2 + rowOffset;
+      const x = Math.sin(angle) * ringR;
+      const z = Math.cos(angle) * ringR;
+      roofNormalTmp.set(Math.sin(angle) * normalR, normalY, Math.cos(angle) * normalR).normalize();
+      roofQuatTmp.setFromUnitVectors(ROOF_UP, roofNormalTmp);
+      roofEulerTmp.setFromQuaternion(roofQuatTmp);
+      const tileScale = 0.6 + 0.4 * (1 - t); // smaller tiles near the apex
+      parts.push({
+        geometry: new BoxGeometry(ROOF_TILE_W * tileScale, ROOF_TILE_THICK, ROOF_TILE_H * tileScale),
+        color: (row + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
+        position: [x, y, z],
+        rotation: [roofEulerTmp.x, roofEulerTmp.y, roofEulerTmp.z],
+      });
+    }
+  }
+  return mergeColoredParts(parts);
+}
+
+/** "Small pieces of moss that look like tiny mushrooms, with grass hanging
+ *  down from them, along the perimeter of the roof" -- a ring of tiny
+ *  mushroom-shaped moss clumps (short stem + squashed cap) hugging the
+ *  backing cone's own base/eave, each with a couple of thin blades drooping
+ *  down (a Y-flipped cone, apex pointing down, reads as a tapering hanging
+ *  blade). Static, merged into one draw call. */
+function makeIzbaRoofTrim() {
+  const rng = makeRng(501);
+  const parts = [];
+  for (let i = 0; i < MOSS_COUNT; i += 1) {
+    const angle = (i / MOSS_COUNT) * Math.PI * 2 + (rng() - 0.5) * 0.3;
+    const x = Math.sin(angle) * MOSS_RADIUS;
+    const z = Math.cos(angle) * MOSS_RADIUS;
+    const s = 0.8 + rng() * 0.5;
+    parts.push({
+      geometry: new CylinderGeometry(0.015 * s, 0.02 * s, 0.04 * s, 5),
+      color: MOSS_STEM_COLOR,
+      position: [x, MOSS_Y_LOCAL + 0.02 * s, z],
+    });
+    parts.push({
+      geometry: new SphereGeometry(MOSS_CAP_R * s, 6, 5),
+      color: MOSS_CAP_COLOR,
+      scale: [1, 0.55, 1],
+      position: [x, MOSS_Y_LOCAL + 0.045 * s, z],
+    });
+    const bladeCount = 2 + Math.floor(rng() * 2);
+    for (let b = 0; b < bladeCount; b += 1) {
+      const bladeAngle = rng() * Math.PI * 2;
+      const bladeLen = 0.08 + rng() * 0.06;
+      const bx = x + Math.sin(bladeAngle) * 0.03;
+      const bz = z + Math.cos(bladeAngle) * 0.03;
+      parts.push({
+        // ConeGeometry's apex points local +Y by default -- flipping 180deg
+        // around X points the tapering tip DOWN, reading as a hanging blade.
+        geometry: new ConeGeometry(0.008, bladeLen, 4),
+        color: HANGING_GRASS_COLOR,
+        position: [bx, MOSS_Y_LOCAL - bladeLen / 2 + 0.01, bz],
+        rotation: [Math.PI, (rng() - 0.5) * 0.4, 0],
+      });
+    }
+  }
+  return mergeColoredParts(parts);
+}
 
 /** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
  *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
@@ -126,10 +321,19 @@ function Landmark({ zone }) {
   // Izba walls/roof are VISUAL_QUALITY_SPEC §1 hero surfaces (0.2 rim
   // strength -- "buildings/stone", not "characters").
   const izbaMaterials = useMemo(() => (zone.id === 'izba' ? {
-    walls: makeToonMaterial({ color: zone.color, rimStrength: 0.2 }),
+    // Live feedback: "build the walls out of logs" -- a real bark texture
+    // now carries the whole look (ART_SPEC §4's own #b3844f log color), so
+    // color is neutral white rather than zone.color (the old flat wall's
+    // only source of color) to avoid double-tinting the texture.
+    logs: makeToonMaterial({ map: makeNoiseGrain('#b3844f', 0.1), color: '#ffffff', rimStrength: 0.2 }),
     roof: makeToonMaterial({ color: '#a5602f', rimStrength: 0.2 }),
+    roofTiles: makeToonMaterial({ vertexColors: true, color: '#a5602f', rimStrength: 0.2 }),
+    roofTrim: makeToonMaterial({ vertexColors: true, color: '#5a7a3e', rimStrength: 0.15 }),
     chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
-  } : null), [zone.id, zone.color]);
+  } : null), [zone.id]);
+
+  const roofTileGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTiles() : null), [zone.id]);
+  const roofTrimGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTrim() : null), [zone.id]);
 
   const mode = encounter?.id === zone.id
     ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
@@ -216,12 +420,21 @@ function Landmark({ zone }) {
               house" -- sized to roughly the wall footprint (1.7x1.3) plus a
               little overhang. */}
           <BlobShadow radiusX={1.05} radiusZ={0.85} />
-          <mesh position={[0, 0.85, 0]} material={izbaMaterials.walls}>
-            <boxGeometry args={[1.7, 1.1, 1.3]} />
+          {/* Live feedback: "build the walls out of logs" -- see
+              IzbaLogWalls' own comment for how this keeps the exact same
+              outer footprint the old flat box used. */}
+          <IzbaLogWalls material={izbaMaterials.logs} />
+          {/* Backing cone (unchanged) stays underneath the tile overlay so
+              no gaps between individual tiles show through to empty space. */}
+          <mesh position={[0, ROOF_Y, 0]} rotation={[0, Math.PI / 4, 0]} material={izbaMaterials.roof}>
+            <coneGeometry args={[ROOF_BASE_R, ROOF_HEIGHT, 4]} />
           </mesh>
-          <mesh position={[0, 1.75, 0]} rotation={[0, Math.PI / 4, 0]} material={izbaMaterials.roof}>
-            <coneGeometry args={[1.35, 0.9, 4]} />
-          </mesh>
+          {roofTileGeometry && (
+            <mesh position={[0, ROOF_Y, 0]} geometry={roofTileGeometry} material={izbaMaterials.roofTiles} />
+          )}
+          {roofTrimGeometry && (
+            <mesh position={[0, ROOF_Y, 0]} geometry={roofTrimGeometry} material={izbaMaterials.roofTrim} />
+          )}
           <IzbaChimney material={izbaMaterials.chimney} />
           <IzbaWindow />
           <IzbaDoor />
