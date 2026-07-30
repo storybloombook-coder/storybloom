@@ -89,7 +89,7 @@ function runFishing(ctx) {
     { at: s(300), dur: s(400), ease: 'easeOutBack', update: (t) => { eggMotion.rodPitch = -(18 * Math.PI / 180) * (1 - t); eggMotion.floatYank = t; } },
     { at: s(300), call: () => { eggMotion.rippleBurst += 1; } },
     { at: s(700), dur: s(800), update: (t) => { eggMotion.fishT = t; } },
-    { at: s(700), call: () => ctx.setNarration(lineKey) },
+    { at: s(700), call: () => ctx.setNarration(lineKey, 'grandpa') },
     ...(roll === 'boot' ? [
       { at: s(900), dur: s(600), update: (t) => { eggMotion.headShake = Math.sin(t * Math.PI * 4) * (10 * Math.PI / 180); } },
     ] : []),

@@ -160,6 +160,11 @@ export const useSceneStore = create((set, get) => ({
   pendingNavigation: null,     // RN layer consumes this and routes
   locale: detectLocale(),      // 'en' | 'ru' — resolved once at store creation
   narration: null,             // story-mode narrator/dialogue line (STORY_SPEC §1)
+  // Who the current `narration` line belongs to, for BubbleAnchor.jsx to
+  // anchor the bubble above the right speaker -- 'kolobok' (the tale's own
+  // narrator/default) or 'grandpa' (his fishing-catch lines, EASTER_EGGS.md
+  // §2), which must NOT float over Kolobok wherever he happens to be.
+  narrationSpeaker: 'kolobok',
   storyPlaying: false,         // UI reacts: pills dim to 60%, ▶ becomes ❚❚
   // One round finished and the loop stopped itself (not auto-looping
   // anymore) -- the UI swaps ▶ for a restart icon while this is true.
@@ -216,8 +221,8 @@ export const useSceneStore = create((set, get) => ({
   setStoryEncounterPhase: (phase) =>
     set((s) => (s.encounter?.story ? { encounter: { ...s.encounter, phase } } : {})),
 
-  setNarration: (lineKey) =>
-    set({ narration: lineKey ? t(lineKey, get().locale) : null }),
+  setNarration: (lineKey, speaker = 'kolobok') =>
+    set({ narration: lineKey ? t(lineKey, get().locale) : null, narrationSpeaker: speaker }),
 
   setStoryPlaying: (storyPlaying) => set({ storyPlaying }),
 

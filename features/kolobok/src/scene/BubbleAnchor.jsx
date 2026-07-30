@@ -2,6 +2,7 @@ import { useFrame } from '@react-three/fiber/native';
 import { Vector3 } from 'three';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { bubbleAnchor, storyMotion, useSceneStore } from '../state/sceneStore';
+import { GRANDPA_WORLD_POS } from './PondAndGrandpa';
 
 // Rough head-height above ground for each anchor kind -- not per-character
 // precise, just enough that the bubble reads as "above them" rather than
@@ -23,7 +24,11 @@ export function BubbleAnchor() {
   useFrame(({ camera, size }) => {
     const s = useSceneStore.getState();
     const enc = s.encounter;
-    const speaking = s.narration ? 'kolobok' : (enc?.line ? enc.id : null);
+    // Narration's OWN speaker (default 'kolobok') decides the anchor now --
+    // previously any narration was hardcoded to Kolobok's position, which is
+    // wrong for Grandpa's fishing-catch lines (EASTER_EGGS.md §2: narrated
+    // via the same setNarration channel, tagged narrationSpeaker='grandpa').
+    const speaking = s.narration ? s.narrationSpeaker : (enc?.line ? enc.id : null);
     if (!speaking) {
       bubbleAnchor.visible = false;
       return;
@@ -36,6 +41,10 @@ export function BubbleAnchor() {
       wx = storyMotion.kolobokWorldPos[0];
       wy = storyMotion.kolobokWorldPos[1] + HEAD_OFFSET_KOLOBOK;
       wz = storyMotion.kolobokWorldPos[2];
+    } else if (speaking === 'grandpa') {
+      wx = GRANDPA_WORLD_POS.x;
+      wy = GRANDPA_WORLD_POS.y;
+      wz = GRANDPA_WORLD_POS.z;
     } else {
       const zone = ZONES.find((z) => z.id === speaking);
       if (!zone) {

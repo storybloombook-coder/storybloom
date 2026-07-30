@@ -25,6 +25,17 @@ const tiltQuatTmp = new Quaternion();
 // izba, rim side of the path).
 const POND_ANGLE = rad(POND_ANGLE_DEG);
 const POND_POS = pointOnCircle(POND_RADIUS, POND_ANGLE);
+const POND_GROUP_MATRIX = new Matrix4().compose(
+  new Vector3(...POND_POS),
+  new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), POND_ANGLE + Math.PI),
+  new Vector3(1, 1, 1),
+);
+// Grandpa's own group sits at [-1.15, 0.22, -0.6] within the pond group (see
+// the JSX below) -- 0.94 is his own head height (0.22 group offset + 0.72
+// headRef local Y) at that same local X/Z. BubbleAnchor.jsx imports this so
+// his fishing-catch bubble (EASTER_EGGS.md §2, narrationSpeaker='grandpa')
+// anchors above HIM at the pond, not over Kolobok wherever he is on the path.
+export const GRANDPA_WORLD_POS = new Vector3(-1.15, 0.94, -0.6).applyMatrix4(POND_GROUP_MATRIX);
 
 // BACKLOG.md #6 willow's position/yaw (was inlined in the JSX) -- named so
 // the wind-sway calculation below can reuse the same world x/z.
