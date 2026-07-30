@@ -1,6 +1,7 @@
 package com.storybloom.app.ui.screens
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
@@ -12,6 +13,7 @@ import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -253,131 +255,182 @@ private fun TactileGlassButton(
  * A small native video surface for the menu backdrop. It owns no controls,
  * audio, networking, JavaScript runtime, or WebView.
  */
-private class LoopingMenuVideoView(context: Context) : FrameLayout(context) {
-    private inner class VideoSlot(val index: Int) : TextureView.SurfaceTextureListener {
-        val view = TextureView(context).also { textureView ->
-            textureView.isOpaque = true
-            textureView.surfaceTextureListener = this
-        }
-        var texture: SurfaceTexture? = null
-        var surface: Surface? = null
-        var player: MediaPlayer? = null
-        var prepared = false
-        var videoWidth = 0
-        var videoHeight = 0
-
-        override fun onSurfaceTextureAvailable(
-            surfaceTexture: SurfaceTexture,
-            width: Int,
-            height: Int,
-        ) {
-            texture = surfaceTexture
-            if (isAttachedToWindow) openSlot(this)
-        }
-
-        override fun onSurfaceTextureSizeChanged(
-            surfaceTexture: SurfaceTexture,
-            width: Int,
-            height: Int,
-        ) {
-            applyCenterCrop(this)
-        }
-
-        override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-            releaseSlot(this)
-            texture = null
-            return true
-        }
-
-        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+private class LoopingMenuVideoView(context: Context) :
+    FrameLayout(context),
+    TextureView.SurfaceTextureListener {
+    private val videoView = TextureView(context).apply {
+        isOpaque = true
+        surfaceTextureListener = this@LoopingMenuVideoView
     }
-
+    private val posterView = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        context.assets.open("videos/menu-background-poster.webp").use { stream ->
+            setImageBitmap(BitmapFactory.decodeStream(stream))
+        }
+        alpha = 1f
+    }
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val slots = listOf(VideoSlot(0), VideoSlot(1))
-    private var activeIndex = 0
-    private var transitioning = false
-    private var loopMonitorScheduled = false
+    private var surface: Surface? = null
+    private var player: MediaPlayer? = null
+    private var prepared = false
+    private var restarting = true
+    private var monitorScheduled = false
+    private var videoWidth = 0
+    private var videoHeight = 0
     private val loopMonitor = object : Runnable {
         override fun run() {
-            loopMonitorScheduled = false
-            val active = slots[activeIndex]
+            monitorScheduled = false
+            val currentPlayer = player
             if (
-                !transitioning &&
-                active.prepared &&
-                active.player?.isPlaying == true &&
-                (active.player?.currentPosition ?: 0) >= CROSSFADE_START_MS
+                !restarting &&
+                prepared &&
+                currentPlayer?.isPlaying == true &&
+                currentPlayer.currentPosition >= MASKED_RESTART_MS
             ) {
-                beginDecoderHandoff()
-            }
-            if (windowVisibility == View.VISIBLE && isAttachedToWindow) {
-                scheduleLoopMonitor()
+                beginMaskedRestart()
+            } else if (isAttachedToWindow && windowVisibility == View.VISIBLE) {
+                scheduleMonitor()
             }
         }
     }
 
     init {
         setBackgroundColor(android.graphics.Color.rgb(27, 39, 50))
-        slots.forEach { slot ->
-            slot.view.alpha = if (slot.index == activeIndex) 1f else 0f
-            addView(
-                slot.view,
-                LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
-            )
-        }
+        addView(
+            videoView,
+            LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        addView(
+            posterView,
+            LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        slots.forEach { slot ->
-            if (slot.texture == null && slot.view.isAvailable) {
-                slot.texture = slot.view.surfaceTexture
-            }
-            openSlot(slot)
+        if (surface == null && videoView.isAvailable) {
+            videoView.surfaceTexture?.let { surface = Surface(it) }
         }
+        openPlayer()
     }
 
     override fun onDetachedFromWindow() {
-        stopLoopMonitor()
-        slots.forEach { slot ->
-            slot.view.animate().cancel()
-            releaseSlot(slot)
-        }
-        transitioning = false
+        stopMonitor()
+        releasePlayer()
         super.onDetachedFromWindow()
     }
 
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
         if (visibility == View.VISIBLE) {
-            slots.forEach(::openSlot)
-            val active = slots[activeIndex]
-            if (active.prepared && !transitioning) active.player?.start()
-            scheduleLoopMonitor()
-        } else {
-            stopLoopMonitor()
-            slots.forEach { slot ->
-                if (slot.prepared && slot.player?.isPlaying == true) {
-                    slot.player?.pause()
-                }
+            openPlayer()
+            if (prepared) {
+                player?.start()
+                scheduleMonitor()
             }
+        } else {
+            stopMonitor()
+            if (prepared && player?.isPlaying == true) player?.pause()
         }
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
-        slots.forEach(::applyCenterCrop)
+        applyCenterCrop()
     }
 
-    private fun openSlot(slot: VideoSlot) {
-        val texture = slot.texture ?: return
-        if (slot.player != null) return
-        val surface = Surface(texture)
-        slot.surface = surface
+    override fun onSurfaceTextureAvailable(
+        surfaceTexture: SurfaceTexture,
+        width: Int,
+        height: Int,
+    ) {
+        surface?.release()
+        surface = Surface(surfaceTexture)
+        if (isAttachedToWindow) openPlayer()
+    }
+
+    override fun onSurfaceTextureSizeChanged(
+        surfaceTexture: SurfaceTexture,
+        width: Int,
+        height: Int,
+    ) {
+        applyCenterCrop()
+    }
+
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+        stopMonitor()
+        releasePlayer()
+        surface?.release()
+        surface = null
+        posterView.alpha = 1f
+        restarting = true
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+
+    private fun revealVideo() {
+        mainHandler.postDelayed(
+            {
+                if (!isAttachedToWindow || !prepared) return@postDelayed
+                posterView.animate()
+                    .cancel()
+                posterView.animate()
+                    .alpha(0f)
+                    .setDuration(POSTER_FADE_MS)
+                    .withEndAction {
+                        restarting = false
+                        scheduleMonitor()
+                    }
+                    .start()
+            },
+            DECODER_SETTLE_MS,
+        )
+    }
+
+    private fun beginMaskedRestart() {
+        if (restarting) return
+        restarting = true
+        stopMonitor()
+        posterView.animate().cancel()
+        posterView.animate()
+            .alpha(1f)
+            .setDuration(POSTER_FADE_MS)
+            .withEndAction {
+                if (!isAttachedToWindow) return@withEndAction
+                releasePlayer()
+                openPlayer()
+            }
+            .start()
+    }
+
+    private fun retryMasked() {
+        restarting = true
+        stopMonitor()
+        posterView.animate().cancel()
+        posterView.alpha = 1f
+        releasePlayer()
+        mainHandler.postDelayed(
+            {
+                if (isAttachedToWindow && windowVisibility == View.VISIBLE) {
+                    openPlayer()
+                }
+            },
+            ERROR_RETRY_MS,
+        )
+    }
+
+    private fun openPlayer() {
+        val currentSurface = surface ?: return
+        if (player != null || !isAttachedToWindow) return
         try {
-            slot.player = MediaPlayer().also { mediaPlayer ->
+            player = MediaPlayer().also { mediaPlayer ->
                 context.assets.openFd("videos/menu-background.mp4").use { descriptor ->
                     mediaPlayer.setDataSource(
                         descriptor.fileDescriptor,
@@ -385,133 +438,95 @@ private class LoopingMenuVideoView(context: Context) : FrameLayout(context) {
                         descriptor.length,
                     )
                 }
-                mediaPlayer.setSurface(surface)
+                mediaPlayer.setSurface(currentSurface)
                 mediaPlayer.isLooping = false
                 mediaPlayer.setVolume(0f, 0f)
                 mediaPlayer.setOnPreparedListener {
-                    if (slot.player !== it) return@setOnPreparedListener
-                    slot.prepared = true
-                    slot.videoWidth = it.videoWidth
-                    slot.videoHeight = it.videoHeight
-                    applyCenterCrop(slot)
-                    if (
-                        slot.index == activeIndex &&
-                        !transitioning &&
-                        windowVisibility == View.VISIBLE &&
-                        isAttachedToWindow
-                    ) {
+                    if (player !== it) return@setOnPreparedListener
+                    prepared = true
+                    videoWidth = it.videoWidth
+                    videoHeight = it.videoHeight
+                    applyCenterCrop()
+                    if (windowVisibility == View.VISIBLE && isAttachedToWindow) {
                         it.start()
-                        scheduleLoopMonitor()
                     }
                 }
-                mediaPlayer.setOnVideoSizeChangedListener { _, videoWidth, videoHeight ->
-                    slot.videoWidth = videoWidth
-                    slot.videoHeight = videoHeight
-                    applyCenterCrop(slot)
+                mediaPlayer.setOnVideoSizeChangedListener { _, width, height ->
+                    videoWidth = width
+                    videoHeight = height
+                    applyCenterCrop()
+                }
+                mediaPlayer.setOnInfoListener { _, what, _ ->
+                    if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                        revealVideo()
+                    }
+                    false
                 }
                 mediaPlayer.setOnCompletionListener {
-                    if (slot.index == activeIndex) beginDecoderHandoff()
+                    beginMaskedRestart()
                 }
                 mediaPlayer.setOnErrorListener { _, _, _ ->
-                    val wasActive = slot.index == activeIndex
-                    releaseSlot(slot)
-                    if (wasActive) beginDecoderHandoff()
+                    retryMasked()
                     true
                 }
                 mediaPlayer.prepareAsync()
             }
         } catch (_: Exception) {
-            releaseSlot(slot)
+            retryMasked()
         }
     }
 
-    private fun beginDecoderHandoff() {
-        if (transitioning) return
-        val outgoing = slots[activeIndex]
-        val incoming = slots[1 - activeIndex]
-        if (!incoming.prepared || incoming.player == null) {
-            openSlot(incoming)
-            return
-        }
-
-        transitioning = true
-        incoming.view.animate().cancel()
-        outgoing.view.animate().cancel()
-        incoming.view.bringToFront()
-        incoming.view.alpha = 0f
-        incoming.player?.start()
-        incoming.view.animate()
-            .alpha(1f)
-            .setDuration(CROSSFADE_DURATION_MS)
-            .start()
-        outgoing.view.animate()
-            .alpha(0f)
-            .setDuration(CROSSFADE_DURATION_MS)
-            .withEndAction {
-                if (!isAttachedToWindow) return@withEndAction
-                outgoing.player?.pause()
-                releaseSlot(outgoing)
-                activeIndex = incoming.index
-                transitioning = false
-                openSlot(outgoing)
-                scheduleLoopMonitor()
-            }
-            .start()
-    }
-
-    private fun applyCenterCrop(slot: VideoSlot) {
-        val viewWidth = slot.view.width.toFloat()
-        val viewHeight = slot.view.height.toFloat()
+    private fun applyCenterCrop() {
+        val viewWidth = videoView.width.toFloat()
+        val viewHeight = videoView.height.toFloat()
         if (
             viewWidth <= 0f ||
             viewHeight <= 0f ||
-            slot.videoWidth <= 0 ||
-            slot.videoHeight <= 0
+            videoWidth <= 0 ||
+            videoHeight <= 0
         ) {
             return
         }
-        val videoAspect = slot.videoWidth.toFloat() / slot.videoHeight.toFloat()
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
         val viewAspect = viewWidth / viewHeight
         val scaleX = if (videoAspect > viewAspect) videoAspect / viewAspect else 1f
         val scaleY = if (videoAspect < viewAspect) viewAspect / videoAspect else 1f
-        slot.view.setTransform(
+        videoView.setTransform(
             Matrix().apply {
                 setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
             },
         )
     }
 
-    private fun scheduleLoopMonitor() {
-        if (loopMonitorScheduled) return
-        loopMonitorScheduled = true
+    private fun scheduleMonitor() {
+        if (monitorScheduled) return
+        monitorScheduled = true
         mainHandler.postDelayed(loopMonitor, LOOP_POLL_MS)
     }
 
-    private fun stopLoopMonitor() {
+    private fun stopMonitor() {
         mainHandler.removeCallbacks(loopMonitor)
-        loopMonitorScheduled = false
+        monitorScheduled = false
     }
 
-    private fun releaseSlot(slot: VideoSlot) {
-        slot.prepared = false
-        slot.videoWidth = 0
-        slot.videoHeight = 0
-        slot.player?.setOnPreparedListener(null)
-        slot.player?.setOnVideoSizeChangedListener(null)
-        slot.player?.setOnCompletionListener(null)
-        slot.player?.setOnErrorListener(null)
-        slot.player?.release()
-        slot.player = null
-        slot.surface?.release()
-        slot.surface = null
+    private fun releasePlayer() {
+        prepared = false
+        videoWidth = 0
+        videoHeight = 0
+        player?.setOnPreparedListener(null)
+        player?.setOnVideoSizeChangedListener(null)
+        player?.setOnInfoListener(null)
+        player?.setOnCompletionListener(null)
+        player?.setOnErrorListener(null)
+        player?.release()
+        player = null
     }
 
     private companion object {
-        // Each decoder is retired before MediaCodec sees end-of-stream. The
-        // source's final section already blends back toward its first frame,
-        // so the two surfaces can hand off without changing the scene.
-        const val CROSSFADE_START_MS = 12_000
-        const val CROSSFADE_DURATION_MS = 700L
+        const val MASKED_RESTART_MS = 12_000
         const val LOOP_POLL_MS = 100L
+        const val POSTER_FADE_MS = 220L
+        const val DECODER_SETTLE_MS = 180L
+        const val ERROR_RETRY_MS = 500L
     }
 }
