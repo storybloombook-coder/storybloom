@@ -20,8 +20,19 @@ import { useSceneStore } from './state/sceneStore';
  *  would just be dead code pretending to be a safety net. */
 export function MainScreen({
   onNavigate, initialSceneMode, onSceneModeChange, onSceneError, focused = true,
+  // Live feedback: "language changes throughout the entire app" -- these two
+  // are the ONLY bridge to the app shell's own locale store (src/lib/i18n.ts,
+  // a separate package this one never imports directly, per this package's
+  // own CLAUDE.md). `locale` is the outer, current app-wide language;
+  // `onLocaleChange` reports back up when the 3D scene's OWN toggle fires,
+  // so either side flipping it stays in lockstep with the other.
+  locale: outerLocale, onLocaleChange,
 }) {
   const locale = useSceneStore((s) => s.locale);
+  const setLocale = useSceneStore((s) => s.setLocale);
+  useEffect(() => {
+    if (outerLocale && outerLocale !== locale) setLocale(outerLocale);
+  }, [outerLocale, locale, setLocale]);
   // Flat is the safe default while we don't yet know: flashing the 3D scene
   // even briefly at a reduce-motion user is exactly what that setting exists
   // to prevent.
@@ -60,7 +71,7 @@ export function MainScreen({
     <View style={styles.root}>
       {sceneMode === '3d' && Scene3D ? (
         <ErrorBoundary onError={rescueToFlat}>
-          <Scene3D onNavigate={onNavigate} focused={focused} />
+          <Scene3D onNavigate={onNavigate} focused={focused} onLocaleChange={onLocaleChange} />
         </ErrorBoundary>
       ) : (
         <FlatMenu onNavigate={onNavigate} locale={locale} />

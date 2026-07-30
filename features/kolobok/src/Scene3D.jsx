@@ -41,7 +41,7 @@ const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
 // instead (confirmed by reading react-three-fiber-native's source), which
 // MainScreen's wrapping ErrorBoundary already catches. That's the real
 // rescue path; a second onError plumbing line would just be dead code.
-export function Scene3D({ onNavigate, focused = true }) {
+export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   const activeZone = useSceneStore((s) => s.activeZone);
   const encounter = useSceneStore((s) => s.encounter);
   const narration = useSceneStore((s) => s.narration);
@@ -197,7 +197,14 @@ export function Scene3D({ onNavigate, focused = true }) {
   };
 
   const onMainMenu = () => requestNavigation('/');
-  const onToggleLocale = () => setLocale(locale === 'ru' ? 'en' : 'ru');
+  const onToggleLocale = () => {
+    const next = locale === 'ru' ? 'en' : 'ru';
+    setLocale(next);
+    // Live feedback: "language changes throughout the entire app" -- bubble
+    // this up to the app shell (see MainScreen.jsx's own comment) so the 2D
+    // home screen picks it up too, not just this scene's own store.
+    onLocaleChange?.(next);
+  };
 
   const active = ZONES.find((z) => z.id === activeZone);
   // Story narration wins the bubble slot; interactive dialogue otherwise.

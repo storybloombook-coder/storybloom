@@ -6,6 +6,7 @@ import { router, Stack, useIsFocused } from 'expo-router';
 // features/kolobok is plain JS/JSX by its own CLAUDE.md (no TypeScript
 // migration unless asked) -- untyped (implicit any) from Kolobook's side.
 import { MainScreen } from '../../features/kolobok/src/MainScreen';
+import { useLocaleStore } from '../lib/i18n';
 
 export default function KolobokPreviewScreen() {
   // router.push (below) keeps this screen mounted underneath whatever it
@@ -15,6 +16,12 @@ export default function KolobokPreviewScreen() {
   // while this screen isn't the one on top, same mechanism as its existing
   // AppState background pause.
   const focused = useIsFocused();
+  // Live feedback: "language changes throughout the entire app" -- this
+  // screen is the ONLY place that bridges the app shell's own locale store
+  // to the self-contained kolobok package (which never imports it directly,
+  // per its own CLAUDE.md); see MainScreen.jsx's own comment for the rest.
+  const locale = useLocaleStore((s) => s.locale);
+  const setLocale = useLocaleStore((s) => s.setLocale);
   return (
     <>
       {/* animation: 'fade' -- a cross-dissolve rather than the app's usual
@@ -42,6 +49,8 @@ export default function KolobokPreviewScreen() {
         }}
         focused={focused}
         initialSceneMode="3d"
+        locale={locale}
+        onLocaleChange={setLocale}
       />
     </>
   );
