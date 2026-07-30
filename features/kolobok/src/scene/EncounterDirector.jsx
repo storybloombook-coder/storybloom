@@ -45,15 +45,18 @@ const LINE_KEY = {
  *  back to rest over FORCED_RETREAT_MS (see encounterBeats.js) rather than
  *  snapping it there, live feedback: "the characters should return to
  *  their original positions smoothly." Also: while the autoplaying tale is
- *  running, an interactive tap plays its full approach/react/retreat
- *  animation as always but never sets encounter.line -- narration owns the
- *  bubble slot during story mode, live feedback: "tapping ... should
- *  trigger only an animation, without a dialogue pop-up." */
+ *  running, OR once it has finished (storyCompleted -- Kolobok is gone,
+ *  live feedback: taps on the animals after the tale ends should "just
+ *  make greeting animation", no bubble), an interactive tap plays its full
+ *  approach/react/retreat animation as always but never sets
+ *  encounter.line -- narration owns the bubble slot during story mode
+ *  either way. */
 export function EncounterDirector() {
   const encounter = useSceneStore((s) => s.encounter);
   const setEncounterPhase = useSceneStore((s) => s.setEncounterPhase);
   const setEncounterLine = useSceneStore((s) => s.setEncounterLine);
   const clearEncounter = useSceneStore((s) => s.clearEncounter);
+  const storyCompleted = useSceneStore((s) => s.storyCompleted);
 
   const timelineRef = useRef(null);
   // True while timelineRef holds a forced-retreat (not a real beat) --
@@ -72,11 +75,13 @@ export function EncounterDirector() {
     encounterMotion.phase = 'approach';
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const lineKeys = LINE_KEY[zoneId];
-    // Story mode: this exact tap-triggered beat still plays in full, but
-    // narration (not encounter.line) owns the bubble while the tale is
-    // playing -- so this simply never publishes a line in that case.
+    // Story mode (or storyCompleted -- Kolobok is gone, live feedback):
+    // this exact tap-triggered beat still plays in full, but narration (not
+    // encounter.line) owns the bubble slot while playing, and no bubble at
+    // all should show once the tale's finished -- so this simply never
+    // publishes a line in either case.
     const setLine = (name) => {
-      if (story.mode !== 'playing') setEncounterLine(lineKeys[name]);
+      if (story.mode !== 'playing' && !storyCompleted) setEncounterLine(lineKeys[name]);
     };
     return BEAT_BUILDERS[zoneId]({ setPhase: setEncounterPhase, setLine });
   };
