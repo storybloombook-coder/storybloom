@@ -5,6 +5,7 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeSpeckle } from './textures/proceduralTextures';
 import { hedgehogPool } from './Vegetation';
+import { BlobShadow } from './BlobShadow';
 
 const dummy = new Object3D();
 
@@ -155,6 +156,12 @@ function HedgehogInstance({ slotIndex }) {
   return (
     <group ref={rootRef} visible={false}>
       <mesh geometry={bodyGeometry} material={materials.body} />
+      {/* Live feedback #2: same shared blob shadow every other ground
+          creature/landmark uses. A child of this same group (which already
+          tracks the hedgehog's live position/heading every frame, including
+          the hill-climb elevation) rather than its own separate instanced
+          system, since only ever up to HEDGEHOG_POOL_SIZE are visible at once. */}
+      <BlobShadow radiusX={0.13} radiusZ={0.13} />
       <instancedMesh ref={spinesRef} args={[undefined, undefined, SPINE_COUNT]} material={materials.spines}>
         <coneGeometry args={[0.014, 0.05, 5]} />
       </instancedMesh>

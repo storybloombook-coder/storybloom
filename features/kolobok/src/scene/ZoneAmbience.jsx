@@ -30,6 +30,12 @@ const PUFF_BASE_R = CHIMNEY_PIPE_TOP_R * 2; // sphere diameter = 2x pipe diamete
 const PUFF_SIZE_VARIANCE = 0.2;
 const PUFF_GAP_S = 0.3;
 const PUFF_RISE_S = 3;
+// Live feedback: "the default smoke disappears and bubbles rise; after 6
+// seconds, the smoke continues to billow" -- the normal ambient puffs pause
+// (hidden, not reset -- its own simulation keeps advancing underneath so it
+// picks back up mid-flow rather than restarting) for this whole window,
+// comfortably longer than the 3 bubbles' own ~3.6s rise+stagger.
+const SMOKE_SUPPRESS_S = 6;
 
 export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
   const smokeRef = useRef();
@@ -54,6 +60,9 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   const puffState = useRef({
     seen: eggMotion.chimneySmokeBurst,
     puffs: new Array(PUFF_COUNT).fill(0).map(() => ({ t: 1, radius: PUFF_BASE_R, drift: 0 })),
+    // -1 = normal smoke showing as usual; 0..SMOKE_SUPPRESS_S seconds =
+    // counting up while normal smoke stays hidden.
+    smokeSuppressS: -1,
   });
 
   const grandmaGeometry = useMemo(() => mergeColoredParts([
@@ -81,43 +90,16 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     const s = state.current;
     const now = Date.now();
 
-    // --- Chimney smoke: always on, +30% spawn rate when active, and the
-    // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
-    if (smokeRef.current) {
-      const rate = (isActiveZone ? 1.3 : 1) * storyMotion.smokeBoost;
-      const positions = smokeGeometry.attributes.position;
-      smokeState.current.forEach((p, i) => {
-        p.t += dt * rate * 0.4;
-        if (p.t > 1) {
-          p.t = 0;
-          p.drift = Math.random() * Math.PI * 2;
-        }
-        const rise = p.t * 1.5;
-        const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
-        // Live feedback: "the wind should gently rustle... the smoke" --
-        // same wind.direction-scaled drift convention as GoldenHourExtras'
-        // pollen/DustTrail's puffs, growing with rise (t) so the smoke
-        // visibly leans further downwind the higher it climbs, same as
-        // real chimney smoke, layered on top of the existing flutter sway.
-        const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
-        const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
-        positions.setXYZ(
-          i,
-          chimneyPos[0] + sway + windDriftX,
-          chimneyPos[1] + rise,
-          chimneyPos[2] + sway * 0.6 + windDriftZ,
-        );
-      });
-      positions.needsUpdate = true;
-      smokeGeometry.computeBoundingSphere();
-    }
-
     // Chimney smoke spheres: burst-counter edge-detect starts all 3 puffs at
     // once, each with its own stagger delay (negative t counts up to 0
-    // before it actually starts rising) and its own +/-20% random size.
+    // before it actually starts rising) and its own +/-20% random size --
+    // also starts the normal-smoke suppression window (see smokeSuppressS's
+    // own comment). Runs BEFORE the normal-smoke block below so a fresh
+    // trigger this same frame is already reflected there.
     const pu = puffState.current;
     if (eggMotion.chimneySmokeBurst !== pu.seen) {
       pu.seen = eggMotion.chimneySmokeBurst;
+      pu.smokeSuppressS = 0;
       pu.puffs.forEach((p, i) => {
         p.t = -i * PUFF_GAP_S;
         p.radius = PUFF_BASE_R * (1 + (Math.random() * 2 - 1) * PUFF_SIZE_VARIANCE);
@@ -150,6 +132,49 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         puffRef.current.setMatrixAt(i, dummy.matrix);
       });
       puffRef.current.instanceMatrix.needsUpdate = true;
+    }
+
+    // Live feedback: "the default smoke disappears... after 6 seconds, the
+    // smoke continues to billow" -- advance/expire the suppression window
+    // started above, then hide (not reset) the normal smoke system while
+    // it's active; its own simulation keeps running underneath so it picks
+    // back up mid-flow rather than restarting once it reappears.
+    if (pu.smokeSuppressS >= 0) {
+      pu.smokeSuppressS += dt;
+      if (pu.smokeSuppressS >= SMOKE_SUPPRESS_S) pu.smokeSuppressS = -1;
+    }
+    const smokeSuppressed = pu.smokeSuppressS >= 0;
+
+    // --- Chimney smoke: always on, +30% spawn rate when active, and the
+    // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
+    if (smokeRef.current) {
+      smokeRef.current.visible = !smokeSuppressed;
+      const rate = (isActiveZone ? 1.3 : 1) * storyMotion.smokeBoost;
+      const positions = smokeGeometry.attributes.position;
+      smokeState.current.forEach((p, i) => {
+        p.t += dt * rate * 0.4;
+        if (p.t > 1) {
+          p.t = 0;
+          p.drift = Math.random() * Math.PI * 2;
+        }
+        const rise = p.t * 1.5;
+        const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
+        // Live feedback: "the wind should gently rustle... the smoke" --
+        // same wind.direction-scaled drift convention as GoldenHourExtras'
+        // pollen/DustTrail's puffs, growing with rise (t) so the smoke
+        // visibly leans further downwind the higher it climbs, same as
+        // real chimney smoke, layered on top of the existing flutter sway.
+        const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
+        const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
+        positions.setXYZ(
+          i,
+          chimneyPos[0] + sway + windDriftX,
+          chimneyPos[1] + rise,
+          chimneyPos[2] + sway * 0.6 + windDriftZ,
+        );
+      });
+      positions.needsUpdate = true;
+      smokeGeometry.computeBoundingSphere();
     }
 
     // --- Birth chapter: kneading/shaping motion takes over the same

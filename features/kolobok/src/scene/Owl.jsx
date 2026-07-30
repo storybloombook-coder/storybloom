@@ -24,13 +24,22 @@ const dummy = new Object3D();
 // 'popping' phase; every transition after that happens here.
 const FLAP_HZ = 4.5;
 const FLAP_MAX = (55 * Math.PI) / 180;
-const POP_S = 0.25;
-const DUCK_S = 0.25;
+// Live feedback: "appear smoothly" -- was a raw linear ramp over 250ms,
+// which read as an abrupt snap; eased + a touch longer now.
+const POP_S = 0.4;
 const FLAP_S = 1.4; // "an animation for 1-2 seconds"
-const LOOKAROUND_MAX_S = 3; // auto-ducks if never tapped, same as the original design
+// Live feedback: two DIFFERENT endings now -- if never tapped, it visibly
+// flies back off into the canopy (FLYAWAY_*); if tapped, it flaps then
+// FADES (opacity, not scale) away in place (FADEOUT_S).
+const FLYAWAY_S = 1.2;
+const FLYAWAY_RISE = 0.55; // peak extra height above its perch mid-flight
+const FLYAWAY_DRIFT = 0.3; // peak sideways drift mid-flight
+const FADEOUT_S = 0.4;
+const LOOKAROUND_MAX_S = 3; // auto-flies-away if never tapped, same as the original design
 const LOOKAROUND_SWIVEL_HZ = 0.35;
 const LOOKAROUND_SWIVEL_MAX = (35 * Math.PI) / 180;
 const OWL_HIT_R = 0.22; // generous invisible tap target (mobile)
+const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 // Live feedback: "the owl appears with its wings spread, and nothing
 // happens... it should appear without wings" -- rotation.z=0 (the flap's
 // own rest/center value) is the wing geometry's OWN "spread out to the
@@ -81,12 +90,20 @@ export function Owl() {
     return geo;
   }, []);
 
-  const materials = useMemo(() => ({
-    body: makeToonMaterial({ vertexColors: true, color: '#8a7154', rimStrength: 0.35 }),
-    head: makeToonMaterial({ vertexColors: true, color: '#8a7154', rimStrength: 0.35 }),
-    eyes: makeToonMaterial({ vertexColors: true, color: '#f4f0e6', rimStrength: 0 }),
-    wing: makeToonMaterial({ color: '#6b5540', rimStrength: 0.35 }),
-  }), []);
+  // Live feedback: the tap ending "fades away smoothly" -- needs every
+  // owl material transparent so opacity can be driven uniformly per-frame
+  // below (makeToonMaterial doesn't expose transparent/opacity as
+  // constructor params, set directly on each returned material instead).
+  const materials = useMemo(() => {
+    const m = {
+      body: makeToonMaterial({ vertexColors: true, color: '#8a7154', rimStrength: 0.35 }),
+      head: makeToonMaterial({ vertexColors: true, color: '#8a7154', rimStrength: 0.35 }),
+      eyes: makeToonMaterial({ vertexColors: true, color: '#f4f0e6', rimStrength: 0 }),
+      wing: makeToonMaterial({ color: '#6b5540', rimStrength: 0.35 }),
+    };
+    Object.values(m).forEach((mat) => { mat.transparent = true; });
+    return m;
+  }, []);
 
   const flapPhase = useRef(0);
   const { camera } = useThree();
@@ -116,32 +133,55 @@ export function Owl() {
 
     // Phase progression is entirely local to this component (see
     // eggMotion.owlPhase's own comment) -- popping (pop in) -> lookaround
-    // (head swivels, tappable, auto-ducks if never tapped) -> flapping (the
-    // tap-triggered wing flap) -> ducking (pop back down) -> gone.
+    // (head swivels, tappable) -> EITHER flyaway (never tapped: visibly
+    // flies back off into the canopy) OR flapping -> fadeout (tapped: flaps,
+    // then opacity-fades away in place). Live feedback bug fix: this used to
+    // destructure `const { phase } = eggMotion`, but the field is actually
+    // named `owlPhase` -- `phase` was always undefined, so NONE of these
+    // branches ever ran (owl snapped to full size instantly, never swiveled,
+    // and taps did nothing since owlPhase never actually reached
+    // 'lookaround' either). Reading eggMotion.owlPhase directly instead.
     eggMotion.owlPhaseT += dt;
-    const { phase } = eggMotion;
+    const phase = eggMotion.owlPhase;
     let popT = 1;
     let headYaw = 0;
     let flapAmp = 0;
+    let flyOffsetX = 0;
+    let flyOffsetY = 0;
+    let opacity = 1;
 
     if (phase === 'popping') {
-      popT = Math.min(1, eggMotion.owlPhaseT / POP_S);
+      popT = easeOutCubic(Math.min(1, eggMotion.owlPhaseT / POP_S));
       if (eggMotion.owlPhaseT >= POP_S) { eggMotion.owlPhase = 'lookaround'; eggMotion.owlPhaseT = 0; }
     } else if (phase === 'lookaround') {
       headYaw = Math.sin(eggMotion.owlPhaseT * LOOKAROUND_SWIVEL_HZ * Math.PI * 2) * LOOKAROUND_SWIVEL_MAX;
-      if (eggMotion.owlPhaseT >= LOOKAROUND_MAX_S) { eggMotion.owlPhase = 'ducking'; eggMotion.owlPhaseT = 0; }
+      if (eggMotion.owlPhaseT >= LOOKAROUND_MAX_S) { eggMotion.owlPhase = 'flyaway'; eggMotion.owlPhaseT = 0; }
     } else if (phase === 'flapping') {
       flapAmp = 1;
-      if (eggMotion.owlPhaseT >= FLAP_S) { eggMotion.owlPhase = 'ducking'; eggMotion.owlPhaseT = 0; }
-    } else if (phase === 'ducking') {
-      popT = Math.max(0.001, 1 - eggMotion.owlPhaseT / DUCK_S);
-      if (eggMotion.owlPhaseT >= DUCK_S) { eggMotion.owlPhase = 'idle'; eggMotion.owlTreeIdx = -1; }
+      if (eggMotion.owlPhaseT >= FLAP_S) { eggMotion.owlPhase = 'fadeout'; eggMotion.owlPhaseT = 0; }
+    } else if (phase === 'flyaway') {
+      // Never tapped: it visibly flies off (rises + drifts sideways,
+      // flapping the whole time) then arcs back down and shrinks away into
+      // the canopy, rather than just shrinking in place.
+      const ft = Math.min(1, eggMotion.owlPhaseT / FLYAWAY_S);
+      const arc = Math.sin(ft * Math.PI); // 0 -> 1 -> 0: away, then back down
+      flyOffsetY = arc * FLYAWAY_RISE;
+      flyOffsetX = arc * FLYAWAY_DRIFT;
+      flapAmp = 1;
+      popT = ft < 0.8 ? 1 : Math.max(0.001, 1 - (ft - 0.8) / 0.2);
+      if (eggMotion.owlPhaseT >= FLYAWAY_S) { eggMotion.owlPhase = 'idle'; eggMotion.owlTreeIdx = -1; }
+    } else if (phase === 'fadeout') {
+      // Tapped: stays put, wings settle, opacity fades to nothing.
+      opacity = Math.max(0, 1 - eggMotion.owlPhaseT / FADEOUT_S);
+      if (eggMotion.owlPhaseT >= FADEOUT_S) { eggMotion.owlPhase = 'idle'; eggMotion.owlTreeIdx = -1; }
     }
 
     // Pops UP out of the canopy as popT climbs (starts a touch lower/
-    // smaller, inside the foliage, rises to its perched scale/height).
+    // smaller, inside the foliage, rises to its perched scale/height);
+    // flyOffsetX/Y add the flyaway phase's own rise-and-drift on top.
     rootRef.current.scale.setScalar(Math.max(0.001, popT));
-    rootRef.current.position.y += 0.05 + popT * 0.1;
+    rootRef.current.position.y += 0.05 + popT * 0.1 + flyOffsetY;
+    rootRef.current.position.x += flyOffsetX;
 
     // "It should look in the camera" -- face is on local +Z (see
     // eyeGeometry/beak's own +Z offsets above), so yaw the whole owl
@@ -152,14 +192,19 @@ export function Owl() {
     rootRef.current.rotation.y = Math.atan2(dx, dz);
     if (headRef.current) headRef.current.rotation.y = headYaw;
 
-    // Wing flap: only during the 'flapping' phase now (was continuous
-    // while popped) -- wings stay FOLDED (not just still) through the
-    // look-around, only swinging out to the spread/flapping pose once tapped.
+    // Wing flap: folded through the look-around, extended+flapping during
+    // the tap-triggered flap AND the whole flyaway (a bird flying away
+    // should be flapping).
     flapPhase.current += dt * FLAP_HZ * Math.PI * 2;
-    const wingBase = phase === 'flapping' ? 0 : WING_FOLD_Z;
+    const wingBase = flapAmp > 0 ? 0 : WING_FOLD_Z;
     const flap = Math.sin(flapPhase.current) * FLAP_MAX * flapAmp;
     if (leftWingRef.current) leftWingRef.current.rotation.z = wingBase + flap;
     if (rightWingRef.current) rightWingRef.current.rotation.z = -wingBase - flap;
+
+    materials.body.opacity = opacity;
+    materials.head.opacity = opacity;
+    materials.eyes.opacity = opacity;
+    materials.wing.opacity = opacity;
 
     const isNight = atmosphereLive.windowGlow > 0.5;
     materials.eyes.emissive.set(isNight ? '#ffd27a' : '#000000');

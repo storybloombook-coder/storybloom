@@ -2,7 +2,8 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import * as Haptics from 'expo-haptics';
 import {
-  BufferAttribute, BufferGeometry, Color, ConeGeometry, Object3D, Quaternion, Vector3,
+  BufferAttribute, BufferGeometry, Color, DataTexture, DoubleSide, LinearFilter, Object3D,
+  PlaneGeometry, Quaternion, RGBAFormat, UnsignedByteType, Vector3,
 } from 'three';
 import {
   ISLAND_RADIUS, rad, pointOnCircle, PATH_RADIUS, PATH_HALF_WIDTH,
@@ -10,8 +11,7 @@ import {
 import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement';
 import { makeRng } from './prng';
 import { makeStripes, makeNoiseGrain, makeSpeckle, makeRadialAlphaTexture } from './textures/proceduralTextures';
-import { storyMotion, useSceneStore } from '../state/sceneStore';
-import { mergeColoredParts } from './builders/mergeColoredParts';
+import { storyMotion, useSceneStore, atmosphereLive } from '../state/sceneStore';
 import { windSway, wind } from './wind';
 import { polish } from '../config/devFlags';
 import { getSharedTexture } from './BlobShadow';
@@ -29,6 +29,7 @@ const dummy = new Object3D();
 const tiltAxisTmp = new Vector3();
 const tiltQuatTmp = new Quaternion();
 const offsetTmp = new Vector3();
+const grassColorTmp = new Color();
 
 // Kolobok<->tree collision (live feedback, revised after first pass: trees
 // should slide to the SIDE to make room, not just lean in place, and the
@@ -166,16 +167,64 @@ const GRASS_SWAY_AMPLITUDE = rad(14);
 const TREE_SWAY_AMPLITUDE = rad(2.2);
 const FLOWER_BEND_RADIUS = 0.55; // flowers share the same reaction as grass
 
-/** 3 crossed thin cones -- a cheap "tuft" silhouette that reads from any
- *  angle without a billboard. White base color: instanceColor (set per-
- *  instance below) is the only tint, so it comes through unmodified. */
-export function makeGrassTuftGeometry() {
-  return mergeColoredParts([0, 60, 120].map((deg) => ({
-    geometry: new ConeGeometry(0.015, 0.18, 4),
-    color: '#ffffff',
-    position: [0, 0.09, 0],
-    rotation: [0, rad(deg), 0],
-  })));
+// Live feedback: "make the grass using the same principle as the tree
+// background -- overlay two 2D texture sprites, the grass is barely
+// visible" -- was 3 crossed thin cone silhouettes; now a procedurally-
+// generated alpha-cutout blade-cluster texture (BackgroundForest.jsx's own
+// makeTreeSpriteTexture technique) on a cross of two flat planes per tuft,
+// same "whichever plane is more edge-on still shows a full silhouette from
+// the other one" reasoning. White base color: instanceColor (set per-frame
+// below, now with the SAME day/night brightness multiply BackgroundForest.jsx
+// uses, since an unlit sprite -- unlike the old lit cone geometry -- never
+// dims with the scene's own lighting otherwise) is the only tint.
+const GRASS_SPRITE_W = 16;
+const GRASS_SPRITE_H = 24;
+const GRASS_BLADE_COUNT = 5;
+function makeGrassSpriteTexture() {
+  const rng = makeRng(96);
+  const blades = new Array(GRASS_BLADE_COUNT).fill(0).map((_, i) => ({
+    baseU: -0.75 + (i / (GRASS_BLADE_COUNT - 1)) * 1.5 + (rng() - 0.5) * 0.2,
+    bend: (rng() - 0.5) * 0.6,
+    height: 0.7 + rng() * 0.3,
+    width: 0.09 + rng() * 0.05,
+  }));
+  const data = new Uint8Array(GRASS_SPRITE_W * GRASS_SPRITE_H * 4);
+  for (let y = 0; y < GRASS_SPRITE_H; y++) {
+    const v = y / (GRASS_SPRITE_H - 1); // 0 = bottom (root), 1 = top
+    for (let x = 0; x < GRASS_SPRITE_W; x++) {
+      const u = (x / (GRASS_SPRITE_W - 1)) * 2 - 1; // -1..1
+      let inside = false;
+      for (const b of blades) {
+        if (v > b.height) continue;
+        const bv = v / b.height;
+        const center = b.baseU + Math.sin(bv * Math.PI * 0.5) * b.bend;
+        const width = b.width * (1 - bv * 0.85); // tapers toward the tip
+        if (Math.abs(u - center) < width) { inside = true; break; }
+      }
+      const o = (y * GRASS_SPRITE_W + x) * 4;
+      data[o] = 0xff;
+      data[o + 1] = 0xff;
+      data[o + 2] = 0xff;
+      data[o + 3] = inside ? 255 : 0;
+    }
+  }
+  const texture = new DataTexture(data, GRASS_SPRITE_W, GRASS_SPRITE_H, RGBAFormat, UnsignedByteType);
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+// Plane is 0.22 wide x 0.2 tall, translated up by half its height so the
+// geometry's own local origin (0,0,0) sits at the BOTTOM edge (the root) --
+// matching how the old merged-cone tuft's cones were already offset from
+// y=0, so bend-away/wind-sway tilts (applied to the whole instance
+// transform) correctly hinge from the ground point, not the blade's middle.
+const GRASS_SPRITE_W_WORLD = 0.22;
+const GRASS_SPRITE_H_WORLD = 0.2;
+function makeGrassSpriteGeometry() {
+  const geo = new PlaneGeometry(GRASS_SPRITE_W_WORLD, GRASS_SPRITE_H_WORLD);
+  geo.translate(0, GRASS_SPRITE_H_WORLD / 2, 0);
+  return geo;
 }
 
 /** One transform per plant: angle (deg), radius, uniform-ish scale, and a
@@ -405,6 +454,7 @@ export function Vegetation() {
   // hedgehogs" means several could be taken/hiding/respawning at once.
   const mushroomStemRef = useRef();
   const mushroomCapRef = useRef();
+  const mushroomShadowRef = useRef();
   const mushroomGround = useRef(mushroom.map(() => ({ reserved: false, hiddenMs: -1 })));
   const mushroomStemM = useMemo(
     () => mushroom.map((p, i) => matrixAt(p, [0, 0.05, 0], [1, 1, 1], mushroomGroundY[i])),
@@ -413,6 +463,21 @@ export function Vegetation() {
   const mushroomCapM = useMemo(
     () => mushroom.map((p, i) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1], mushroomGroundY[i])),
     [mushroom, mushroomGroundY],
+  );
+  // Live feedback #3/#4: declared here (alongside stem/cap, not down with
+  // birch/spruce's own static shadows further below) since the pop-out
+  // useFrame block above needs to read it too, and referencing a later
+  // declaration from an earlier closure is exactly the "accessed before
+  // declared" pattern already flagged elsewhere in this file (e.g.
+  // flowerColors) -- cheap to just avoid it here instead.
+  const mushroomShadowM = useMemo(
+    () => mushroom.map((p, i) => shadowMatrixAt(
+      mushroomWorldXZ[i][0],
+      mushroomWorldXZ[i][1],
+      MUSHROOM_SHADOW_R * p.scale,
+      mushroomGroundY[i],
+    )),
+    [mushroom, mushroomWorldXZ, mushroomGroundY],
   );
 
   /** Live feedback #7: tapping a mushroom sends the next free hedgehog-pool
@@ -761,6 +826,18 @@ export function Vegetation() {
         mushroomCapRef.current.setMatrixAt(idx, dummy.matrix);
         mushroomCapRef.current.instanceMatrix.needsUpdate = true;
       }
+      // Live feedback #4: the shadow disappears/reappears WITH the mushroom
+      // now (was static -- matching birch/spruce's own shadows, which never
+      // needed this since trees never hide -- but a taken/respawning
+      // mushroom leaving its shadow behind read as a shadow with no object).
+      if (mushroomShadowRef.current) {
+        dummy.matrix.copy(mushroomShadowM[idx]);
+        dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+        dummy.scale.multiplyScalar(popScale);
+        dummy.updateMatrix();
+        mushroomShadowRef.current.setMatrixAt(idx, dummy.matrix);
+        mushroomShadowRef.current.instanceMatrix.needsUpdate = true;
+      }
       if (g.hiddenMs >= MUSHROOM_HIDE_MS + MUSHROOM_POP_MS) {
         g.hiddenMs = -1;
         g.reserved = false;
@@ -795,9 +872,12 @@ export function Vegetation() {
       const radius = ISLAND_RADIUS * (0.3 + rng() * 0.6);
       const [x, , z] = pointOnCircle(radius, angleRad);
       // Live feedback #1: rest on the actual terrain height under each tuft
-      // (hills/pits), not flat Y=0.
+      // (hills/pits), not flat Y=0. crossAngle: this tuft's own second-plane
+      // offset (BackgroundForest.jsx's own "varied per-tree, not a fixed
+      // 90deg" reasoning -- a fixed cross reads as identical rows of tufts
+      // from a fixed camera angle).
       return {
-        x, z, yaw: rng() * Math.PI * 2, y: groundHeightAt(x, z),
+        x, z, yaw: rng() * Math.PI * 2, y: groundHeightAt(x, z), crossAngle: rad(70) + rng() * rad(40),
       };
     });
   }, []);
@@ -807,7 +887,8 @@ export function Vegetation() {
     const c2 = new Color('#86b25f');
     return grass.map(() => c1.clone().lerp(c2, rng()));
   }, [grass]);
-  const grassGeometry = useMemo(() => makeGrassTuftGeometry(), []);
+  const grassTexture = useMemo(() => makeGrassSpriteTexture(), []);
+  const grassGeometry = useMemo(() => makeGrassSpriteGeometry(), []);
   const grassRef = useRef();
   const grassBend = useRef(grass.map(() => ({ t: -1, ax: 0, az: 0 })));
   const flowerWorldXZ = useMemo(
@@ -830,6 +911,11 @@ export function Vegetation() {
 
     if (grassRef.current) {
       const mesh = grassRef.current;
+      // Live feedback: unlit sprite material (needed for the alpha-cutout
+      // texture) doesn't dim with the scene's own lighting like the old lit
+      // cone geometry did -- reuse BackgroundForest.jsx's own dirInt-based
+      // brightness multiplier so grass still darkens at night.
+      const brightness = Math.min(1, atmosphereLive.dirInt);
       grass.forEach((g, i) => {
         const b = grassBend.current[i];
         if (b.t < 0) {
@@ -848,22 +934,30 @@ export function Vegetation() {
         }
         const swayAngle = windSway(g.x, g.z, clock, GRASS_SWAY_AMPLITUDE);
 
-        dummy.position.set(g.x, g.y, g.z);
-        dummy.rotation.set(0, g.yaw, 0);
-        if (swayAngle) {
-          tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
-          tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);
-          dummy.quaternion.premultiply(tiltQuatTmp);
-        }
-        if (bendAngle) {
-          tiltAxisTmp.set(b.az, 0, -b.ax).normalize();
-          tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, bendAngle);
-          dummy.quaternion.premultiply(tiltQuatTmp);
-        }
-        dummy.updateMatrix();
-        mesh.setMatrixAt(i, dummy.matrix);
+        // Two cross-planes per tuft (BackgroundForest.jsx's own technique)
+        // -- same position/tilt, only the base yaw differs between them.
+        [0, g.crossAngle].forEach((extraYaw, k) => {
+          dummy.position.set(g.x, g.y, g.z);
+          dummy.rotation.set(0, g.yaw + extraYaw, 0);
+          if (swayAngle) {
+            tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
+            tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);
+            dummy.quaternion.premultiply(tiltQuatTmp);
+          }
+          if (bendAngle) {
+            tiltAxisTmp.set(b.az, 0, -b.ax).normalize();
+            tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, bendAngle);
+            dummy.quaternion.premultiply(tiltQuatTmp);
+          }
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i * 2 + k, dummy.matrix);
+        });
+        grassColorTmp.copy(grassColors[i]).multiplyScalar(brightness);
+        mesh.setColorAt(i * 2, grassColorTmp);
+        mesh.setColorAt(i * 2 + 1, grassColorTmp);
       });
       mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
 
     // Flowers share the grass tufts' bend-away reaction (POLISH_SPEC §4);
@@ -946,22 +1040,28 @@ export function Vegetation() {
   );
 
   const shadowTexture = useMemo(() => getSharedTexture(), []);
+  // Live feedback: "blob shadows from birch trees should be visible on
+  // hills if applicable" -- these were still flat Y=0.02 (unlike the
+  // mushroom/flower/grass fix earlier), so a tree's shadow sitting on a
+  // hill would clip below the hill's own raised surface instead of resting
+  // on it. Same groundHeightAt fix applied to spruce's shadow too, same bug.
   const birchShadowM = useMemo(
-    () => birch.map((p, i) => shadowMatrixAt(birchWorldXZ[i][0], birchWorldXZ[i][1], BIRCH_SHADOW_R * p.scale)),
+    () => birch.map((p, i) => shadowMatrixAt(
+      birchWorldXZ[i][0],
+      birchWorldXZ[i][1],
+      BIRCH_SHADOW_R * p.scale,
+      groundHeightAt(birchWorldXZ[i][0], birchWorldXZ[i][1]),
+    )),
     [birch, birchWorldXZ],
   );
   const spruceShadowM = useMemo(
-    () => spruce.map((p, i) => shadowMatrixAt(spruceWorldXZ[i][0], spruceWorldXZ[i][1], SPRUCE_SHADOW_R * p.scale)),
-    [spruce, spruceWorldXZ],
-  );
-  const mushroomShadowM = useMemo(
-    () => mushroom.map((p, i) => shadowMatrixAt(
-      mushroomWorldXZ[i][0],
-      mushroomWorldXZ[i][1],
-      MUSHROOM_SHADOW_R * p.scale,
-      mushroomGroundY[i],
+    () => spruce.map((p, i) => shadowMatrixAt(
+      spruceWorldXZ[i][0],
+      spruceWorldXZ[i][1],
+      SPRUCE_SHADOW_R * p.scale,
+      groundHeightAt(spruceWorldXZ[i][0], spruceWorldXZ[i][1]),
     )),
-    [mushroom, mushroomWorldXZ, mushroomGroundY],
+    [spruce, spruceWorldXZ],
   );
 
   const bushPositions = useMemo(() => {
@@ -1025,15 +1125,16 @@ export function Vegetation() {
             <planeGeometry args={[1, 1]} />
             <meshBasicMaterial map={shadowTexture} color="#1e1a14" transparent opacity={0.276} depthWrite={false} />
           </instancedMesh>
-          {/* Live feedback #3: mushrooms get the same treatment -- static,
-              like birch/spruce's own shadows above (the mushroom's own
-              pop-out/hide/respawn animation doesn't need the shadow to
-              follow it, matching the established precedent). */}
+          {/* Live feedback #3/#4: mushrooms get the same shadow treatment as
+              birch/spruce, but re-driven per-frame (see the pop-out/hide/
+              respawn useFrame block above) so it disappears/reappears WITH
+              the mushroom instead of staying static underneath a hidden one. */}
           <instancedMesh
             args={[undefined, undefined, mushroomShadowM.length]}
             renderOrder={1}
             ref={(mesh) => {
               if (!mesh) return;
+              mushroomShadowRef.current = mesh;
               mushroomShadowM.forEach((m, i) => mesh.setMatrixAt(i, m));
               mesh.instanceMatrix.needsUpdate = true;
             }}
@@ -1131,19 +1232,16 @@ export function Vegetation() {
         <meshStandardMaterial roughness={0.7} />
       </InstancedPart>
 
-      {/* Grass tufts (POLISH_SPEC §4): wind sway + bend-away from Kolobok,
-          both applied per-frame above -- no static initial matrices needed
-          since the useFrame writes every instance every frame from mount. */}
+      {/* Grass tufts: alpha-cutout sprite cross (2 planes/tuft, live
+          feedback -- "same principle as the tree background"), wind sway +
+          bend-away from Kolobok + the day/night brightness tint all applied
+          per-frame above -- no static initial matrices/colors needed since
+          the useFrame writes every instance every frame from mount. */}
       <instancedMesh
-        ref={(mesh) => {
-          grassRef.current = mesh;
-          if (!mesh) return;
-          grassColors.forEach((c, i) => mesh.setColorAt(i, c));
-          if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-        }}
-        args={[grassGeometry, undefined, GRASS_COUNT]}
+        ref={(mesh) => { grassRef.current = mesh; }}
+        args={[grassGeometry, undefined, GRASS_COUNT * 2]}
       >
-        <meshStandardMaterial vertexColors roughness={0.85} />
+        <meshBasicMaterial map={grassTexture} vertexColors transparent alphaTest={0.4} side={DoubleSide} />
       </instancedMesh>
     </group>
   );

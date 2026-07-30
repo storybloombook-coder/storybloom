@@ -18,14 +18,14 @@ export const eggMotion = {
   headShake: 0,    // grandpa head shake amount (boot catch)
 
   // owl (EASTER_EGGS.md §2 owl). Live feedback: now a two-stage interaction
-  // (appear + look around, THEN a separate tap triggers the wing flap, THEN
-  // it ducks away) rather than one fixed-length auto-playing beat -- that
-  // needs to react to an interrupt (the tap) mid-flight, which a linear
-  // createTimeline can't express, so Owl.jsx now owns its OWN phase
-  // progression entirely (reading/writing these fields directly every
-  // frame) instead of a timeline driving eggMotion.owlPopT from the outside.
+  // (appear + look around, THEN either a tap triggers the wing flap + fade,
+  // OR it times out and flies away) rather than one fixed-length auto-
+  // playing beat -- that needs to react to an interrupt (the tap) mid-
+  // flight, which a linear createTimeline can't express, so Owl.jsx now owns
+  // its OWN phase progression entirely (reading/writing these fields
+  // directly every frame) instead of a timeline driving it from the outside.
   owlTreeIdx: -1,       // which spruce is hosting the owl, -1 = none
-  owlPhase: 'idle',     // 'idle' | 'popping' | 'lookaround' | 'flapping' | 'ducking'
+  owlPhase: 'idle',     // 'idle' | 'popping' | 'lookaround' | 'flapping' | 'flyaway' | 'fadeout'
   owlPhaseT: 0,         // seconds elapsed in the CURRENT phase
 
   // hedgehog (live feedback #7 rework): "any number of hedgehogs" simultaneous
