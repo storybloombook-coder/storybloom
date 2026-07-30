@@ -171,6 +171,7 @@ export function Kolobok() {
 
   const sing = useSceneStore((s) => s.sing);
   const encounter = useSceneStore((s) => s.encounter);
+  const clearEncounter = useSceneStore((s) => s.clearEncounter);
   const doughTexture = useMemo(() => makeDoughTexture(), []);
   const specularTexture = useMemo(() => makeRadialAlphaTexture(), []);
   const browGeometry = useMemo(() => makeBrowGeometry(), []);
@@ -388,6 +389,14 @@ export function Kolobok() {
       if (s.singT >= SING_DURATION_SEC) {
         s.singing = false;
         s.expressionTarget = EXPRESSIONS.neutral;
+        // Live feedback: "shorter cooldown" -- tap-to-sing's own `encounter`
+        // (unlike a zone tap) is never cleared by EncounterDirector (Kolobok
+        // isn't one of its BEAT_BUILDERS), so without this the very first
+        // tap left `encounter.id === 'kolobok'` set FOREVER, permanently
+        // blocking onTap's own re-trigger guard below. Only clear it if
+        // it's still THIS encounter (a zone tap since then already took
+        // over `encounter` otherwise, and that shouldn't be stomped on).
+        if (encounter?.id === 'kolobok') clearEncounter();
       }
     }
 

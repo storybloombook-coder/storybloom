@@ -223,36 +223,45 @@ export function BackgroundForest() {
 
   useFrame(() => {
     const hor = atmosphereLive.horizon;
+    // Live feedback: the background forest/hills/ground read as too bright
+    // at night -- these are all unlit meshBasicMaterial (cheap distant
+    // scenery), so unlike the rest of the scene they never dim with the
+    // real directional/ambient light. dirInt IS that light's own live
+    // intensity (1.1 day .. 0.35 night per atmosphere.js's PALETTES), so
+    // reusing it here as a brightness multiplier makes this background
+    // darken right along with everything else instead of staying lit.
+    // Clamped to 1 so day (dirInt 1.1) never gets BRIGHTER than authored.
+    const brightness = Math.min(1, atmosphereLive.dirInt);
     ringBaseUnit.forEach((base, i) => {
       const mat = ringMatRefs.current[i];
       if (!mat) return;
       mat.color.setRGB(
-        lerp(base[0], hor[0], ALL_RINGS[i].k),
-        lerp(base[1], hor[1], ALL_RINGS[i].k),
-        lerp(base[2], hor[2], ALL_RINGS[i].k),
+        lerp(base[0], hor[0], ALL_RINGS[i].k) * brightness,
+        lerp(base[1], hor[1], ALL_RINGS[i].k) * brightness,
+        lerp(base[2], hor[2], ALL_RINGS[i].k) * brightness,
       );
     });
     if (bushMatRef.current) {
       bushMatRef.current.color.setRGB(
-        lerp(bushBaseUnit[0], hor[0], BUSHES.k),
-        lerp(bushBaseUnit[1], hor[1], BUSHES.k),
-        lerp(bushBaseUnit[2], hor[2], BUSHES.k),
+        lerp(bushBaseUnit[0], hor[0], BUSHES.k) * brightness,
+        lerp(bushBaseUnit[1], hor[1], BUSHES.k) * brightness,
+        lerp(bushBaseUnit[2], hor[2], BUSHES.k) * brightness,
       );
     }
     if (hillsMatRef.current) {
       hillsMatRef.current.color.setRGB(
-        lerp(hillsBaseUnit[0], hor[0], HILLS_K),
-        lerp(hillsBaseUnit[1], hor[1], HILLS_K),
-        lerp(hillsBaseUnit[2], hor[2], HILLS_K),
+        lerp(hillsBaseUnit[0], hor[0], HILLS_K) * brightness,
+        lerp(hillsBaseUnit[1], hor[1], HILLS_K) * brightness,
+        lerp(hillsBaseUnit[2], hor[2], HILLS_K) * brightness,
       );
     }
     groundBaseUnit.forEach((base, i) => {
       const mat = groundMatRefs.current[i];
       if (!mat) return;
       mat.color.setRGB(
-        lerp(base[0], hor[0], GROUND_BANDS[i].k),
-        lerp(base[1], hor[1], GROUND_BANDS[i].k),
-        lerp(base[2], hor[2], GROUND_BANDS[i].k),
+        lerp(base[0], hor[0], GROUND_BANDS[i].k) * brightness,
+        lerp(base[1], hor[1], GROUND_BANDS[i].k) * brightness,
+        lerp(base[2], hor[2], GROUND_BANDS[i].k) * brightness,
       );
     });
   });
