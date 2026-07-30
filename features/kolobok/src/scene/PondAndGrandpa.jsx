@@ -20,6 +20,14 @@ const dummy = new Object3D();
 // since it's a single static merged geometry, not an instanced one.
 const tiltAxisTmp = new Vector3();
 const tiltQuatTmp = new Quaternion();
+// Scratch objects for the fishing line's own per-frame update (tip end
+// tracks the live, animated rod tip; float end stays fixed) -- see the
+// lineRef block in useFrame below.
+const lineTipTmp = new Vector3();
+const lineMidTmp = new Vector3();
+const lineDirTmp = new Vector3();
+const lineQuatTmp = new Quaternion();
+const UP_AXIS = new Vector3(0, 1, 0);
 
 // ART_SPEC §14: pond at 324 deg, radius 5.6 (the free arc between fox and
 // izba, rim side of the path).
@@ -72,12 +80,6 @@ const ROD_LENGTH = 0.7; // matches the rod cylinder's own length below
 // position, below) -- the rod's REAR, where both hands hold it -- so it
 // never moves even as the rod sweeps/pitches. Both arms reach here.
 const GRANDPA_GRIP = [0.14, 0.45, 0.12];
-
-// The rod's FRONT tip at rest = grip + the rod's own length rotated by the
-// rest angle. The fishing line hangs from here down to the float.
-const ROD_TIP_REST = new Vector3(0, ROD_LENGTH, 0)
-  .applyAxisAngle(new Vector3(1, 0, 0), ROD_REST_ANGLE)
-  .add(new Vector3(...GRANDPA_GRIP));
 
 // The float (floatRef below) lives in the POND group's space, but the line
 // is drawn inside Grandpa's own (translated + rad(35)-yawed) group -- so
@@ -202,6 +204,7 @@ function makeBlobDiscGeometry(baseRadius, profile) {
  *  animation driven by eggMotion. 6 draw calls. */
 export function PondAndGrandpa() {
   const rodRef = useRef();
+  const lineRef = useRef();
   const floatRef = useRef();
   const fishRef = useRef();
   const fishMatRef = useRef();
@@ -406,9 +409,13 @@ export function PondAndGrandpa() {
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#4a4038', position: [-0.08, 0.06, 0.12] },
     segmentPart([-0.14, 0.62, 0.04], GRANDPA_GRIP, 0.045, '#8a7862'), // left arm -> grip
     segmentPart([0.14, 0.62, 0.04], GRANDPA_GRIP, 0.045, '#8a7862'),  // right arm -> grip
-    // Fishing line: from the rod's front tip out to the float on the water.
-    segmentPart(ROD_TIP_REST, FLOAT_GRANDPA_LOCAL, 0.004, '#e8e4da', false),
   ]), []);
+  // Live feedback: the line must stay attached to the rod's tip as it
+  // rises/falls (recast sweep, catch rodPitch), not just be baked at rest --
+  // so it's a separate, per-frame-updated mesh (see the lineRef block in
+  // useFrame) instead of a static part of grandpaGeometry. Unit cylinder
+  // (height 1, centered on Y) scaled/rotated/positioned live each frame.
+  const lineGeometry = useMemo(() => new CylinderGeometry(0.004, 0.004, 1, 5), []);
 
   const headGeometry = useMemo(() => mergeColoredParts([
     { geometry: new SphereGeometry(0.13, 10, 8), color: '#e8c8a8', position: [0, 0, 0] },
@@ -436,6 +443,10 @@ export function PondAndGrandpa() {
     body: makeToonMaterial({ vertexColors: true, color: '#8a7862', rimStrength: 0.35 }),
     head: makeToonMaterial({ vertexColors: true, color: '#e8c8a8', rimStrength: 0.35 }),
     rod: makeToonMaterial({ vertexColors: true, color: '#6b4c33', rimStrength: 0.35 }),
+    // Plain (non-vertexColors) tiny prop, matching how the line was colored
+    // before -- its own lineGeometry carries no per-vertex color attribute,
+    // unlike the merged, vertex-colored grandpaGeometry/rodGeometry.
+    line: makeToonMaterial({ color: '#e8e4da', rimStrength: 0 }),
   }), []);
 
   const state = useRef({
@@ -512,6 +523,21 @@ export function PondAndGrandpa() {
     const recastSweep = s.recastT >= 0 ? Math.sin(s.recastT * Math.PI) * rad(35) : 0;
 
     if (rodRef.current) rodRef.current.rotation.x = ROD_REST_ANGLE + recastSweep + eggMotion.rodPitch;
+    // Live feedback: the line must always stay attached to the rod's tip as
+    // it rises/falls, not hang from a fixed rest point -- read the tip back
+    // from the rod group's OWN just-set transform (rotation.x above already
+    // synced its quaternion) rather than re-deriving the angle by hand.
+    if (rodRef.current && lineRef.current) {
+      lineTipTmp.set(0, ROD_LENGTH, 0).applyQuaternion(rodRef.current.quaternion).add(rodRef.current.position);
+      lineMidTmp.copy(lineTipTmp).lerp(FLOAT_GRANDPA_LOCAL, 0.5);
+      lineDirTmp.copy(FLOAT_GRANDPA_LOCAL).sub(lineTipTmp);
+      const lineLength = Math.max(0.001, lineDirTmp.length());
+      lineDirTmp.normalize();
+      lineQuatTmp.setFromUnitVectors(UP_AXIS, lineDirTmp);
+      lineRef.current.position.copy(lineMidTmp);
+      lineRef.current.quaternion.copy(lineQuatTmp);
+      lineRef.current.scale.set(1, lineLength, 1);
+    }
     if (headRef.current) headRef.current.rotation.z = eggMotion.headShake;
 
     // Float: gentle bob, lifted by the yank.
@@ -691,6 +717,12 @@ export function PondAndGrandpa() {
         <group ref={rodRef} position={GRANDPA_GRIP} rotation={[ROD_REST_ANGLE, 0, 0]}>
           <mesh geometry={rodGeometry} material={grandpaMaterials.rod} />
         </group>
+        {/* Fishing line -- a sibling of the rod group, not nested inside it:
+            its own per-frame position/rotation/scale (set in useFrame above)
+            are already fully resolved in Grandpa-group-local space (reading
+            rodRef's OWN transform to find the live tip), matching
+            FLOAT_GRANDPA_LOCAL's own frame. */}
+        <mesh ref={lineRef} geometry={lineGeometry} material={grandpaMaterials.line} />
         {/* Generous hitbox -- live feedback: 0.8 was still hard to land on
             mobile, enlarged further. */}
         <mesh position={[0, 0.4, 0]} visible={false}>

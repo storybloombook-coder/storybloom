@@ -8,7 +8,7 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
 import { eggMotion } from './easterEggs';
-import { makeRingAlphaTexture } from './textures/proceduralTextures';
+import { makeRadialAlphaTexture } from './textures/proceduralTextures';
 
 const dummy = new Object3D();
 
@@ -39,11 +39,11 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   );
 
   const ringRef = useRef();
-  // Live feedback: the default bandWidth (0.35, almost the whole disc) made
-  // this read as a soft blob indistinguishable from normal smoke -- a
-  // narrower band gives a genuinely see-through hole with a crisp bright
-  // ring around it.
-  const ringTexture = useMemo(() => makeRingAlphaTexture(24, 0.6, 0.15), []);
+  // Live feedback: the ring-shaped texture read as basically invisible at
+  // any size -- swapped for the same solid radial-falloff blob normal
+  // smoke uses, just bigger (see the pointsMaterial size below), so the
+  // "special" puffs read as clearly larger smoke spheres instead.
+  const ringTexture = useMemo(() => makeRadialAlphaTexture(24), []);
   const ringGeometry = useMemo(() => {
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(new Float32Array(RING_COUNT * 3), 3));
@@ -220,10 +220,9 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.55} depthWrite={false} />
       </points>
       <points ref={ringRef} geometry={ringGeometry}>
-        {/* Clearly bigger than the normal smoke puffs (size=0.18) -- ART_SPEC
-            calls for "2x size", pushed further so it reads unmistakably. A
-            darker soot gray (not near-white) so the ring contrasts against
-            the bright sky instead of washing out into it. */}
+        {/* Live feedback: rings were invisible -- these are now just clearly
+            bigger smoke puffs (3x+ the normal size=0.18), same darker soot
+            gray for contrast against the bright sky. */}
         <pointsMaterial map={ringTexture} color="#7a756c" size={0.6} transparent opacity={0.95} depthWrite={false} />
       </points>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
