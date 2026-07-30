@@ -60,11 +60,19 @@ export function KolobokParticles() {
   const state = useRef({
     notes: new Array(NOTE_COUNT).fill(0).map(() => ({ t: 2, dx: 0, dz: 0 })), // t > life = dead
     nextNoteIn: 0,
-    noteBurstWas: 0,
+    // Live feedback: "an explosion as Kolobok disappears" on returning to the
+    // 3D scene -- storyMotion.*BurstId are module-level and outlive this
+    // component's own mount/unmount (leaving the pond, coming back), but
+    // hardcoding these trackers to 0 meant a fresh mount always saw a leftover
+    // nonzero counter from a PRIOR session as "a brand new burst just
+    // happened" and replayed it immediately. Seeding each tracker from the
+    // counter's CURRENT value at mount time instead means only a genuinely
+    // NEW increment after that point ever fires.
+    noteBurstWas: storyMotion.noteBurstId,
     burstQueue: 0,
     dust: new Array(DUST_COUNT).fill(0).map(() => ({ t: 2, dx: 0, dz: 0 })),
-    dustBurstWas: 0,
-    catchBurstWas: 0,
+    dustBurstWas: storyMotion.dustBurstId,
+    catchBurstWas: storyMotion.catchBurstId,
     rayT: RAY_LIFE + 1,
     rayOrigin: [0, 0, 0],
     rayCount: 0,

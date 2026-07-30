@@ -112,10 +112,15 @@ export function Sky() {
     geo.setAttribute('position', new BufferAttribute(new Float32Array(DRIZZLE_COUNT * 3), 3));
     return geo;
   }, []);
+  // moonWinkSeen/cloudDrizzleSeen seeded from the counters' current values,
+  // not 0 -- otherwise a fresh mount (leaving/returning to the 3D scene)
+  // would misread a leftover nonzero burst from a PRIOR mount as a
+  // brand-new trigger and replay it (same class of bug as the fox-catch
+  // "explosion" fixed in KolobokParticles.jsx).
   const eggUi = useRef({
-    moonWinkSeen: 0,
+    moonWinkSeen: eggMotion.moonWinkBurst,
     moonWinkMs: -1,
-    cloudDrizzleSeen: 0,
+    cloudDrizzleSeen: eggMotion.cloudDrizzleBurst,
     cloudDrizzleMs: -1,
     drizzleState: new Array(DRIZZLE_COUNT).fill(0).map(() => ({ t: Math.random() })),
   });

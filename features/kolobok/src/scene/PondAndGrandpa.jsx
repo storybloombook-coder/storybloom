@@ -453,7 +453,12 @@ export function PondAndGrandpa() {
     nextRecastIn: 8,
     recastT: -1,
     ripples: new Array(RIPPLE_COUNT).fill(0).map(() => ({ t: 2 })),
-    rippleWas: 0,
+    // Live feedback: "an explosion as Kolobok disappears" on returning to the
+    // 3D scene, root-caused in KolobokParticles.jsx to burst trackers
+    // hardcoded to 0 misreading a leftover nonzero eggMotion counter from a
+    // PRIOR mount as a fresh trigger -- same fix here: seed from the
+    // counter's current value instead.
+    rippleWas: eggMotion.rippleBurst,
   });
 
   // POLISH_SPEC §5 pond glint + ambient fish splash (no Grandpa involvement

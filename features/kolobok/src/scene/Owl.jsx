@@ -50,7 +50,10 @@ export function Owl() {
     eyes: makeToonMaterial({ vertexColors: true, color: '#f4f0e6', rimStrength: 0 }),
   }), []);
 
-  const ui = useRef({ blinkSeen: 0, blinkMs: -1, pulseMs: -1 });
+  // blinkSeen seeded from the counter's current value, not 0 -- otherwise a
+  // fresh mount (leaving/returning to the 3D scene) would misread a leftover
+  // nonzero burst from a PRIOR mount as a brand-new trigger and replay it.
+  const ui = useRef({ blinkSeen: eggMotion.owlBlinkBurst, blinkMs: -1, pulseMs: -1 });
   const { camera } = useThree();
 
   useFrame((_, delta) => {
