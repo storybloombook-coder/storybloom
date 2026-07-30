@@ -28,10 +28,6 @@ export const eggMotion = {
   // moon-wink (EASTER_EGGS.md §2 moon-wink)
   moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
 
-  // cloud-drizzle (EASTER_EGGS.md §2 cloud-drizzle)
-  cloudDrizzleCluster: -1, // which cloud cluster index (Sky.jsx cloudState) to darken+drizzle, -1 = none
-  cloudDrizzleBurst: 0,    // increment -> Sky.jsx (re)starts that cluster's drizzle
-
   // smoke-rings (EASTER_EGGS.md §2 smoke-rings)
   smokeRingsRemaining: 0, // next N puffs spawned by ZoneAmbience's IzbaAmbience are ring sprites
 };
@@ -141,17 +137,6 @@ function runMoonWink(ctx) {
   ]);
 }
 
-// ---------------------------------------------------------------- cloud-drizzle
-
-function runCloudDrizzle(ctx, clusterIdx) {
-  eggMotion.cloudDrizzleCluster = clusterIdx;
-  return createTimeline([
-    { at: 0, call: () => { eggMotion.cloudDrizzleBurst += 1; } },
-    { at: 2000, call: () => { eggMotion.cloudDrizzleCluster = -1; } },
-    { at: 2100, call: () => {} },
-  ]);
-}
-
 // ---------------------------------------------------------------- smoke-rings
 
 function runSmokeRings(ctx) {
@@ -248,12 +233,13 @@ export const eggManager = {
   /** 3-distinct-mushrooms (hedgehog) -- see tapMushroom above. */
   tapMushroom,
 
-  /** One-shot, no counting: moon-wink / cloud-drizzle / smoke-rings. */
+  /** One-shot, no counting: moon-wink / smoke-rings. Cloud-rain (EASTER_EGGS
+   *  §2 cloud-drizzle's replacement) is fully self-contained in Sky.jsx now
+   *  -- 3 independent, always-tappable, long-duration (15s) rain sources
+   *  don't fit this module's single shared "one egg at a time" active slot,
+   *  so it calls recordEggFound directly instead of going through here. */
   tapMoon() {
     return attemptFire('moon-wink', 15000, runMoonWink, 'moon-wink');
-  },
-  tapCloud(clusterIdx) {
-    return attemptFire(`cloud-${clusterIdx}`, 12000, (ctx) => runCloudDrizzle(ctx, clusterIdx), 'cloud-drizzle');
   },
   tapChimney() {
     return attemptFire('smoke-rings', 10000, runSmokeRings, 'smoke-rings');

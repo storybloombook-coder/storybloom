@@ -17,14 +17,12 @@ import { t } from './config/strings';
 
 const SWIPE_SENSITIVITY = 0.005;   // px -> radians
 const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
-// Matches easterEggs.js's REGISTRY entries + the per-instance eggs
-// (owl/hedgehog/moon-wink/cloud-drizzle/smoke-rings) exactly -- see
-// EASTER_EGGS.md §2 for the full list. Kept as a constant here rather than
-// derived from the registry itself since REGISTRY only lists the two
-// tap-count entries (grandpa/fox); the rest fire through their own
-// dedicated eggManager methods (tapSpruce/tapMushroom/tapMoon/tapCloud/
-// tapChimney) and aren't represented as REGISTRY rows.
-const TOTAL_EGGS = 7;
+// grandpa-fishing (REGISTRY) + owl/hedgehog/moon-wink/smoke-rings (their own
+// dedicated eggManager methods) + cloud-drizzle (now fully self-contained in
+// Sky.jsx, calling recordEggFound directly -- see its own comment there).
+// Kept as a constant here rather than derived from the registry itself
+// since most of these aren't represented as REGISTRY rows at all.
+const TOTAL_EGGS = 6;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
@@ -236,7 +234,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         </View>
 
         {/* Easter-egg discovery counter, top-right -- see TOTAL_EGGS' own
-            comment for what's counted. Deliberately unlabeled (just "N/7"):
+            comment for what's counted. Deliberately unlabeled (just "N/6"):
             EASTER_EGGS.md never specifies UI copy for this, and a bare
             fraction reads as "there's more to find" without spelling out
             what, which fits the hidden/discoverable spirit of the feature. */}

@@ -1,10 +1,13 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
+import * as Haptics from 'expo-haptics';
 import {
-  BackSide, BufferAttribute, BufferGeometry, Color, Object3D,
+  BackSide, BufferAttribute, BufferGeometry, Color, Object3D, SphereGeometry,
 } from 'three';
-import { atmosphereLive, orbit } from '../state/sceneStore';
+import { atmosphereLive, orbit, useSceneStore } from '../state/sceneStore';
+import { PATH_RADIUS, rad } from '../config/zones';
 import { makeRadialGradientData, makeRadialAlphaTexture } from './textures/proceduralTextures';
+import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeRng } from './prng';
 import { eggManager, eggMotion } from './easterEggs';
 
@@ -12,7 +15,6 @@ const SKY_RADIUS = 28;
 const SUN_MOON_RADIUS = 24;
 
 const dummy = new Object3D();
-const CLOUD_MAX = 8; // WEATHER_SPEC §2 tops out at 8 clusters
 const CELESTIAL_COUNT = 5; // sun, moon, crater x3
 const SUN_COLOR = new Color('#ffe9a8');
 const MOON_COLOR = new Color('#e8ecf4');
@@ -26,11 +28,48 @@ const MOON_WINK_MS = 400;
 const STAR_COUNT = 3;
 const STAR_COLOR = new Color('#fff6d6');
 
-// cloud-drizzle (EASTER_EGGS.md §2): tapped cluster darkens+drizzles for 2s.
-const CLOUD_DRIZZLE_MS = 2000;
-const CLOUD_NORMAL_COLOR = new Color('#ffffff');
-const CLOUD_DRIZZLE_COLOR = new Color('#9aa4b2');
-const DRIZZLE_COUNT = 12;
+// Live feedback: replaces the old weather-driven ambient cloud system
+// entirely with 3 fixed, always-present, individually tappable clouds.
+// Each is the SAME hand-built 3-sphere shape (medium, then large, then
+// small, left to right, each overlapping the next by 15%) rather than a
+// randomly-jittered puff cluster. All 3 orbit together, clustered within
+// roughly a third of the full circle, at a radius near Kolobok's own path
+// (+/-15%) and a height 15% lower than this scene's previous cloud height
+// (was 6-8, so ~5.1-6.8 now). Tap one -> it darkens and rains for
+// RAIN_DURATION_MS (not tappable meanwhile), then brightens back to white.
+const CLOUD_COUNT = 3;
+const CLOUD_ARC_DEG = 100; // "scattered across one-third of the scene"
+const CLOUD_HEIGHT_MIN = 5.1;
+const CLOUD_HEIGHT_MAX = 6.8;
+const CLOUD_RADIUS_MIN = PATH_RADIUS * 0.85;
+const CLOUD_RADIUS_MAX = PATH_RADIUS * 1.15;
+const CLOUD_ORBIT_SPEED = 0.006;
+const CLOUD_SHADOW_R = 0.85;
+const RAIN_DURATION_MS = 15000;
+const RAIN_COUNT_PER_CLOUD = 10;
+const RAIN_POOL_SIZE = CLOUD_COUNT * RAIN_COUNT_PER_CLOUD;
+const RAIN_FALL_S = 2; // seconds for one drop to cycle top->bottom
+const CLOUD_WHITE = new Color('#ffffff');
+const CLOUD_RAIN_TINT = new Color('#9aa4b2');
+
+/** The cloud's fixed silhouette: medium sphere, then large, then small,
+ *  left to right, each overlapping the previous by 15% (gap between
+ *  centers = 85% of the two radii summed). Shared by all CLOUD_COUNT
+ *  instances via one instancedMesh -- only position/scale/color differ
+ *  per-instance, so this is built once, not per-cloud. */
+function makeCloudGeometry() {
+  const rMed = 0.5;
+  const rLarge = 0.65;
+  const rSmall = 0.38;
+  const xMed = 0;
+  const xLarge = xMed + (rMed + rLarge) * 0.85;
+  const xSmall = xLarge + (rLarge + rSmall) * 0.85;
+  return mergeColoredParts([
+    { geometry: new SphereGeometry(rMed, 10, 8), color: '#ffffff', position: [xMed, 0, 0] },
+    { geometry: new SphereGeometry(rLarge, 10, 8), color: '#ffffff', position: [xLarge, 0.04, 0.02] },
+    { geometry: new SphereGeometry(rSmall, 8, 6), color: '#ffffff', position: [xSmall, -0.03, -0.02] },
+  ]);
+}
 
 const to255 = (c) => `#${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
 
@@ -67,28 +106,6 @@ function solarToWorld(azimuthDeg, elevationDeg) {
 export function Sky() {
   const domeRef = useRef();
   const celestialRef = useRef();
-  const cloudMeshRef = useRef();
-  const cloudMatRef = useRef();
-
-  const cloudState = useRef((() => {
-    const rng = makeRng(80);
-    return new Array(CLOUD_MAX).fill(0).map(() => ({
-      angle: rng() * Math.PI * 2,
-      radius: 16 + rng() * 4,
-      // Live feedback: clouds at 9-12 sat above the camera's normal resting
-      // view (CAMERA_HEIGHT ~6.5, lookAtY ~1.1-1.4 -- a level-to-downward
-      // gaze), so they were invisible without a deliberate look-up drag.
-      // Lowered to sit around eye height instead, comfortably in frame.
-      height: 6 + rng() * 2,
-      speed: 0.004 + rng() * 0.005,
-      bobPhase: rng() * Math.PI * 2,
-      puffs: new Array(3).fill(0).map((_, i) => ({
-        dx: (rng() - 0.5) * 0.9,
-        dz: (rng() - 0.5) * 0.5,
-        scale: 0.7 + rng() * 0.5 + (i === 0 ? 0.2 : 0),
-      })),
-    }));
-  })());
 
   const skyTexRef = useRef({ tex: null, lastKey: '', lastAt: 0 });
   const initialTexture = useMemo(() => makeRadialGradientData('#cfe8f2', '#8ec4e0', 64, 1), []);
@@ -97,8 +114,8 @@ export function Sky() {
   // moon-wink: moonVisibleRef mirrors the per-frame `moonVisible` local
   // (computed inside useFrame) out to the click handler below, which runs
   // outside that closure's scope. eggUi tracks the burst-counter edge-detect
-  // (same idiom as PondAndGrandpa's rippleBurst/s.rippleWas) plus each
-  // effect's own local elapsed-time-since-triggered clock.
+  // (same idiom as PondAndGrandpa's rippleBurst/s.rippleWas) plus its own
+  // local elapsed-time-since-triggered clock.
   const moonVisibleRef = useRef(false);
   const starsRef = useRef();
   const starsGeometry = useMemo(() => {
@@ -106,24 +123,42 @@ export function Sky() {
     geo.setAttribute('position', new BufferAttribute(new Float32Array(STAR_COUNT * 3), 3));
     return geo;
   }, []);
-  const drizzleRef = useRef();
-  const drizzleGeometry = useMemo(() => {
+  // moonWinkSeen seeded from the counter's current value, not 0 -- otherwise
+  // a fresh mount (leaving/returning to the 3D scene) would misread a
+  // leftover nonzero burst from a PRIOR mount as a brand-new trigger and
+  // replay it (same class of bug as the fox-catch "explosion" fixed in
+  // KolobokParticles.jsx).
+  const eggUi = useRef({ moonWinkSeen: eggMotion.moonWinkBurst, moonWinkMs: -1 });
+
+  const cloudGeometry = useMemo(() => makeCloudGeometry(), []);
+  const cloudRef = useRef();
+  const cloudShadowRef = useRef();
+  const shadowTexture = useMemo(() => makeRadialAlphaTexture(32), []);
+  const rainRef = useRef();
+  const rainGeometry = useMemo(() => {
     const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(new Float32Array(DRIZZLE_COUNT * 3), 3));
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(RAIN_POOL_SIZE * 3), 3));
     return geo;
   }, []);
-  // moonWinkSeen/cloudDrizzleSeen seeded from the counters' current values,
-  // not 0 -- otherwise a fresh mount (leaving/returning to the 3D scene)
-  // would misread a leftover nonzero burst from a PRIOR mount as a
-  // brand-new trigger and replay it (same class of bug as the fox-catch
-  // "explosion" fixed in KolobokParticles.jsx).
-  const eggUi = useRef({
-    moonWinkSeen: eggMotion.moonWinkBurst,
-    moonWinkMs: -1,
-    cloudDrizzleSeen: eggMotion.cloudDrizzleBurst,
-    cloudDrizzleMs: -1,
-    drizzleState: new Array(DRIZZLE_COUNT).fill(0).map(() => ({ t: Math.random() })),
-  });
+  const cloudState = useRef((() => {
+    const rng = makeRng(44);
+    const centerAngle = rng() * Math.PI * 2;
+    return new Array(CLOUD_COUNT).fill(0).map((_, i) => ({
+      angle: centerAngle + rad((i - (CLOUD_COUNT - 1) / 2) * (CLOUD_ARC_DEG / (CLOUD_COUNT - 1))),
+      radius: CLOUD_RADIUS_MIN + rng() * (CLOUD_RADIUS_MAX - CLOUD_RADIUS_MIN),
+      scale: 0.85 + rng() * 0.35,
+      bobPhase: rng() * Math.PI * 2,
+      isRaining: false,
+      rainMs: -1,
+      worldX: 0, worldY: 0, worldZ: 0, // stashed each frame for the rain pool + shadow below
+    }));
+  })());
+  // Each pool slot permanently belongs to one cloud (10 slots per cloud) --
+  // simpler than dynamic allocation since there are only ever CLOUD_COUNT
+  // simultaneous rain sources.
+  const rainPool = useRef(new Array(RAIN_POOL_SIZE).fill(0).map((_, i) => ({
+    t: Math.random(), cloudIdx: Math.floor(i / RAIN_COUNT_PER_CLOUD),
+  })));
 
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
@@ -238,90 +273,77 @@ export function Sky() {
       }
     }
 
-    // cloud-drizzle: same burst-counter edge-detect as moon-wink above.
-    const ui2 = eggUi.current;
-    if (eggMotion.cloudDrizzleBurst !== ui2.cloudDrizzleSeen) {
-      ui2.cloudDrizzleSeen = eggMotion.cloudDrizzleBurst;
-      ui2.cloudDrizzleMs = 0;
-      ui2.drizzleState.forEach((p) => { p.t = Math.random() * 0.3; }); // stagger the first fall
-    } else if (ui2.cloudDrizzleMs >= 0) {
-      ui2.cloudDrizzleMs += dt * 1000;
-      if (ui2.cloudDrizzleMs > CLOUD_DRIZZLE_MS) ui2.cloudDrizzleMs = -1;
-    }
-    const drizzleCluster = ui2.cloudDrizzleMs >= 0 ? eggMotion.cloudDrizzleCluster : -1;
-    // Darken over 300ms, hold, brighten back over the tail 300ms (doc: "over
-    // 300ms ... brightens back").
-    const drizzleClusterT = drizzleCluster < 0 ? 0
-      : Math.min(1, ui2.cloudDrizzleMs / 300) * Math.min(1, (CLOUD_DRIZZLE_MS - ui2.cloudDrizzleMs) / 300);
-    let drizzleOriginX = 0;
-    let drizzleOriginY = 0;
-    let drizzleOriginZ = 0;
-
-    // --- Clouds: drift (paused in sleep), count/opacity/color from the
-    // weather blend; clusters beyond cloudCount scale to 0 ---
-    const mesh = cloudMeshRef.current;
-    if (mesh) {
-      const visibleClusters = L.cloudCount;
-      const drift = orbit.powerState === 'sleep' ? 0 : dt;
-      let idx = 0;
+    // --- Clouds: 3 fixed instances, continuously orbiting together; tap ->
+    // rain for RAIN_DURATION_MS, not tappable meanwhile, then back to white.
+    const cmesh = cloudRef.current;
+    const smesh = cloudShadowRef.current;
+    if (cmesh) {
       cloudState.current.forEach((c, ci) => {
-        c.angle += c.speed * drift;
-        // Fractional edge cluster eases in/out for the 4s ramps.
-        const clusterVis = Math.min(1, Math.max(0, visibleClusters - ci));
+        c.angle += CLOUD_ORBIT_SPEED * dt;
+        if (c.isRaining) {
+          c.rainMs += dt * 1000;
+          if (c.rainMs > RAIN_DURATION_MS) { c.isRaining = false; c.rainMs = -1; }
+        }
         const cx = Math.sin(c.angle) * c.radius;
         const cz = Math.cos(c.angle) * c.radius;
-        const bob = Math.sin(now / 1000 + c.bobPhase) * 0.1;
-        const isDrizzling = ci === drizzleCluster;
-        if (isDrizzling) {
-          drizzleOriginX = cx;
-          drizzleOriginY = c.height + bob;
-          drizzleOriginZ = cz;
-        }
-        for (const p of c.puffs) {
-          dummy.position.set(cx + p.dx, c.height + bob, cz + p.dz);
-          dummy.rotation.set(0, 0, 0);
-          const sc = p.scale * clusterVis;
-          dummy.scale.set(sc, sc * 0.45, sc);
+        const bob = Math.sin(now / 1000 + c.bobPhase) * 0.15;
+        const heightT = (c.radius - CLOUD_RADIUS_MIN) / Math.max(0.001, CLOUD_RADIUS_MAX - CLOUD_RADIUS_MIN);
+        const cy = CLOUD_HEIGHT_MIN + heightT * (CLOUD_HEIGHT_MAX - CLOUD_HEIGHT_MIN) + bob;
+        c.worldX = cx;
+        c.worldY = cy;
+        c.worldZ = cz;
+
+        dummy.position.set(cx, cy, cz);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.setScalar(c.scale);
+        dummy.updateMatrix();
+        cmesh.setMatrixAt(ci, dummy.matrix);
+        // Darken over the first 500ms, hold, brighten back over the tail
+        // 500ms -- same envelope shape as the old cloud-drizzle.
+        const rainT = c.isRaining
+          ? Math.min(1, c.rainMs / 500) * Math.min(1, (RAIN_DURATION_MS - c.rainMs) / 500)
+          : 0;
+        cmesh.setColorAt(ci, CLOUD_WHITE.clone().lerp(CLOUD_RAIN_TINT, rainT));
+
+        if (smesh) {
+          dummy.position.set(cx, 0.02, cz);
+          dummy.rotation.set(-Math.PI / 2, 0, 0);
+          const sr = CLOUD_SHADOW_R * c.scale * 2;
+          dummy.scale.set(sr, sr, 1);
           dummy.updateMatrix();
-          mesh.setMatrixAt(idx, dummy.matrix);
-          mesh.setColorAt(idx, isDrizzling
-            ? CLOUD_NORMAL_COLOR.clone().lerp(CLOUD_DRIZZLE_COLOR, drizzleClusterT)
-            : CLOUD_NORMAL_COLOR);
-          idx += 1;
+          smesh.setMatrixAt(ci, dummy.matrix);
         }
       });
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      cmesh.instanceMatrix.needsUpdate = true;
+      if (cmesh.instanceColor) cmesh.instanceColor.needsUpdate = true;
+      if (smesh) smesh.instanceMatrix.needsUpdate = true;
     }
 
-    // Private 12-point drizzle beneath the tapped cluster (EASTER_EGGS.md
-    // §2 cloud-drizzle) -- same fixed-pool-with-per-particle-t pattern as
-    // ZoneAmbience's chimney smoke, just falling instead of rising.
-    if (drizzleRef.current) {
-      const visible = drizzleCluster >= 0;
-      drizzleRef.current.visible = visible;
-      if (visible) {
-        const positions = drizzleGeometry.attributes.position;
-        ui2.drizzleState.forEach((p, i) => {
-          p.t += dt * 1.3;
+    // Rain: each pool slot is permanently owned by one cloud (see rainPool's
+    // own init above) and just parks out of view whenever that cloud isn't
+    // currently raining.
+    if (rainRef.current) {
+      const positions = rainGeometry.attributes.position;
+      let anyRaining = false;
+      rainPool.current.forEach((p, i) => {
+        const c = cloudState.current[p.cloudIdx];
+        if (c.isRaining) {
+          anyRaining = true;
+          p.t += dt / RAIN_FALL_S;
           if (p.t > 1) p.t = 0;
-          const fall = p.t * 1.8;
-          const spreadX = (Math.sin(i * 2.1) * 0.4);
-          const spreadZ = (Math.cos(i * 1.7) * 0.4);
-          positions.setXYZ(i, drizzleOriginX + spreadX, drizzleOriginY - fall, drizzleOriginZ + spreadZ);
-        });
+          const spreadX = Math.sin(i * 2.3) * 0.35;
+          const spreadZ = Math.cos(i * 1.9) * 0.35;
+          const fall = p.t * (c.worldY - 0.1);
+          positions.setXYZ(i, c.worldX + spreadX, c.worldY - fall, c.worldZ + spreadZ);
+        } else {
+          positions.setXYZ(i, 0, -20, 0); // parked well below the scene
+        }
+      });
+      rainRef.current.visible = anyRaining;
+      if (anyRaining) {
         positions.needsUpdate = true;
-        drizzleGeometry.computeBoundingSphere();
+        rainGeometry.computeBoundingSphere();
       }
-    }
-    if (cloudMatRef.current) {
-      const flashLift = L.flash * 0.5;
-      cloudMatRef.current.color.setRGB(
-        Math.min(1, L.cloudColor[0] + flashLift),
-        Math.min(1, L.cloudColor[1] + flashLift),
-        Math.min(1, L.cloudColor[2] + flashLift),
-      );
-      cloudMatRef.current.opacity = L.cloudOpacity;
     }
   });
 
@@ -351,20 +373,32 @@ export function Sky() {
       </points>
 
       <instancedMesh
-        ref={cloudMeshRef}
-        args={[undefined, undefined, CLOUD_MAX * 3]}
-        onPointerDown={(e) => {
-          if (atmosphereLive.rainT > 0 || atmosphereLive.snowT > 0) return;
-          e.stopPropagation();
-          eggManager.tapCloud(Math.floor(e.instanceId / 3));
-        }}
+        ref={cloudShadowRef}
+        args={[undefined, undefined, CLOUD_COUNT]}
+        renderOrder={1}
       >
-        <sphereGeometry args={[1, 8, 6]} />
-        <meshBasicMaterial ref={cloudMatRef} color="#ffffff" transparent opacity={0.85} fog={false} />
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial map={shadowTexture} color="#1e1a14" transparent opacity={0.28} depthWrite={false} fog={false} />
       </instancedMesh>
 
-      <points ref={drizzleRef} geometry={drizzleGeometry} visible={false}>
-        <pointsMaterial map={starTexture} color={CLOUD_DRIZZLE_COLOR} size={0.12} transparent depthWrite={false} sizeAttenuation fog={false} opacity={0.8} />
+      <instancedMesh
+        ref={cloudRef}
+        args={[cloudGeometry, undefined, CLOUD_COUNT]}
+        onPointerDown={(e) => {
+          const c = cloudState.current[e.instanceId];
+          if (!c || c.isRaining) return;
+          e.stopPropagation();
+          c.isRaining = true;
+          c.rainMs = 0;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          useSceneStore.getState().recordEggFound('cloud-drizzle');
+        }}
+      >
+        <meshBasicMaterial color="#ffffff" transparent opacity={0.9} fog={false} />
+      </instancedMesh>
+
+      <points ref={rainRef} geometry={rainGeometry} visible={false}>
+        <pointsMaterial map={starTexture} color={CLOUD_RAIN_TINT} size={0.1} transparent depthWrite={false} sizeAttenuation fog={false} opacity={0.85} />
       </points>
     </group>
   );
