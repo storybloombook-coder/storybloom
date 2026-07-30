@@ -21,11 +21,12 @@ import { AdaptiveQuality } from './AdaptiveQuality';
 import { DustTrail } from './DustTrail';
 import { GoldenHourExtras } from './GoldenHourExtras';
 import { BubbleAnchor } from './BubbleAnchor';
+import { CameraDragShield } from './CameraDragShield';
 
 // Fog + lights + all sky/weather blending live in AtmosphereDirector
 // (WEATHER_SPEC): real solar daylight when location is available, the
 // ART_SPEC §8 clock table otherwise, weather states ramping on top.
-export function KolobokScene() {
+export function KolobokScene({ dragController }) {
   return (
     <>
       <AdaptiveQuality />
@@ -48,6 +49,7 @@ export function KolobokScene() {
       <DustTrail />
       <KolobokParticles />
       <CameraRig />
+      <CameraDragShield dragController={dragController} />
       <EncounterDirector />
       <StoryDirector />
       <BubbleAnchor />
