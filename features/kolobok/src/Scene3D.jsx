@@ -3,8 +3,8 @@ import {
   Animated, AppState, StyleSheet, View, Text, Pressable,
 } from 'react-native';
 import { Canvas } from '@react-three/fiber/native';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { KolobokScene } from './scene/KolobokScene';
+import { createSinglePointerDrag } from './scene/singlePointerDrag';
 import { TactileButton } from './TactileButton';
 import GlassGlare from './GlassGlare';
 import { useDeviceTilt } from './useDeviceTilt';
@@ -27,6 +27,41 @@ const TOTAL_EGGS = 7;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
+
+function createCameraDragController() {
+  return createSinglePointerDrag({
+    threshold: 4,
+    onStart: () => {
+      orbit.freeLookActive = true;
+    },
+    onChange: (event) => {
+      story.lastInputAt = Date.now();
+      orbit.lastDragAt = Date.now();
+      if (orbit.mode === 'story') orbit.lookingAway = true;
+      orbit.snapTarget = null;
+      orbit.angle += -event.changeX * SWIPE_SENSITIVITY;
+      orbit.velocity = 0;
+      // Free-look: vertical drag nudges camera height/tilt on top of
+      // whichever framing (zone or story) is active; CameraRig eases this
+      // back to 0 the instant freeLookActive goes false below.
+      orbit.pitchOffset = Math.max(
+        -PITCH_OFFSET_MAX,
+        Math.min(
+          PITCH_OFFSET_MAX,
+          orbit.pitchOffset - event.changeY * VERTICAL_SENSITIVITY,
+        ),
+      );
+    },
+    onEnd: (event) => {
+      orbit.velocity = -event.velocityX * FLING_SENSITIVITY;
+      orbit.freeLookActive = false;
+    },
+    onCancel: () => {
+      orbit.velocity = 0;
+      orbit.freeLookActive = false;
+    },
+  });
+}
 
 // The actual 3D branch (Canvas, gesture wiring, the zone card + encounter
 // bubble + the stone's accessibility-twin pill row -- all of it only makes
@@ -136,48 +171,17 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
     return () => cancelAnimationFrame(raf);
   }, [bubbleLeft, bubbleBottom]);
 
-  // Gesture wiring: JS-thread callbacks writing into the transient `orbit`
-  // object. In story mode, dragging no longer pauses the tale -- it just
-  // marks `orbit.lookingAway` so CameraRig stops correcting orbit.angle back
-  // toward the story's tracked azimuth (Kolobok/narration keep going
-  // regardless); CameraRig itself clears the flag and resumes the auto-
-  // follow after 15s of no input (story.lastInputAt below).
-  // Camera panning is single-finger drag. minDistance(4) means a stationary
-  // touch (a tap) never activates the pan, so single taps still fall through
-  // to the Canvas's own pointer handling to reach Kolobok/plaques/animals --
-  // only an actual drag past that small threshold moves the camera. Kept low
-  // so the drag engages promptly instead of feeling sticky at the start.
-  // freeLookActive is set in onStart (fires only once the gesture actually
-  // ACTIVATES, i.e. past minDistance), not onBegin (fires on every touch-
-  // down, activated or not) -- onBegin here left a plain tap with freeLook
-  // stuck true forever (onEnd never followed to reset it), which locked the
-  // camera into "steering" mode after literally any tap. Live feedback:
-  // "when screen tapped nothing should happen."
-  const pan = Gesture.Pan()
-    .minPointers(1)
-    .maxPointers(1)
-    .minDistance(4)
-    .runOnJS(true)
-    .onStart(() => { orbit.freeLookActive = true; })
-    .onChange((e) => {
-      story.lastInputAt = Date.now();
-      orbit.lastDragAt = Date.now();
-      if (orbit.mode === 'story') orbit.lookingAway = true;
-      orbit.snapTarget = null;
-      orbit.angle += -e.changeX * SWIPE_SENSITIVITY;
-      orbit.velocity = 0;
-      // Free-look: vertical drag nudges camera height/tilt on top of
-      // whichever framing (zone or story) is active; CameraRig eases this
-      // back to 0 the instant freeLookActive goes false below.
-      orbit.pitchOffset = Math.max(
-        -PITCH_OFFSET_MAX,
-        Math.min(PITCH_OFFSET_MAX, orbit.pitchOffset - e.changeY * VERTICAL_SENSITIVITY),
-      );
-    })
-    .onEnd((e) => {
-      orbit.velocity = -e.velocityX * FLING_SENSITIVITY;
-      orbit.freeLookActive = false;
-    });
+  // R3F-native's Canvas already owns a JS PanResponder for scene-object
+  // taps. Wrapping it in RNGH created two competing responder systems: the
+  // Canvas won the first finger, and RNGH often activated only after a
+  // second finger arrived. CameraDragShield listens inside R3F's existing
+  // responder instead, so one finger can steer immediately while scene-
+  // object taps continue to use that same input stream.
+  const [dragController] = useState(createCameraDragController);
+
+  useEffect(() => () => {
+    dragController.pointerCancel();
+  }, [dragController]);
 
   const onPlayPause = () => {
     story.lastInputAt = Date.now();
@@ -224,21 +228,19 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
 
   return (
     <View style={styles.root} onLayout={onRootLayout}>
-      <GestureDetector gesture={pan}>
-        <View style={StyleSheet.absoluteFill} collapsable={false}>
-          {canvasSize ? (
-            <Canvas
-              style={{ width: canvasSize.width, height: canvasSize.height }}
-              dpr={2}
-              gl={{ antialias: true }}
-              frameloop={frameloop}
-              camera={{ fov: 45, near: 0.5, far: 60 }}
-            >
-              <KolobokScene />
-            </Canvas>
-          ) : null}
-        </View>
-      </GestureDetector>
+      <View style={StyleSheet.absoluteFill} collapsable={false}>
+        {canvasSize ? (
+          <Canvas
+            style={{ width: canvasSize.width, height: canvasSize.height }}
+            dpr={2}
+            gl={{ antialias: true }}
+            frameloop={frameloop}
+            camera={{ fov: 45, near: 0.5, far: 60 }}
+          >
+            <KolobokScene dragController={dragController} />
+          </Canvas>
+        ) : null}
+      </View>
 
       {/* UI overlay: real RN views, screen-reader friendly */}
       <View style={styles.overlay} pointerEvents="box-none">
