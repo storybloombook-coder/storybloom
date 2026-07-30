@@ -40,11 +40,17 @@ yarn-error.*
 
 example
 
-# generated native folders
+# iOS is not part of the Android-native product.
 /ios
-/android
+
+# Android is now the source of truth (Kotlin/Compose), not an Expo-generated
+# folder. Build output and local machine settings remain ignored by
+# android/.gitignore.
 
 # Vosk models (~50-90MB each) — downloaded locally for the dev build, not
 # committed. See app.json's react-native-vosk plugin config for the paths.
 /assets/vosk-model-small-en-us
 /assets/vosk-model-small-ru
+
+# Local installable deliverables are handed off separately from source.
+/Storybloom-*-release.apk

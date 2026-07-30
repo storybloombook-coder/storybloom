@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="storybloom_surface">#FFF9F0</color>
+    <color name="storybloom_blue">#208AEF</color>
+    <color name="splashscreen_background">#83CDE9</color>
+</resources>

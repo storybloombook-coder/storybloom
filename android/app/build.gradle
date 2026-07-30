@@ -1,0 +1,177 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+def generatedNativeAssets = layout.buildDirectory.dir("generated/nativeAssets")
+def skipSpeechModels = providers.gradleProperty("STORYBLOOM_SKIP_SPEECH_MODELS")
+    .map { it.toBoolean() }
+    .getOrElse(false)
+def emulatorAbiOnly = providers.gradleProperty("STORYBLOOM_EMULATOR_ABI_ONLY")
+    .map { it.toBoolean() }
+    .getOrElse(false)
+
+tasks.register("syncNativeAssets", Sync) {
+    into(generatedNativeAssets)
+
+    // The audio library and menu animation are committed once at the project
+    // root. They are copied into the APK without involving Metro or a JS
+    // bundle.
+    from("../../assets/sounds") {
+        into("sounds")
+    }
+    from("../../assets/videos") {
+        into("videos")
+    }
+
+    // Speech models are intentionally not stored in Git. Local/release builds
+    // bundle them when present; ModelManager downloads and caches the same
+    // official archives on first use when they are absent.
+    if (!skipSpeechModels && file("../../assets/vosk-model-small-en-us").exists()) {
+        from("../../assets/vosk-model-small-en-us") {
+            into("models/vosk-model-small-en-us")
+        }
+    }
+    if (!skipSpeechModels && file("../../assets/vosk-model-small-ru").exists()) {
+        from("../../assets/vosk-model-small-ru") {
+            into("models/vosk-model-small-ru")
+        }
+    }
+}
+
+android {
+    namespace = "com.storybloom.app"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.storybloom.app"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 4
+        versionName = "2.0.2-native"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
+
+        // Keep the deliverable compact while remaining directly testable on
+        // the x86_64 emulator and installable on modern 64-bit Android phones.
+        ndk {
+            if (emulatorAbiOnly) {
+                abiFilters "x86_64"
+            } else {
+                abiFilters "arm64-v8a", "x86_64"
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            // A private, machine-local key is injected for the deliverable.
+            // Falling back to the standard debug key keeps local release builds
+            // installable without ever committing signing credentials.
+            storeFile = file(findProperty("STORYBLOOM_KEYSTORE") ?: "debug.keystore")
+            storePassword = findProperty("STORYBLOOM_STORE_PASSWORD") ?: "android"
+            keyAlias = findProperty("STORYBLOOM_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = findProperty("STORYBLOOM_KEY_PASSWORD") ?: "android"
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+        }
+        release {
+            signingConfig = signingConfigs.release
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+        freeCompilerArgs += [
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
+        ]
+    }
+
+    packaging {
+        resources {
+            excludes += [
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/DEPENDENCIES",
+                "/META-INF/LICENSE*",
+                "/META-INF/NOTICE*"
+            ]
+        }
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
+    androidResources {
+        // MediaPlayer needs file descriptors for bundled clips.
+        noCompress += ["mp3", "wav", "mp4", "conf", "mdl", "fst", "ark"]
+    }
+
+    sourceSets {
+        main.assets.srcDir(generatedNativeAssets)
+    }
+
+    testOptions {
+        unitTests.includeAndroidResources = true
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("syncNativeAssets")
+}
+
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2025.06.01"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.06.01"))
+
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+
+    // Native, offline engines. Neither dependency embeds a WebView or JS VM.
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
+    implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
+
+    implementation("androidx.exifinterface:exifinterface:1.4.1")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
