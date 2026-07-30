@@ -1,14 +1,14 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
-  Color, ConeGeometry, Object3D, Quaternion, Vector3,
+  BufferAttribute, BufferGeometry, Color, ConeGeometry, Object3D, Quaternion, Vector3,
 } from 'three';
 import {
   ISLAND_RADIUS, rad, pointOnCircle, PATH_RADIUS,
 } from '../config/zones';
 import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement';
 import { makeRng } from './prng';
-import { makeStripes, makeNoiseGrain, makeSpeckle } from './textures/proceduralTextures';
+import { makeStripes, makeNoiseGrain, makeSpeckle, makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { storyMotion } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { windSway, wind } from './wind';
@@ -43,6 +43,18 @@ const BEND_FREQ = 2.5;
 const BEND_DURATION = 1.1; // seconds until the spring is fully settled
 const STRETCH_Y = 0.16;   // +16% taller at peak spring intensity
 const STRETCH_XZ = 0.08;  // -8% thinner at peak, so volume feels conserved
+
+// Live feedback: "tap the birch tree 5 times, leaves fall... green
+// particles... fall from the foliage to the base in random trajectories,
+// not quickly." No cooldown -- every birch tracks its own 5-tap count
+// independently, and can be retriggered immediately after falling.
+const LEAF_FALL_TAP_COUNT = 5;
+const LEAF_FALL_WINDOW_MS = 3000;
+const LEAF_FALL_BATCH = 14;
+// Generous shared pool (4 batches' worth) so several birches can be
+// mid-fall at once without one tree's leaves stealing another's slots.
+const LEAF_POOL_SIZE = LEAF_FALL_BATCH * 4;
+const LEAF_CANOPY_Y = 1.7; // matches birchCanopyAM's own local Y offset below
 
 /** 0..1 envelope: quick linear rise to 1 over PUSH_RISE_S, then a decaying
  *  cosine clipped at 0 (never swings past center back toward Kolobok --
@@ -315,6 +327,48 @@ export function Vegetation() {
     t: -1, ax: 0, az: 0, held: false, releaseAmp: 1,
   })));
 
+  // Birch leaf-fall (live feedback #10): per-tree 5-tap log (own timestamps,
+  // independent of the grab/bend physics above and of easterEggs.js's
+  // suppression/cooldown -- this is a no-cooldown ambient interaction, not
+  // a registry egg). leafPool is a SHARED, generously-sized pool (several
+  // batches' worth) so multiple birches can be mid-fall at once.
+  const leafTapLog = useRef({}); // birch idx -> [timestamps]
+  const leafPool = useRef(new Array(LEAF_POOL_SIZE).fill(0).map(() => ({
+    t: 1, x: 0, y: 0, z: 0, driftX: 0, driftZ: 0, fallDur: 1, spinPhase: 0,
+  })));
+  const leafSlot = useRef(0); // round-robins which pool slot the next spawn lands in
+  const leafGeometry = useMemo(() => {
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(LEAF_POOL_SIZE * 3), 3));
+    return geo;
+  }, []);
+  const leafTexture = useMemo(() => makeRadialAlphaTexture(16), []);
+  const leafRef = useRef();
+
+  /** Spawns one batch of LEAF_FALL_BATCH leaves at birch[idx]'s canopy,
+   *  each with its own random horizontal drift and fall duration (a few
+   *  seconds -- "not quickly") so the batch reads as a scatter, not a
+   *  single falling clump. */
+  const spawnLeafFall = (idx) => {
+    const [wx, wz] = birchWorldXZ[idx];
+    const canopyY = LEAF_CANOPY_Y * birch[idx].scale;
+    for (let i = 0; i < LEAF_FALL_BATCH; i++) {
+      const slot = leafSlot.current % LEAF_POOL_SIZE;
+      leafSlot.current += 1;
+      const p = leafPool.current[slot];
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * 0.35;
+      p.x = wx + Math.cos(a) * r;
+      p.z = wz + Math.sin(a) * r;
+      p.y = canopyY + (Math.random() - 0.5) * 0.3;
+      p.driftX = (Math.random() - 0.5) * 0.5;
+      p.driftZ = (Math.random() - 0.5) * 0.5;
+      p.spinPhase = Math.random() * Math.PI * 2;
+      p.fallDur = 3 + Math.random() * 2; // 3-5s, gentle drift down
+      p.t = 0;
+    }
+  };
+
   // BACKLOG.md #2: grab a tree directly (independent of Kolobok) and it
   // springs back on release. React Native's pointer-event model can't
   // reliably track a drag once the finger moves off a small instanced-mesh
@@ -334,6 +388,16 @@ export function Vegetation() {
     // reaction below, matching the doc's "taps still give their normal
     // reactions" even while an egg is running.
     if (type === 'spruce') eggManager.tapSpruce(idx);
+    if (type === 'birch') {
+      const t = Date.now();
+      const log = (leafTapLog.current[idx] ?? []).filter((x) => t - x <= LEAF_FALL_WINDOW_MS);
+      log.push(t);
+      leafTapLog.current[idx] = log;
+      if (log.length >= LEAF_FALL_TAP_COUNT) {
+        leafTapLog.current[idx] = [];
+        spawnLeafFall(idx);
+      }
+    }
     const bendArr = type === 'birch' ? birchBend.current : spruceBend.current;
     const worldXZArr = type === 'birch' ? birchWorldXZ : spruceWorldXZ;
     const b = bendArr[idx];
@@ -488,6 +552,28 @@ export function Vegetation() {
       spruceTouched = true;
     });
     if (spruceTouched && spruceRef.current) spruceRef.current.instanceMatrix.needsUpdate = true;
+
+    // Birch leaf-fall: advance every active pool particle (t 0..1 over its
+    // own fallDur), gentle horizontal drift via a slow sine wobble on top of
+    // its fixed per-leaf drift direction (reads as tumbling, not a straight
+    // drop), parked out of view once it lands.
+    if (leafRef.current) {
+      const positions = leafGeometry.attributes.position;
+      leafPool.current.forEach((p, i) => {
+        if (p.t < 1) {
+          p.t += dt / p.fallDur;
+          if (p.t > 1) p.t = 1;
+        }
+        const fallT = Math.min(p.t, 1);
+        const wobble = Math.sin(fallT * Math.PI * 3 + p.spinPhase) * 0.15;
+        const x = p.x + p.driftX * fallT + wobble * 0.1;
+        const y = p.t >= 1 ? -5 : p.y * (1 - fallT); // parked below ground once landed
+        const z = p.z + p.driftZ * fallT + wobble * 0.1;
+        positions.setXYZ(i, x, y, z);
+      });
+      positions.needsUpdate = true;
+      leafGeometry.computeBoundingSphere();
+    }
 
     // hedgehog (EASTER_EGGS.md Â§2): edge-detect eggMotion.hedgehogMushroomIdx
     // landing on a fresh index -- starts THIS mushroom's own pop-out (scale
@@ -797,6 +883,12 @@ export function Vegetation() {
         <sphereGeometry args={[0.4, 8, 8]} />
         <meshStandardMaterial map={birchCanopyTexture} roughness={0.9} />
       </InstancedPart>
+
+      {/* Birch leaf-fall: shared pool, parked far below ground (invisible)
+          when idle -- see spawnLeafFall/the useFrame block above. */}
+      <points ref={leafRef} geometry={leafGeometry}>
+        <pointsMaterial map={leafTexture} color="#5d8a3f" size={0.09} transparent opacity={0.9} depthWrite={false} />
+      </points>
 
       {/* Spruce: all 3 cone tiers of all trees in one merged instancedMesh */}
       <InstancedPart
