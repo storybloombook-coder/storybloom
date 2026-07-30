@@ -9,6 +9,7 @@ import { Sky } from './Sky';
 import { BackgroundForest } from './BackgroundForest';
 import { CrossroadsStone } from './CrossroadsStone';
 import { Birds } from './Birds';
+import { Magpies } from './Magpies';
 import { EncounterDirector } from './EncounterDirector';
 import { StoryDirector } from './StoryDirector';
 import { KolobokParticles } from './KolobokParticles';
@@ -38,6 +39,7 @@ export function KolobokScene() {
       <Hedgehog />
       <WeatherSystems />
       <PondAndGrandpa />
+      <Magpies />
       <GoldenHourExtras />
       <CrossroadsStone />
       <Birds />

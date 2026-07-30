@@ -12,6 +12,7 @@ import { eggMotion, eggManager } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeRng } from './prng';
 import { windSway, wind } from './wind';
+import { launchMagpies } from './Magpies';
 
 const dummy = new Object3D();
 // Live feedback: "the willow should be affected by wind" -- same
@@ -49,6 +50,21 @@ export const GRANDPA_WORLD_POS = new Vector3(-1.15, 0.94, -0.6).applyMatrix4(PON
 // the wind-sway calculation below can reuse the same world x/z.
 const WILLOW_POS = [0.5, 0, 1.9];
 const WILLOW_YAW = rad(15);
+// Live feedback #7 (magpies): world position of the willow's own canopy,
+// composed through the SAME pond group matrix as GRANDPA_WORLD_POS above --
+// WILLOW_POS is local to that group too (see the JSX below, both the willow
+// mesh and Grandpa's group are siblings inside it). Exported so Magpies.jsx
+// knows where "the willow" actually is without duplicating this transform.
+export const WILLOW_CANOPY_Y = 0.62;
+export const WILLOW_WORLD_POS = new Vector3(
+  WILLOW_POS[0],
+  WILLOW_POS[1] + WILLOW_CANOPY_Y,
+  WILLOW_POS[2],
+).applyMatrix4(POND_GROUP_MATRIX);
+// "Tap the willow 3 times" -- window is the same 3000ms shape as the
+// leaf-fall tap log used before it was simplified to a single tap.
+const WILLOW_MAGPIE_TAP_COUNT = 3;
+const WILLOW_MAGPIE_WINDOW_MS = 3000;
 // A bit more than Vegetation.jsx's TREE_SWAY_AMPLITUDE (rad(2.2)): willows
 // are known for reading as flowier/more wind-responsive than a birch/spruce.
 const WILLOW_SWAY_AMPLITUDE = rad(4);
@@ -221,6 +237,11 @@ export function PondAndGrandpa() {
   // just self-contained here since this is a single static mesh, not an
   // instanced array. t=-1 idle; else seconds since the tap.
   const willowBend = useRef({ t: -1, ax: 0, az: 0 });
+  // Live feedback #7 (magpies): "tap the willow 3 times" -- own tap log
+  // (timestamps within a window), same idiom as the earlier birch leaf-fall
+  // used. Doesn't gate the spring-bend reaction above, matching this file's
+  // own "taps still give their normal reaction" convention.
+  const willowTapLog = useRef([]);
   const onWillowGrab = (e) => {
     e.stopPropagation();
     const dx = e.point.x - WILLOW_POS[0];
@@ -229,6 +250,15 @@ export function PondAndGrandpa() {
     willowBend.current.ax = dx / len;
     willowBend.current.az = dz / len;
     willowBend.current.t = 0;
+
+    const t = Date.now();
+    const log = willowTapLog.current.filter((x) => t - x <= WILLOW_MAGPIE_WINDOW_MS);
+    log.push(t);
+    willowTapLog.current = log;
+    if (log.length >= WILLOW_MAGPIE_TAP_COUNT) {
+      willowTapLog.current = [];
+      launchMagpies(WILLOW_WORLD_POS.x, WILLOW_WORLD_POS.y, WILLOW_WORLD_POS.z);
+    }
   };
 
   // Reeds/cane scattered around the shore (8-12, up from the old fixed 2) --
@@ -278,7 +308,7 @@ export function PondAndGrandpa() {
   // vertical cylinder toward local +Z, rotation.y then yaws that lean to
   // the desired azimuth (same sin/cos-around-Y convention as the rest of
   // the scene), so each frond droops out and down like real willow branches.
-  const WILLOW_CANOPY_Y = 0.62;
+  // (WILLOW_CANOPY_Y is now module-scope, exported above for Magpies.jsx.)
   const willowGeometry = useMemo(() => {
     const rng = makeRng(777);
     const parts = [
