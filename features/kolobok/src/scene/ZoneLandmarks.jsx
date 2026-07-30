@@ -6,6 +6,7 @@ import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
+import { BlobShadow } from './BlobShadow';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -160,6 +161,10 @@ function Landmark({ zone }) {
     <group position={pos} rotation={[0, a + Math.PI, 0]} onClick={onTap}>
       {zone.id === 'izba' ? (
         <>
+          {/* Live feedback: "let there be a blob-like shadow cast by the
+              house" -- sized to roughly the wall footprint (1.7x1.3) plus a
+              little overhang. */}
+          <BlobShadow radiusX={1.05} radiusZ={0.85} />
           <mesh position={[0, 0.85, 0]} material={izbaMaterials.walls}>
             <boxGeometry args={[1.7, 1.1, 1.3]} />
           </mesh>

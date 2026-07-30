@@ -21,5 +21,5 @@ export const polish = {
   pondGlint: true,
   pollen: true,
   birds: true,
-  godRays: true,
+  godRays: false, // live feedback: turned off at golden hour
 };

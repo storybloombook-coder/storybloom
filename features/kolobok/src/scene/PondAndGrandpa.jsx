@@ -44,6 +44,18 @@ const WILLOW_YAW = rad(15);
 // A bit more than Vegetation.jsx's TREE_SWAY_AMPLITUDE (rad(2.2)): willows
 // are known for reading as flowier/more wind-responsive than a birch/spruce.
 const WILLOW_SWAY_AMPLITUDE = rad(4);
+// Grab-and-spring-back tap reaction (matches Vegetation.jsx's own
+// springEnvelope shape: quick rise then a decaying cosine, never swinging
+// past center back toward the tap).
+const WILLOW_BEND_MAX_TILT = rad(9);
+const WILLOW_BEND_RISE_S = 0.12;
+const WILLOW_BEND_DECAY = 6;
+const WILLOW_BEND_FREQ = 2.5;
+function willowSpringEnvelope(t) {
+  if (t < WILLOW_BEND_RISE_S) return t / WILLOW_BEND_RISE_S;
+  const tt = t - WILLOW_BEND_RISE_S;
+  return Math.max(0, Math.exp(-tt * WILLOW_BEND_DECAY) * Math.cos(tt * WILLOW_BEND_FREQ * Math.PI * 2));
+}
 
 const RECAST_INTERVAL = 30;
 const RIPPLE_COUNT = 3;
@@ -200,6 +212,21 @@ export function PondAndGrandpa() {
   const splashRipplesRef = useRef();
   const dropletsRef = useRef();
   const willowRef = useRef();
+  // Live feedback: "let the willow be just as clickable as the other
+  // trees" -- a one-shot grab-and-spring-back tilt on tap, same spring
+  // shape (quick rise, decaying cosine) as Vegetation.jsx's onTreeGrab,
+  // just self-contained here since this is a single static mesh, not an
+  // instanced array. t=-1 idle; else seconds since the tap.
+  const willowBend = useRef({ t: -1, ax: 0, az: 0 });
+  const onWillowGrab = (e) => {
+    e.stopPropagation();
+    const dx = e.point.x - WILLOW_POS[0];
+    const dz = e.point.z - WILLOW_POS[2];
+    const len = Math.max(0.001, Math.hypot(dx, dz));
+    willowBend.current.ax = dx / len;
+    willowBend.current.az = dz / len;
+    willowBend.current.t = 0;
+  };
 
   // Reeds/cane scattered around the shore (8-12, up from the old fixed 2) --
   // seeded so placement is stable across reloads, keeping clear of Grandpa's
@@ -456,6 +483,20 @@ export function PondAndGrandpa() {
         tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);
         willowRef.current.quaternion.premultiply(tiltQuatTmp);
       }
+      // Tap grab-and-spring-back, on top of the wind sway above.
+      const wb = willowBend.current;
+      if (wb.t >= 0) {
+        wb.t += dt;
+        if (wb.t > 1.1) wb.t = -1;
+        else {
+          const tiltAngle = WILLOW_BEND_MAX_TILT * willowSpringEnvelope(wb.t);
+          if (tiltAngle) {
+            tiltAxisTmp.set(wb.az, 0, -wb.ax).normalize();
+            tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, tiltAngle);
+            willowRef.current.quaternion.premultiply(tiltQuatTmp);
+          }
+        }
+      }
     }
 
     // Idle recast every ~30s (skipped while an egg catch is running).
@@ -630,8 +671,15 @@ export function PondAndGrandpa() {
       {/* Willow -- BACKLOG.md #6. Live feedback: moved again, marked directly
           on a screenshot -- between the water's edge and the grass on the
           side away from the bridge/stump, roughly level with the beach arc. */}
-      <mesh ref={willowRef} geometry={willowGeometry} position={WILLOW_POS} rotation={[0, WILLOW_YAW, 0]}>
+      <mesh ref={willowRef} geometry={willowGeometry} position={WILLOW_POS} rotation={[0, WILLOW_YAW, 0]} onPointerDown={onWillowGrab}>
         <meshStandardMaterial vertexColors roughness={0.85} side={DoubleSide} />
+      </mesh>
+      {/* Generous invisible hitbox -- same "tappable like other trees"
+          reasoning as Grandpa's own oversized hitbox: the willow's actual
+          branch geometry is thin and easy to miss on mobile. */}
+      <mesh position={[WILLOW_POS[0], WILLOW_POS[1] + 0.5, WILLOW_POS[2]]} visible={false} onPointerDown={onWillowGrab}>
+        <sphereGeometry args={[0.5, 6, 6]} />
+        <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
       {/* Grandpa on his stump, facing the water */}

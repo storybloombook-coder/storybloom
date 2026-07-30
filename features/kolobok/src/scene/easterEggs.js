@@ -6,11 +6,8 @@
 // store actions. Ticked from AtmosphereDirector's frame loop.
 
 import * as Haptics from 'expo-haptics';
-import {
-  orbit, story, storyMotion, useSceneStore,
-} from '../state/sceneStore';
+import { useSceneStore } from '../state/sceneStore';
 import { createTimeline } from './timeline';
-import { foxCatchSteps, ZONE_ANGLE } from './storyChapters';
 
 export const eggMotion = {
   rodPitch: 0,     // radians added to Grandpa's rod pitch
@@ -100,30 +97,6 @@ function runFishing(ctx) {
   ]);
 }
 
-/** The fox 5-tap catch (ANIMATION_SPEC §7), migrated into the registry per
- *  EASTER_EGGS.md: a mini story beat in free mode. Temporarily flips
- *  orbit.mode to 'story' so the existing camera/Kolobok scripted machinery
- *  (and the shared foxCatchSteps gulp->black->rebirth tail) just work. */
-function runFoxCatch(ctx) {
-  orbit.mode = 'story';
-  storyMotion.kolobokAngle = ZONE_ANGLE.fox;
-  storyMotion.framing = { radius: 10, height: 5.6, lookAtY: 1.0 };
-  return createTimeline([
-    { at: 0, dur: 500, ease: 'easeInOutSine', update: (t) => { storyMotion.foxHeadPitch = 0.3 * Math.sin(t * Math.PI); } },
-    { at: 500, dur: 600, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.fox + (4 * Math.PI / 180) * t; } },
-    ...foxCatchSteps(ctx, 1100),
-    {
-      at: 7400,
-      call: () => {
-        storyMotion.framing = null;
-        orbit.mode = 'user';
-        story.lastInputAt = now(); // don't let the story auto-resume instantly
-      },
-    },
-    { at: 7500, call: () => {} },
-  ]);
-}
-
 // ---------------------------------------------------------------- owl
 
 /** Triple-tap-a-spruce (EASTER_EGGS.md §2 owl). Pop out, swivel twice, one
@@ -191,7 +164,6 @@ function runSmokeRings(ctx) {
 
 const REGISTRY = [
   { id: 'grandpa-fishing', target: 'grandpa', count: 1, windowMs: 0, cooldownMs: 8000, run: runFishing },
-  { id: 'fox-catch', target: 'fox', count: 5, windowMs: 6000, cooldownMs: 30000, run: runFoxCatch },
 ];
 
 const tapLog = {};      // target -> [timestamps]

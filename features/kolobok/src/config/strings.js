@@ -38,6 +38,7 @@ export const STRINGS = {
         grandma: "And on he rolled — from Grandma and Grandpa he'd gotten away...",
         hare: "And on he rolled — from the Hare he'd gotten away...",
         wolf: "And on he rolled — from the Wolf he'd gotten away...",
+        bear: "And on he rolled — from the Bear he'd gotten away...",
       },
       fox: {
         intro: 'But by the fox clearing sat someone very polite...',
@@ -51,7 +52,6 @@ export const STRINGS = {
     },
     ui: {
       hint: 'Swipe to travel · tap a friend to say hello',
-      cameraTip: 'Drag anywhere to look around',
       playTale: 'Play the tale',
       pauseTale: 'Pause the tale',
       restartTale: 'Play the tale again',
@@ -106,6 +106,7 @@ export const STRINGS = {
         grandma: 'И покатился дальше — от бабушки ушёл, от дедушки ушёл...',
         hare: 'И покатился дальше — и от зайца ушёл...',
         wolf: 'И покатился дальше — и от волка ушёл...',
+        bear: 'И покатился дальше — и от медведя ушёл...',
       },
       fox: {
         intro: 'А на лисьей поляне сидел кое-кто очень вежливый...',
@@ -119,7 +120,6 @@ export const STRINGS = {
     },
     ui: {
       hint: 'Проведите пальцем — и в путь · нажмите на героя',
-      cameraTip: 'Проведите пальцем в любом месте, чтобы осмотреться',
       playTale: 'Рассказать сказку',
       pauseTale: 'Остановить сказку',
       restartTale: 'Рассказать сказку снова',

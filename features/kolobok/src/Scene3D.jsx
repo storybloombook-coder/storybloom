@@ -237,12 +237,6 @@ export function Scene3D({ onNavigate, focused = true }) {
           <Text style={styles.eggCounterText}>{discoveredEggCount}/{TOTAL_EGGS}</Text>
         </View>
 
-        {/* Camera-control tip, bottom-center -- the pan gesture (Scene3D's
-            own `pan`, Gesture.Pan().minPointers(1).maxPointers(1)) is a
-            plain single-finger drag, so the copy here must say that and
-            nothing fancier (no pinch/two-finger gesture exists to
-            describe). */}
-        <Text style={styles.cameraTip} pointerEvents="none">{t('ui.cameraTip', locale)}</Text>
       </View>
 
       {/* Dialogue bubble: anchored above whoever is actually speaking
@@ -431,13 +425,6 @@ const styles = StyleSheet.create({
     borderLeftColor: '#d9a441',
   },
   bubbleText: { fontSize: 15, color: '#2e2a22', textAlign: 'center' },
-  cameraTip: {
-    alignSelf: 'center',
-    fontSize: 12,
-    color: '#2e2a22',
-    opacity: 0.55,
-    marginBottom: 8,
-  },
   // Position/size only -- this is the OUTER TactileButton Pressable's own
   // style (it owns the touch target since these are laid out via
   // position:absolute). Visual look lives in buttonVisual below, on the

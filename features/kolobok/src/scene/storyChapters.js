@@ -282,14 +282,6 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
   ];
 }
 
-/** The full gulp -> fade -> rebirth tail, unchanged as a single continuous
- *  beat -- kept for the fox easter egg (runFoxCatch in easterEggs.js), which
- *  plays start to finish in one go (a quick free-mode aside, not the tale's
- *  own ending, so it has no restart-button gate). */
-export function foxCatchSteps(ctx, at0 = 0) {
-  return [...foxCatchGulpSteps(ctx, at0), ...foxCatchRebirthSteps(ctx, at0 + 3100)];
-}
-
 /** Chapter 8 — Fox finale (12s): the one time the tale wins. */
 function buildFoxFinale(ctx) {
   const foxAngle = ZONE_ANGLE.fox;
@@ -367,9 +359,14 @@ export const CHAPTERS = [
   buildRoad('izba'),                                // 1: izba -> hare
   buildAnimalChapter('hare', 'story.brag.grandma'), // 2
   buildRoad('hare'),                                // 3: hare -> wolf
-  buildAnimalChapter('wolf', 'story.brag.hare'),    // 4
+  // Live feedback: this line plays at the TAIL of each animal's own chapter
+  // (right after Kolobok escapes IT), so it must name THAT animal, not the
+  // one before it -- wolf's chapter was saying "got away from the Hare"
+  // (the PREVIOUS chapter's escape), bear's said "...the Wolf". Each now
+  // names its own zoneId's escape instead.
+  buildAnimalChapter('wolf', 'story.brag.wolf'),    // 4
   buildRoad('wolf'),                                // 5: wolf -> bear
-  buildAnimalChapter('bear', 'story.brag.wolf'),    // 6
+  buildAnimalChapter('bear', 'story.brag.bear'),    // 6
   buildRoad('bear'),                                // 7: bear -> fox
   buildFoxFinale,                                   // 8
 ];
