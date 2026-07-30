@@ -384,7 +384,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var textProgram = 0
     private var textMvpLocation = 0
     private var textTextureLocation = 0
-    private var textMesh: TextGlMesh? = null
+    private var crossroadsTextMeshes = emptyList<TextGlMesh>()
     private var englishRockLabels = IntArray(0)
     private var russianRockLabels = IntArray(0)
     @Volatile
@@ -397,6 +397,47 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var cone: GlMesh? = null
     private var disc: GlMesh? = null
     private var ring: GlMesh? = null
+    private var pondBlob: GlMesh? = null
+    private var crossroadsBoulder: GlMesh? = null
+    private var crossroadsPlaqueMeshes = emptyList<GlMesh>()
+    private var crossroadsPlaqueAccentMeshes = emptyList<GlMesh>()
+    private var izbaRoofShingleBatches = emptyList<StaticBatch>()
+
+    private val crossroadsPlaqueSpecs = listOf(
+        CrossroadsPlaqueSpec(
+            y = 1.76f,
+            innerRadius = .63f,
+            outerRadius = .87f,
+            height = .34f,
+            arcLength = 1.36f,
+            azimuth = 18f,
+            tilt = -3f,
+            labelScaleX = .55f,
+            labelScaleY = .105f,
+        ),
+        CrossroadsPlaqueSpec(
+            y = 1.27f,
+            innerRadius = .80f,
+            outerRadius = 1.07f,
+            height = .35f,
+            arcLength = 1.52f,
+            azimuth = -6f,
+            tilt = 2f,
+            labelScaleX = .62f,
+            labelScaleY = .108f,
+        ),
+        CrossroadsPlaqueSpec(
+            y = .78f,
+            innerRadius = .89f,
+            outerRadius = 1.17f,
+            height = .33f,
+            arcLength = 1.50f,
+            azimuth = 14f,
+            tilt = -2f,
+            labelScaleX = .57f,
+            labelScaleY = .102f,
+        ),
+    )
 
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
@@ -485,7 +526,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         PolarPoint(239f, 6.86f),
         PolarPoint(258f, 7.27f),
         PolarPoint(326f, 7.20f),
-        PolarPoint(340f, 6.83f),
+        PolarPoint(284f, 6.92f),
         PolarPoint(20f, 7.30f),
         PolarPoint(94f, 7.33f),
         PolarPoint(172f, 5.32f),
@@ -503,7 +544,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         PolarPoint(264f, 7.21f),
         PolarPoint(309f, 6.78f),
         PolarPoint(321f, 7.42f),
-        PolarPoint(338f, 6.98f),
+        PolarPoint(72f, 7.08f),
         PolarPoint(18f, 5.42f),
         PolarPoint(116f, 5.55f),
         PolarPoint(252f, 5.48f),
@@ -648,7 +689,6 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         textProgram = createProgram(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
         textMvpLocation = GLES30.glGetUniformLocation(textProgram, "uMvp")
         textTextureLocation = GLES30.glGetUniformLocation(textProgram, "uTexture")
-        textMesh = createTextMesh()
         englishRockLabels = arrayOf("ADD A BOOK", "CREATE A STORY", "MY LIBRARY")
             .map(::createTextTexture)
             .toIntArray()
@@ -673,6 +713,40 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         cone = createMesh(coneData)
         disc = createMesh(discData)
         ring = createMesh(Geometry.ring(64, .86f))
+        pondBlob = createMesh(Geometry.irregularDisc(20, 140))
+        crossroadsBoulder = createMesh(Geometry.profiledBoulder(20))
+        crossroadsPlaqueMeshes = crossroadsPlaqueSpecs.mapIndexed { index, spec ->
+            createMesh(
+                Geometry.curvedArcBlock(
+                    innerRadius = spec.innerRadius,
+                    outerRadius = spec.outerRadius,
+                    height = spec.height,
+                    arc = spec.arcLength / spec.outerRadius,
+                    segments = 20,
+                    weatheringSeed = index * 71 + 19,
+                ),
+            )
+        }
+        crossroadsPlaqueAccentMeshes = crossroadsPlaqueSpecs.map { spec ->
+            createMesh(
+                Geometry.curvedArcBlock(
+                    innerRadius = spec.innerRadius - .025f,
+                    outerRadius = spec.outerRadius - .055f,
+                    height = spec.height + .085f,
+                    arc = spec.arcLength / spec.outerRadius * 1.10f,
+                    segments = 20,
+                ),
+            )
+        }
+        crossroadsTextMeshes = crossroadsPlaqueSpecs.map { spec ->
+            val radius = (spec.outerRadius + .035f) * CROSSROADS_SCALE
+            createCurvedTextMesh(
+                radius = radius,
+                arc = spec.labelScaleX * 2f * .94f / radius,
+                segments = 20,
+            )
+        }
+        izbaRoofShingleBatches = createIzbaRoofShingleBatches(cubeData)
         backgroundBatches = createBackgroundBatches(
             lowSphereData = lowSphereData,
             cylinderData = batchCylinderData,
@@ -2297,6 +2371,73 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         return createStaticBatches(groups)
     }
 
+    private fun createIzbaRoofShingleBatches(cubeData: MeshData): List<StaticBatch> {
+        val centerZ = 6.25f
+        val roofCenterY = 1.99f
+        val roofCenterOffset = .68f
+        val roofAngle = 36f
+        val roofHalfDepth = 1.31f
+        val palette = listOf(
+            "#79332C",
+            "#8C3C30",
+            "#9D4936",
+            "#AF5840",
+            "#86503D",
+            "#B46849",
+        )
+        val groups = linkedMapOf<String, MutableList<MeshPart>>()
+        for (side in listOf(-1f, 1f)) {
+            val rotation = -side * roofAngle
+            val radians = Math.toRadians(rotation.toDouble())
+            val normalX = side * sin(Math.toRadians(roofAngle.toDouble())).toFloat()
+            val normalY = cos(Math.toRadians(roofAngle.toDouble())).toFloat()
+            repeat(5) { row ->
+                val ridgeward = -.72f + row * .36f
+                val localX = -side * ridgeward
+                repeat(8) { column ->
+                    val seed =
+                        row * 131 + column * 47 + if (side > 0f) 907 else 211
+                    val stagger = if (row % 2 == 0) -.025f else .025f
+                    val z =
+                        centerZ - 1.12f + column * .32f + stagger +
+                            (pseudo(seed + 5) - .5f) * .022f
+                    if (abs(z - centerZ) > roofHalfDepth - .11f) return@repeat
+                    val surfaceLift = .105f + (pseudo(seed + 11) - .5f) * .006f
+                    val x =
+                        side * roofCenterOffset +
+                            localX * cos(radians).toFloat() +
+                            normalX * surfaceLift
+                    val y =
+                        roofCenterY +
+                            localX * sin(radians).toFloat() +
+                            normalY * surfaceLift
+                    val colorIndex =
+                        ((pseudo(seed + 17) * palette.size).toInt() + row + column) % palette.size
+                    groups.getOrPut(palette[colorIndex]) { mutableListOf() } += MeshPart(
+                        data = cubeData,
+                        transform = Transform(
+                            x,
+                            y,
+                            z,
+                            .205f + (pseudo(seed + 23) - .5f) * .015f,
+                            .025f,
+                            .177f + (pseudo(seed + 29) - .5f) * .012f,
+                            rotationY = (pseudo(seed + 31) - .5f) * 1.2f,
+                            rotationZ = rotation + (pseudo(seed + 37) - .5f) * 1.1f,
+                        ),
+                    )
+                }
+            }
+        }
+        return groups.map { (hex, parts) ->
+            StaticBatch(
+                mesh = createMesh(Geometry.merge(parts)),
+                color = color(hex),
+                rimStrength = .10f,
+            )
+        }
+    }
+
     private fun createStaticBatches(
         groups: LinkedHashMap<BatchStyle, MutableList<MeshPart>>,
     ): List<StaticBatch> = groups.mapNotNull { (style, parts) ->
@@ -2315,51 +2456,123 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         draw(
             requireNotNull(disc),
             color("#31522D", .22f),
-            Transform(0f, .055f, 0f, 1.08f, .025f, .78f),
+            Transform(0f, .055f, 0f, 1.20f, .025f, 1.00f),
         )
         draw(
-            requireNotNull(lowSphere),
-            color("#6E756A"),
-            Transform(0f, 1.03f, 0f, .82f, 1.05f, .62f, rotationY = -8f, rotationZ = 3f),
-            rimStrength = .12f,
+            requireNotNull(crossroadsBoulder),
+            color("#747970"),
+            Transform(0f, 0f, 0f, CROSSROADS_SCALE, CROSSROADS_SCALE, CROSSROADS_SCALE),
+            rimStrength = .18f,
         )
-        draw(
-            requireNotNull(lowSphere),
-            color("#66865A"),
-            Transform(-.08f, 1.92f, -.02f, .61f, .18f, .50f, rotationY = 15f),
-        )
-        val plaqueColor = color("#A8733C")
+
+        // Moss grows in separate soft patches instead of one perfectly flat
+        // lid, preserving the boulder's tapered crown and irregular outline.
         listOf(
-            crossroadsPlaqueTransform(-.08f, 1.48f, .72f, .66f, .14f, .055f, -3f),
-            crossroadsPlaqueTransform(.08f, 1.13f, .74f, .72f, .14f, .055f, 2f),
-            crossroadsPlaqueTransform(-.04f, .78f, .715f, .64f, .13f, .055f, -2f),
-        ).forEach {
-            draw(requireNotNull(cube), plaqueColor, it)
+            Transform(-.18f, 2.02f, .02f, .35f, .09f, .28f, rotationY = 18f, rotationZ = -5f),
+            Transform(.16f, 1.98f, -.02f, .31f, .087f, .25f, rotationY = -21f, rotationZ = 6f),
+            Transform(-.71f, .22f, .18f, .25f, .09f, .22f, rotationY = 33f),
+            Transform(.66f, .18f, -.31f, .23f, .078f, .27f, rotationY = -14f),
+        ).forEachIndexed { index, transform ->
+            draw(
+                requireNotNull(lowSphere),
+                color(if (index < 2) "#66865A" else "#5F8055"),
+                transform,
+                rimStrength = .10f,
+            )
         }
+
+        val plaqueColors = listOf("#AA7949", "#95653E", "#B17B48")
+        crossroadsPlaqueSpecs.forEachIndexed { index, spec ->
+            val plaqueHeading = crossroadsPlaqueHeading() + spec.azimuth
+            draw(
+                crossroadsPlaqueAccentMeshes[index],
+                color("#4D3326"),
+                Transform(
+                    0f,
+                    spec.y * CROSSROADS_SCALE,
+                    0f,
+                    CROSSROADS_SCALE,
+                    CROSSROADS_SCALE,
+                    CROSSROADS_SCALE,
+                    rotationY = plaqueHeading,
+                    rotationZ = spec.tilt,
+                ),
+                rimStrength = .04f,
+            )
+            draw(
+                crossroadsPlaqueMeshes[index],
+                color(plaqueColors[index]),
+                Transform(
+                    0f,
+                    spec.y * CROSSROADS_SCALE,
+                    0f,
+                    CROSSROADS_SCALE,
+                    CROSSROADS_SCALE,
+                    CROSSROADS_SCALE,
+                    rotationY = plaqueHeading,
+                    rotationZ = spec.tilt,
+                ),
+                rimStrength = .18f,
+            )
+            val fastenerLocalAngle = spec.arcLength / spec.outerRadius * .395f
+            val plaqueHeadingRadians = Math.toRadians(plaqueHeading.toDouble())
+            val plaqueTiltRadians = Math.toRadians(spec.tilt.toDouble())
+            val fastenerRadius = (spec.outerRadius + .050f) * CROSSROADS_SCALE
+            for (side in listOf(-1f, 1f)) {
+                val localAngle = side * fastenerLocalAngle
+                val localX = sin(localAngle) * fastenerRadius
+                val localY = spec.height * CROSSROADS_SCALE * .07f
+                val localZ = cos(localAngle) * fastenerRadius
+                val tiltedX =
+                    cos(plaqueTiltRadians).toFloat() * localX -
+                        sin(plaqueTiltRadians).toFloat() * localY
+                val worldX =
+                    cos(plaqueHeadingRadians).toFloat() * tiltedX +
+                        sin(plaqueHeadingRadians).toFloat() * localZ
+                val worldY =
+                    spec.y * CROSSROADS_SCALE +
+                        sin(plaqueTiltRadians).toFloat() * localX +
+                        cos(plaqueTiltRadians).toFloat() * localY
+                val worldZ =
+                    -sin(plaqueHeadingRadians).toFloat() * tiltedX +
+                        cos(plaqueHeadingRadians).toFloat() * localZ
+                draw(
+                    requireNotNull(lowSphere),
+                    color("#49372B"),
+                    Transform(
+                        worldX,
+                        worldY,
+                        worldZ,
+                        .032f,
+                        .037f,
+                        .018f,
+                        rotationY = plaqueHeading + Math.toDegrees(localAngle.toDouble()).toFloat(),
+                        rotationZ = spec.tilt,
+                    ),
+                    rimStrength = .04f,
+                )
+            }
+        }
+
         val labels = if (russianRockMenu) russianRockLabels else englishRockLabels
-        if (labels.size == 3) {
-            drawTextLabel(
-                labels[0],
-                crossroadsPlaqueTransform(-.08f, 1.48f, .783f, .61f, .100f, 1f, -3f),
-            )
-            drawTextLabel(
-                labels[1],
-                crossroadsPlaqueTransform(.08f, 1.13f, .803f, .67f, .100f, 1f, 2f),
-            )
-            drawTextLabel(
-                labels[2],
-                crossroadsPlaqueTransform(-.04f, .78f, .788f, .58f, .092f, 1f, -2f),
-            )
+        if (labels.size == 3 && crossroadsTextMeshes.size == 3) {
+            crossroadsPlaqueSpecs.forEachIndexed { index, spec ->
+                drawTextLabel(
+                    labels[index],
+                    crossroadsTextMeshes[index],
+                    crossroadsPlaqueLabelTransform(spec),
+                )
+            }
         }
         draw(
             requireNotNull(lowSphere),
             color("#87917D"),
-            Transform(-.66f, .21f, .18f, .31f, .20f, .27f, rotationZ = -11f),
+            Transform(-.78f, .15f, .27f, .28f, .16f, .25f, rotationZ = -11f),
         )
         draw(
             requireNotNull(lowSphere),
             color("#7B8277"),
-            Transform(.60f, .18f, -.22f, .27f, .17f, .31f, rotationZ = 9f),
+            Transform(.76f, .14f, -.27f, .25f, .15f, .28f, rotationZ = 9f),
         )
         drawStoneBirds()
     }
@@ -2369,7 +2582,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val flying = elapsed in 0f..6.2f
         repeat(7) { index ->
             val angle = pseudo(index * 47 + 3) * 360f
-            val baseRadius = .68f + pseudo(index * 59 + 8) * .43f
+            val baseRadius = 1.00f + pseudo(index * 59 + 8) * .40f
             val (baseX, baseZ) = radial(angle, baseRadius)
             val baseY = .20f + pseudo(index * 71 + 4) * .13f
             var x = baseX
@@ -2410,8 +2623,15 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
 
     private fun drawIzba() {
         val centerZ = 6.25f
-        val roofCenterY = 1.96f
-        val roofHalfDepth = 1.05f
+        val roofCenterY = 1.99f
+        val roofCenterOffset = .68f
+        val roofHalfSlope = .94f
+        val roofHalfDepth = 1.31f
+        val roofAngle = 36f
+        val roofAngleRadians = Math.toRadians(roofAngle.toDouble())
+        val roofRidgeY = roofCenterY + sin(roofAngleRadians).toFloat() * roofHalfSlope
+        val roofEaveX = roofCenterOffset + cos(roofAngleRadians).toFloat() * roofHalfSlope
+        val roofEaveY = roofCenterY - sin(roofAngleRadians).toFloat() * roofHalfSlope
         val gableCenterY = 1.97f
         val gableHalfHeight = .51f
         val izbaFlashElapsed = eventSeconds(izbaFlashStartedMs)
@@ -2458,30 +2678,110 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
         draw(
             requireNotNull(cube),
-            color("#8F3F31"),
+            color("#87392F"),
             Transform(
-                -.60f,
-                roofCenterY,
+                -roofCenterOffset,
+                roofCenterY - .045f,
                 centerZ,
-                .79f,
-                .095f,
+                roofHalfSlope,
+                .125f,
                 roofHalfDepth,
-                rotationZ = 35f,
+                rotationZ = roofAngle,
             ),
         )
         draw(
             requireNotNull(cube),
-            color("#A94B38"),
+            color("#913F32"),
             Transform(
-                .60f,
-                roofCenterY,
+                roofCenterOffset,
+                roofCenterY - .045f,
                 centerZ,
-                .79f,
-                .095f,
+                roofHalfSlope,
+                .125f,
                 roofHalfDepth,
-                rotationZ = -35f,
+                rotationZ = -roofAngle,
             ),
         )
+        draw(
+            requireNotNull(cube),
+            color("#A74E3B"),
+            Transform(
+                -roofCenterOffset,
+                roofCenterY,
+                centerZ,
+                roofHalfSlope,
+                .080f,
+                roofHalfDepth,
+                rotationZ = roofAngle,
+            ),
+            rimStrength = .14f,
+        )
+        draw(
+            requireNotNull(cube),
+            color("#B35440"),
+            Transform(
+                roofCenterOffset,
+                roofCenterY,
+                centerZ,
+                roofHalfSlope,
+                .080f,
+                roofHalfDepth,
+                rotationZ = -roofAngle,
+            ),
+            rimStrength = .14f,
+        )
+
+        // Substantial eaves, ridge cap and front/back rake boards make the
+        // roof read as a complete overhanging construction from every side.
+        for (side in listOf(-1f, 1f)) {
+            draw(
+                requireNotNull(cube),
+                color("#713127"),
+                Transform(
+                    side * roofEaveX,
+                    roofEaveY,
+                    centerZ,
+                    .060f,
+                    .070f,
+                    roofHalfDepth + .035f,
+                ),
+                rimStrength = .08f,
+            )
+        }
+        draw(
+            requireNotNull(cube),
+            color("#6E3028"),
+            Transform(0f, roofRidgeY + .025f, centerZ, .075f, .075f, roofHalfDepth + .085f),
+            rimStrength = .10f,
+        )
+        for (frontBack in listOf(-1f, 1f)) {
+            val z = centerZ + frontBack * (roofHalfDepth + .018f)
+            val ridge = WorldPoint3(0f, roofRidgeY + .015f, z)
+            drawLineSegment(
+                ridge,
+                WorldPoint3(-roofEaveX, roofEaveY, z),
+                "#743128",
+                1f,
+                .048f,
+            )
+            drawLineSegment(
+                ridge,
+                WorldPoint3(roofEaveX, roofEaveY, z),
+                "#743128",
+                1f,
+                .048f,
+            )
+        }
+
+        izbaRoofShingleBatches.forEach { batch ->
+            draw(
+                batch.mesh,
+                batch.color,
+                IDENTITY_TRANSFORM,
+                rimStrength = batch.rimStrength,
+            )
+        }
+
         for (side in listOf(-1f, 1f)) {
             val gableZ = centerZ + side * .955f
             draw(
@@ -2690,68 +2990,143 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun drawPondAndGrandpa() {
-        val pondX = -2.78f
-        val pondZ = 4.43f
         draw(
-            requireNotNull(disc),
-            color("#557D45"),
-            Transform(pondX, .065f, pondZ, 1.42f, .025f, .98f),
+            requireNotNull(pondBlob),
+            color("#8CB8C8"),
+            Transform(POND_X, .062f, POND_Z, 1.64f, 1f, 1.64f, rotationY = POND_GROUP_HEADING),
+            rimStrength = .06f,
         )
         draw(
-            requireNotNull(disc),
-            color("#72B8C8", .92f),
-            Transform(pondX, .10f, pondZ, 1.16f, .018f, .76f),
+            requireNotNull(pondBlob),
+            color("#72B8C8", .94f),
+            Transform(POND_X, .093f, POND_Z, 1.50f, 1f, 1.50f, rotationY = POND_GROUP_HEADING),
+            rimStrength = .12f,
         )
+        val beach = pondLocalPoint(.84f, .079f, -.08f)
         draw(
             requireNotNull(disc),
-            color("#D8C382", .72f),
-            Transform(pondX + .84f, .085f, pondZ - .08f, .42f, .012f, .55f, rotationY = -18f),
+            color("#D8C382", .76f),
+            Transform(
+                beach.x,
+                beach.y,
+                beach.z,
+                .48f,
+                .012f,
+                .62f,
+                rotationY = POND_GROUP_HEADING - 18f,
+            ),
             rimStrength = .04f,
         )
 
-        repeat(7) { index ->
-            val x = pondX - .84f + index * .28f
-            val arch = sin(index / 6f * PI.toFloat()) * .12f
+        // The bridge follows the inner path arc. Each plank is only bridge
+        // width, rather than pond width, and the rails connect the same
+        // sampled points so all parts share one curve and one arch.
+        val bridgePoints = (0 until BRIDGE_SEGMENTS).map { index ->
+            val t = index / (BRIDGE_SEGMENTS - 1f)
+            val angle =
+                BRIDGE_ARC_CENTER_DEGREES - BRIDGE_ARC_HALF_DEGREES +
+                    t * BRIDGE_ARC_HALF_DEGREES * 2f
+            val (x, z) = radial(angle, PATH_RADIUS)
+            WorldPoint3(
+                x,
+                .13f + sin(t * PI.toFloat()) * .19f,
+                z,
+            )
+        }
+        val leftRailPosts = mutableListOf<WorldPoint3>()
+        val rightRailPosts = mutableListOf<WorldPoint3>()
+        bridgePoints.forEachIndexed { index, point ->
+            val previous = bridgePoints[max(0, index - 1)]
+            val next = bridgePoints[min(bridgePoints.lastIndex, index + 1)]
+            val tangentX = next.x - previous.x
+            val tangentZ = next.z - previous.z
+            val tangentLength = sqrt(tangentX * tangentX + tangentZ * tangentZ).coerceAtLeast(.001f)
+            val unitX = tangentX / tangentLength
+            val unitZ = tangentZ / tangentLength
+            val perpendicularX = -unitZ
+            val perpendicularZ = unitX
+            val yaw = Math.toDegrees(kotlin.math.atan2(-unitZ, unitX).toDouble()).toFloat()
+            val horizontalLength = sqrt(tangentX * tangentX + tangentZ * tangentZ)
+            val slope = Math.toDegrees(
+                kotlin.math.atan2((next.y - previous.y).toDouble(), horizontalLength.toDouble()),
+            ).toFloat()
+            val segmentLength = if (index == 0 || index == bridgePoints.lastIndex) {
+                .255f
+            } else {
+                .270f
+            }
             draw(
                 requireNotNull(cube),
                 color(if (index % 2 == 0) "#8B653F" else "#9A7148"),
-                Transform(x, .19f + arch, pondZ, .115f, .052f, .88f, rotationZ = if (index % 2 == 0) 2f else -2f),
+                Transform(
+                    point.x,
+                    point.y,
+                    point.z,
+                    segmentLength,
+                    .035f,
+                    .285f + (pseudo(index * 31 + 9) - .5f) * .018f,
+                    rotationY = yaw + (pseudo(index * 41 + 3) - .5f) * 1.7f,
+                    rotationZ = slope + (pseudo(index * 53 + 5) - .5f) * 1.2f,
+                ),
+                rimStrength = .10f,
             )
-        }
-        for (side in listOf(-1f, 1f)) {
-            repeat(3) { index ->
-                val x = pondX + side * (.83f - index * .30f)
+            for (side in listOf(-1f, 1f)) {
+                val postX = point.x + perpendicularX * .30f * side
+                val postZ = point.z + perpendicularZ * .30f * side
+                val railY = .69f
+                val postHeight = (railY - point.y + .035f).coerceAtLeast(.10f)
                 draw(
                     requireNotNull(cylinder),
-                    color("#755138"),
-                    Transform(x, .53f, pondZ + .72f, .035f, .32f, .035f),
+                    color("#6B4C33"),
+                    Transform(
+                        postX,
+                        point.y + postHeight * .5f,
+                        postZ,
+                        .026f,
+                        postHeight * .5f,
+                        .026f,
+                    ),
+                    rimStrength = .08f,
                 )
+                val railPoint = WorldPoint3(postX, railY, postZ)
+                if (side < 0f) leftRailPosts += railPoint else rightRailPosts += railPoint
             }
-            draw(
-                requireNotNull(cube),
-                color("#845B3A"),
-                Transform(
-                    pondX + side * .52f,
-                    .72f,
-                    pondZ + .72f,
-                    .58f,
-                    .035f,
-                    .035f,
-                    rotationZ = side * 4f,
-                ),
-            )
         }
-
-        repeat(10) { index ->
-            val side = if (index % 2 == 0) -1f else 1f
-            val x = pondX + side * (1.07f + (index / 2) * .07f)
-            val z = pondZ + (index - 4.5f) * .16f
-            draw(requireNotNull(cylinder), color("#527E43"), Transform(x, .31f, z, .025f, .27f, .025f, rotationZ = side * 7f))
-            if (index % 2 == 0) {
-                draw(requireNotNull(cone), color("#8B6B3C"), Transform(x, .63f, z, .06f, .16f, .06f))
+        listOf(leftRailPosts, rightRailPosts).forEach { posts ->
+            for (index in 0 until posts.lastIndex) {
+                drawLineSegment(posts[index], posts[index + 1], "#845B3A", 1f, .024f)
             }
         }
 
+        // Reeds occupy the irregular shoreline but explicitly leave the
+        // bridge mouth, stump and water centre legible.
+        repeat(16) { index ->
+            val angle = index / 16f * PI.toFloat() * 2f + .18f
+            val localX = sin(angle) * (1.34f + pseudo(index * 73 + 3) * .18f)
+            val localZ = cos(angle) * (1.06f + pseudo(index * 79 + 7) * .17f)
+            val bridgeClear = localZ > .65f && abs(localX) < 1.08f
+            val stumpClear =
+                (localX - POND_GRANDPA_LOCAL_X) * (localX - POND_GRANDPA_LOCAL_X) +
+                    (localZ - POND_GRANDPA_LOCAL_Z) * (localZ - POND_GRANDPA_LOCAL_Z) < .34f
+            if (!bridgeClear && !stumpClear) {
+                val reed = pondLocalPoint(localX, .31f, localZ)
+                val lean = (pseudo(index * 83 + 11) - .5f) * 14f
+                draw(
+                    requireNotNull(cylinder),
+                    color(if (index % 3 == 0) "#5D8747" else "#527E43"),
+                    Transform(reed.x, reed.y, reed.z, .022f, .27f, .022f, rotationZ = lean),
+                )
+                if (index % 3 == 0) {
+                    draw(
+                        requireNotNull(cone),
+                        color("#8B6B3C"),
+                        Transform(reed.x, .63f, reed.z, .055f, .14f, .055f, rotationZ = lean),
+                    )
+                }
+            }
+        }
+
+        val bobberPoint = pondLocalPoint(.35f, .22f, .45f)
         val ripplePhase = (frame.storyTime * .42f) % 1f
         repeat(2) { index ->
             val phase = (ripplePhase + index * .46f) % 1f
@@ -2759,12 +3134,12 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 requireNotNull(ring),
                 color("#D8F4F5", .24f * (1f - phase)),
                 Transform(
-                    pondX + .25f,
-                    .132f,
-                    pondZ + .18f,
+                    bobberPoint.x,
+                    .122f,
+                    bobberPoint.z,
                     .18f + phase * .46f,
                     .010f,
-                    (.18f + phase * .46f) * .72f,
+                    .18f + phase * .46f,
                 ),
                 rimStrength = 0f,
             )
@@ -2776,29 +3151,32 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             PondPoint(.56f, -.18f, .14f),
         )
         lilyPads.forEachIndexed { index, point ->
+            val lily = pondLocalPoint(point.x, .135f, point.z)
             draw(
                 requireNotNull(disc),
                 color(if (index == 0) "#4E8D58" else "#5E9F60"),
                 Transform(
-                    pondX + point.x,
-                    .143f,
-                    pondZ + point.z,
+                    lily.x,
+                    lily.y,
+                    lily.z,
                     point.size,
                     .012f,
                     point.size * .72f,
-                    rotationY = index * 31f,
+                    rotationY = POND_GROUP_HEADING + index * 31f,
                 ),
                 rimStrength = .06f,
             )
         }
+        val lilyFlower = pondLocalPoint(.20f, .22f, .35f)
         draw(
             requireNotNull(lowSphere),
             color("#F7C2D2"),
-            Transform(pondX + .20f, .23f, pondZ + .35f, .07f, .045f, .07f),
+            Transform(lilyFlower.x, lilyFlower.y, lilyFlower.z, .07f, .045f, .07f),
         )
 
-        val willowX = pondX + 1.60f
-        val willowZ = pondZ + .62f
+        val willow = pondLocalPoint(.50f, 0f, 1.90f)
+        val willowX = willow.x
+        val willowZ = willow.z
         val willowElapsed = eventSeconds(willowSwayStartedMs)
         if (willowSwayStartedMs > 0L && willowElapsed > 2.8f) {
             willowSwayStartedMs = 0L
@@ -2856,143 +3234,125 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         repeat(10) { index ->
             val angle = index / 10f * PI.toFloat() * 2f
             val length = .34f + (index % 3) * .11f
-            draw(
-                requireNotNull(cube),
-                color("#598D4D", .88f),
-                Transform(
-                    willowX + cos(angle) * .55f + willowTopDx * .78f,
-                    1.28f - (index % 2) * .09f + willowTopDy * .78f,
-                    willowZ + sin(angle) * .48f,
-                    .016f,
-                    length,
-                    .016f,
-                    rotationZ = sin(angle) * 10f,
-                ),
-                rimStrength = .04f,
+            val attachment = WorldPoint3(
+                willowX + cos(angle) * .48f + willowTopDx * .83f,
+                1.57f - (index % 2) * .06f + willowTopDy * .83f,
+                willowZ + sin(angle) * .42f,
             )
+            val end = WorldPoint3(
+                attachment.x + sin(angle) * .045f,
+                attachment.y - length,
+                attachment.z + cos(angle) * .035f,
+            )
+            drawLineSegment(attachment, end, "#598D4D", .88f, .014f)
         }
         drawWillowMagpies(willowX + willowTopDx, willowZ, willowTopDy)
 
-        val grandpaX = -4.04f
-        val grandpaZ = 4.18f
-        val heading = facingCenter(grandpaX, grandpaZ)
+        val grandpa = pondLocalPoint(POND_GRANDPA_LOCAL_X, 0f, POND_GRANDPA_LOCAL_Z)
+        val grandpaX = grandpa.x
+        val grandpaZ = grandpa.z
+        val heading = facingPoint(grandpaX, grandpaZ, bobberPoint.x, bobberPoint.z)
+        draw(
+            requireNotNull(pondBlob),
+            color("#88AE68"),
+            Transform(
+                grandpaX,
+                .112f,
+                grandpaZ,
+                .44f,
+                1f,
+                .36f,
+                rotationY = POND_GROUP_HEADING - 16f,
+            ),
+            rimStrength = .05f,
+        )
         draw(
             requireNotNull(cylinder),
             color("#664A34"),
-            Transform(grandpaX, .20f, grandpaZ - .08f, .24f, .20f, .24f),
+            Transform(grandpaX, .12f, grandpaZ, .17f, .12f, .17f),
             rimStrength = .08f,
         )
-        drawShadow(grandpaX, grandpaZ, .48f, .34f)
-        drawActorPart(requireNotNull(lowSphere), "#557AA4", grandpaX, grandpaZ, 0f, .53f, 0f, .36f, .50f, .30f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, 0f, 1.12f, .03f, .27f, .30f, .25f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E7E2D8", grandpaX, grandpaZ, 0f, .98f, .22f, .25f, .20f, .17f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, 0f, 1.32f, -.02f, .29f, .16f, .25f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, -.09f, 1.17f, .245f, .028f, .035f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, .09f, 1.17f, .245f, .028f, .035f, .025f, heading)
-        drawActorPart(
-            requireNotNull(cylinder),
-            "#4D7198",
-            grandpaX,
-            grandpaZ,
-            -.25f,
-            .72f,
-            .14f,
-            .075f,
-            .25f,
-            .075f,
-            heading,
-            rotationZ = -12f,
-        )
-        drawActorPart(
-            requireNotNull(cylinder),
-            "#4D7198",
-            grandpaX,
-            grandpaZ,
-            .18f,
-            .75f,
-            .20f,
-            .075f,
-            .25f,
-            .075f,
-            heading,
-            rotationZ = 28f,
-        )
-        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, -.31f, .51f, .19f, .075f, .075f, .070f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, -.02f, .58f, .27f, .075f, .075f, .070f, heading)
+        drawShadow(grandpaX, grandpaZ, .36f, .27f)
+        drawActorPart(requireNotNull(lowSphere), "#557AA4", grandpaX, grandpaZ, 0f, .56f, 0f, .27f, .35f, .23f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, 0f, 1.00f, .02f, .20f, .21f, .19f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#E7E2D8", grandpaX, grandpaZ, 0f, .89f, .18f, .18f, .15f, .12f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, 0f, 1.21f, -.01f, .22f, .10f, .19f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, .07f, 1.32f, -.01f, .075f, .075f, .07f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, -.07f, 1.04f, .185f, .022f, .027f, .018f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, .07f, 1.04f, .185f, .022f, .027f, .018f, heading)
+
+        val grip = actorWorldPoint(grandpaX, grandpaZ, heading, .14f, .69f, .13f)
+        val leftShoulder = actorWorldPoint(grandpaX, grandpaZ, heading, -.17f, .72f, .03f)
+        val rightShoulder = actorWorldPoint(grandpaX, grandpaZ, heading, .17f, .72f, .03f)
+        drawLineSegment(leftShoulder, grip, "#4D7198", 1f, .055f)
+        drawLineSegment(rightShoulder, grip, "#4D7198", 1f, .055f)
+        draw(requireNotNull(lowSphere), color("#E9BE92"), Transform(grip.x, grip.y, grip.z, .066f, .066f, .062f))
         for (side in listOf(-1f, 1f)) {
             drawActorPart(
                 requireNotNull(lowSphere),
                 "#403830",
                 grandpaX,
                 grandpaZ,
-                side * .18f,
+                side * .13f,
+                .25f,
+                .13f,
+                .11f,
+                .075f,
                 .16f,
-                .22f,
-                .14f,
-                .10f,
-                .22f,
                 heading,
             )
         }
 
         val fishingElapsed = eventSeconds(fishingStartedMs)
-        val rodKick = if (fishingElapsed in 0f..3.4f) {
-            -sin((fishingElapsed / 3.4f).coerceIn(0f, 1f) * PI.toFloat()) * 23f
+        val catchEnvelope = if (fishingElapsed in 0f..3.4f) {
+            sin((fishingElapsed / 3.4f).coerceIn(0f, 1f) * PI.toFloat())
         } else {
-            sin(frame.storyTime * .70f) * 1.4f
+            0f
         }
-        val rodAngle = -38f + rodKick
-        drawActorPart(
-            requireNotNull(cube),
-            "#76512F",
-            grandpaX,
-            grandpaZ,
-            .30f,
-            1.13f,
-            .28f,
-            .025f,
-            .58f,
-            .025f,
-            heading,
-            rotationZ = rodAngle,
-        )
-        val floatBob = sin(frame.storyTime * 2.5f) * .025f
-        val bobberX = pondX + .22f
-        val bobberZ = pondZ + .18f
-        val rodAngleRadians = Math.toRadians(rodAngle.toDouble())
-        val rodTipLocalX = .30f - sin(rodAngleRadians).toFloat() * .58f
-        val rodTipY = 1.13f + cos(rodAngleRadians).toFloat() * .58f
-        val headingRadians = Math.toRadians(heading.toDouble())
+        val toFloatX = bobberPoint.x - grip.x
+        val toFloatZ = bobberPoint.z - grip.z
+        val toFloatLength = sqrt(toFloatX * toFloatX + toFloatZ * toFloatZ).coerceAtLeast(.001f)
+        val rodRise = .18f + catchEnvelope * .43f + sin(frame.storyTime * .70f) * .012f
+        val rodHorizontal = sqrt((.70f * .70f - rodRise * rodRise).coerceAtLeast(.05f))
         val rodTip = WorldPoint3(
-            x = grandpaX + rodTipLocalX * cos(headingRadians).toFloat() +
-                .28f * sin(headingRadians).toFloat(),
-            y = rodTipY,
-            z = grandpaZ - rodTipLocalX * sin(headingRadians).toFloat() +
-                .28f * cos(headingRadians).toFloat(),
+            grip.x + toFloatX / toFloatLength * rodHorizontal,
+            grip.y + rodRise,
+            grip.z + toFloatZ / toFloatLength * rodHorizontal,
         )
-        val bobberTop = WorldPoint3(bobberX, .27f + floatBob, bobberZ)
+        drawLineSegment(grip, rodTip, "#76512F", 1f, .018f)
+
+        val floatBob = sin(frame.storyTime * 2.5f) * .025f
+        val bobberTop = WorldPoint3(bobberPoint.x, .25f + floatBob, bobberPoint.z)
         val lineSag = WorldPoint3(
             x = rodTip.x + (bobberTop.x - rodTip.x) * .55f,
-            y = ((rodTip.y + bobberTop.y) * .5f - .15f).coerceAtLeast(.34f),
+            y = ((rodTip.y + bobberTop.y) * .5f - .13f).coerceAtLeast(.32f),
             z = rodTip.z + (bobberTop.z - rodTip.z) * .55f,
         )
         drawLineSegment(rodTip, lineSag, "#E9E5DA", .78f, .008f)
         drawLineSegment(lineSag, bobberTop, "#E9E5DA", .78f, .008f)
-        draw(requireNotNull(lowSphere), color("#F5F2E8"), Transform(bobberX, .18f + floatBob, bobberZ, .045f, .055f, .045f))
-        draw(requireNotNull(lowSphere), color("#D94D43"), Transform(bobberX, .23f + floatBob, bobberZ, .046f, .045f, .046f))
+        draw(requireNotNull(lowSphere), color("#F5F2E8"), Transform(bobberPoint.x, .17f + floatBob, bobberPoint.z, .045f, .055f, .045f))
+        draw(requireNotNull(lowSphere), color("#D94D43"), Transform(bobberPoint.x, .22f + floatBob, bobberPoint.z, .046f, .045f, .046f))
 
         repeat(accumulatedBoots.coerceAtMost(3)) { index ->
+            val boot = actorWorldPoint(
+                grandpaX,
+                grandpaZ,
+                heading,
+                -.34f - index * .13f,
+                .13f,
+                -.15f + index * .08f,
+            )
             draw(
                 requireNotNull(cube),
                 color("#4A4038"),
                 Transform(
-                    grandpaX - .42f - index * .14f,
-                    .12f,
-                    grandpaZ - .22f + index * .10f,
+                    boot.x,
+                    boot.y,
+                    boot.z,
                     .10f,
                     .07f,
                     .055f,
-                    rotationY = index * 19f,
+                    rotationY = heading + index * 19f,
                     rotationZ = -8f + index * 7f,
                 ),
                 rimStrength = .05f,
@@ -3003,10 +3363,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val up = ((fishingElapsed - .42f) / .88f).coerceIn(0f, 1f)
             val down = ((fishingElapsed - 2.30f) / .85f).coerceIn(0f, 1f)
             val travel = up * (1f - down)
-            val handX = grandpaX + .30f
-            val handZ = grandpaZ + .10f
-            val fishX = bobberX + (handX - bobberX) * travel
-            val fishZ = bobberZ + (handZ - bobberZ) * travel
+            val fishX = bobberPoint.x + (grip.x - bobberPoint.x) * travel
+            val fishZ = bobberPoint.z + (grip.z - bobberPoint.z) * travel
             val fishY = .20f + travel * .40f +
                 sin(travel * PI.toFloat()) * 1.36f
             val fishColor = when (fishingKind) {
@@ -3071,23 +3429,28 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
 
         val frogElapsed = eventSeconds(frogJumpStartedMs)
         val frogJump = if (frogElapsed in 0f..1.35f) sin(frogElapsed / 1.35f * PI.toFloat()) * .48f else 0f
-        val frogX = pondX - .43f + (frogJump / .48f) * .32f
-        val frogZ = pondZ - .24f
-        draw(requireNotNull(lowSphere), color("#4E8A45"), Transform(frogX, .23f + frogJump, frogZ, .095f, .065f, .085f))
-        draw(requireNotNull(lowSphere), color("#84B866"), Transform(frogX, .29f + frogJump, frogZ + .05f, .067f, .057f, .060f))
+        val frogTravel = if (frogJump > 0f) frogJump / .48f * .32f else 0f
+        val frog = pondLocalPoint(-.43f + frogTravel, .23f + frogJump, -.24f)
+        val frogHeading = POND_GROUP_HEADING
+        draw(requireNotNull(lowSphere), color("#4E8A45"), Transform(frog.x, frog.y, frog.z, .095f, .065f, .085f, rotationY = frogHeading))
+        val frogHead = pondLocalPoint(-.43f + frogTravel, .29f + frogJump, -.19f)
+        draw(requireNotNull(lowSphere), color("#84B866"), Transform(frogHead.x, frogHead.y, frogHead.z, .067f, .057f, .060f, rotationY = frogHeading))
         for (side in listOf(-.032f, .032f)) {
-            draw(requireNotNull(lowSphere), color("#F4F0DF"), Transform(frogX + side, .35f + frogJump, frogZ + .075f, .022f, .026f, .019f))
-            draw(requireNotNull(lowSphere), color("#28271F"), Transform(frogX + side, .355f + frogJump, frogZ + .092f, .009f, .011f, .008f))
+            val eye = pondLocalPoint(-.43f + frogTravel + side, .35f + frogJump, -.165f)
+            val pupil = pondLocalPoint(-.43f + frogTravel + side, .355f + frogJump, -.148f)
+            draw(requireNotNull(lowSphere), color("#F4F0DF"), Transform(eye.x, eye.y, eye.z, .022f, .026f, .019f, rotationY = frogHeading))
+            draw(requireNotNull(lowSphere), color("#28271F"), Transform(pupil.x, pupil.y, pupil.z, .009f, .011f, .008f, rotationY = frogHeading))
         }
         if (frogJumpStartedMs > 0L && frogElapsed > 1.35f) frogJumpStartedMs = 0L
 
         val splashCycle = frame.storyTime % 27f
         if (splashCycle in 0f..1.1f) {
             val jump = sin(splashCycle / 1.1f * PI.toFloat())
+            val splash = pondLocalPoint(.48f, .16f + jump * .30f, -.05f)
             draw(
                 requireNotNull(lowSphere),
                 color("#A7C9D4"),
-                Transform(pondX + .48f, .16f + jump * .30f, pondZ - .05f, .085f, .035f, .035f, rotationZ = splashCycle * 240f),
+                Transform(splash.x, splash.y, splash.z, .085f, .035f, .035f, rotationZ = splashCycle * 240f),
             )
         }
     }
@@ -3483,7 +3846,29 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val pupilZ = z - eyeLocalX * headYawSine + pupilForward * headYawCosine
             draw(requireNotNull(lowSphere), color("#F8EECF"), Transform(eyeX, y + .23f * visibleScale, eyeZ, .040f * visibleScale, .047f * visibleScale, .025f * visibleScale, rotationY = headYaw), rimStrength = .06f)
             draw(requireNotNull(lowSphere), color("#28251F"), Transform(pupilX, y + .23f * visibleScale, pupilZ, .018f * visibleScale, .021f * visibleScale, .012f * visibleScale, rotationY = headYaw), rimStrength = .04f)
-            draw(requireNotNull(lowSphere), color("#715B45"), Transform(x + side * .15f * visibleScale, y + .05f, z, .07f * visibleScale, .18f * visibleScale, .045f * visibleScale, rotationZ = side * flap), rimStrength = .16f)
+            val wingAngle = side * flap
+            val wingRadians = Math.toRadians(wingAngle.toDouble())
+            val wingHalfLength = .18f * visibleScale
+            val wingRootX = x + side * .11f * visibleScale
+            val wingRootY = y + .21f * visibleScale
+            val wingCenterX =
+                wingRootX + sin(wingRadians).toFloat() * wingHalfLength
+            val wingCenterY =
+                wingRootY - cos(wingRadians).toFloat() * wingHalfLength
+            draw(
+                requireNotNull(lowSphere),
+                color("#715B45"),
+                Transform(
+                    wingCenterX,
+                    wingCenterY,
+                    z,
+                    .07f * visibleScale,
+                    wingHalfLength,
+                    .045f * visibleScale,
+                    rotationZ = wingAngle,
+                ),
+                rimStrength = .16f,
+            )
         }
         draw(
             requireNotNull(cone),
@@ -3799,10 +4184,47 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         drawActorPart(requireNotNull(sphere), "#D9D7D5", x, z, 0f, .50f + bob, 0f, .38f, .50f, .34f, heading)
         drawActorPart(requireNotNull(sphere), "#E6E4E1", x, z, 0f, .96f + bob, .05f, .32f, .34f, .31f, heading)
         drawActorPart(requireNotNull(lowSphere), "#F8F4EF", x, z, 0f, .53f + bob, .31f, .23f, .28f, .14f, heading)
-        drawActorPart(requireNotNull(sphere), "#D9D7D5", x, z, -.15f, 1.42f + bob, .01f, .10f, .43f, .10f, heading, rotationZ = -7f - earTwitch)
-        drawActorPart(requireNotNull(sphere), "#D9D7D5", x, z, .15f, 1.42f + bob, .01f, .10f, .43f, .10f, heading, rotationZ = 7f + earTwitch)
-        drawActorPart(requireNotNull(sphere), "#F2A8B5", x, z, -.15f, 1.42f + bob, .095f, .038f, .32f, .025f, heading, rotationZ = -7f - earTwitch)
-        drawActorPart(requireNotNull(sphere), "#F2A8B5", x, z, .15f, 1.42f + bob, .095f, .038f, .32f, .025f, heading, rotationZ = 7f + earTwitch)
+        for (side in listOf(-1f, 1f)) {
+            val earAngle = side * (7f + earTwitch)
+            val earRadians = Math.toRadians(earAngle.toDouble())
+            val earHalfLength = .43f
+            val earRootX = side * .15f
+            val earRootY = .99f + bob
+            val earCenterX = earRootX - sin(earRadians).toFloat() * earHalfLength
+            val earCenterY = earRootY + cos(earRadians).toFloat() * earHalfLength
+            drawActorPart(
+                requireNotNull(sphere),
+                "#D9D7D5",
+                x,
+                z,
+                earCenterX,
+                earCenterY,
+                .01f,
+                .10f,
+                earHalfLength,
+                .10f,
+                heading,
+                rotationZ = earAngle,
+            )
+            val innerHalfLength = .32f
+            val innerRootY = 1.05f + bob
+            val innerCenterX = earRootX - sin(earRadians).toFloat() * innerHalfLength
+            val innerCenterY = innerRootY + cos(earRadians).toFloat() * innerHalfLength
+            drawActorPart(
+                requireNotNull(sphere),
+                "#F2A8B5",
+                x,
+                z,
+                innerCenterX,
+                innerCenterY,
+                .095f,
+                .038f,
+                innerHalfLength,
+                .025f,
+                heading,
+                rotationZ = earAngle,
+            )
+        }
         drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, -.115f, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
         drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, .115f, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
         drawActorPart(requireNotNull(lowSphere), "#F28B9E", x, z, 0f, .90f + bob, .355f, .052f, .042f, .028f, heading)
@@ -3862,23 +4284,44 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val heading = facingCenter(x, z)
         val reaction = reactionEnvelope(AnimalReaction.BEAR)
         val sway = sin(frame.storyTime * .9f + 1.2f) * 2f + reaction * 5f
+        val swayRadians = Math.toRadians(sway.toDouble())
+        val swayCosine = cos(swayRadians).toFloat()
+        val swaySine = sin(swayRadians).toFloat()
+        val pivotY = .08f
+        fun posed(localX: Float, y: Float): Pair<Float, Float> {
+            val relativeY = y - pivotY
+            return (
+                localX * swayCosine - relativeY * swaySine
+                ) to (
+                pivotY + localX * swaySine + relativeY * swayCosine
+                )
+        }
+
         drawShadow(x, z, .68f, .46f)
-        drawActorPart(requireNotNull(sphere), "#79533A", x, z, 0f, .66f, -.05f, .58f, .67f, .49f, heading, rotationZ = sway)
-        drawActorPart(requireNotNull(sphere), "#865E41", x, z, 0f, 1.28f, .13f, .46f, .48f, .42f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#9A7253", x, z, 0f, 1.17f, .48f, .29f, .22f, .22f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#765039", x, z, -.31f, 1.61f, .06f, .18f, .18f, .15f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#765039", x, z, .31f, 1.61f, .06f, .18f, .18f, .15f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#29231F", x, z, -.15f, 1.36f, .39f, .040f, .045f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#29231F", x, z, .15f, 1.36f, .39f, .040f, .045f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#2F2520", x, z, 0f, 1.18f, .68f, .070f, .055f, .050f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#B88963", x, z, 0f, .69f, .44f, .34f, .37f, .15f, heading)
+        val body = posed(0f, .66f)
+        drawActorPart(requireNotNull(sphere), "#79533A", x, z, body.first, body.second, -.05f, .58f, .67f, .49f, heading, rotationZ = sway)
+        val head = posed(0f, 1.28f)
+        drawActorPart(requireNotNull(sphere), "#865E41", x, z, head.first, head.second, .13f, .46f, .48f, .42f, heading, rotationZ = sway)
+        val muzzle = posed(0f, 1.17f)
+        drawActorPart(requireNotNull(lowSphere), "#9A7253", x, z, muzzle.first, muzzle.second, .48f, .29f, .22f, .22f, heading, rotationZ = sway)
+        for (side in listOf(-1f, 1f)) {
+            val ear = posed(side * .31f, 1.61f)
+            drawActorPart(requireNotNull(lowSphere), "#765039", x, z, ear.first, ear.second, .06f, .18f, .18f, .15f, heading, rotationZ = sway)
+            val eye = posed(side * .15f, 1.36f)
+            drawActorPart(requireNotNull(lowSphere), "#29231F", x, z, eye.first, eye.second, .39f, .040f, .045f, .025f, heading, rotationZ = sway)
+        }
+        val nose = posed(0f, 1.18f)
+        drawActorPart(requireNotNull(lowSphere), "#2F2520", x, z, nose.first, nose.second, .68f, .070f, .055f, .050f, heading, rotationZ = sway)
+        val belly = posed(0f, .69f)
+        drawActorPart(requireNotNull(lowSphere), "#B88963", x, z, belly.first, belly.second, .44f, .34f, .37f, .15f, heading, rotationZ = sway)
         for (side in listOf(-1f, 1f)) {
             val wave = if (side > 0f) reaction * 58f else 0f
-            val armAngle = side * (12f + wave)
+            val armAngle = sway + side * (12f + wave)
             val armRadians = Math.toRadians(armAngle.toDouble())
             val armHalfLength = .42f
-            val shoulderX = side * .43f
-            val shoulderY = .98f
+            val shoulder = posed(side * .43f, .98f)
+            val shoulderX = shoulder.first
+            val shoulderY = shoulder.second
             val armCenterX = shoulderX + sin(armRadians).toFloat() * armHalfLength
             val armCenterY = shoulderY - cos(armRadians).toFloat() * armHalfLength
             drawActorPart(
@@ -4054,6 +4497,35 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         return sin(radians).toFloat() * radius to cos(radians).toFloat() * radius
     }
 
+    private fun pondLocalPoint(
+        localX: Float,
+        y: Float,
+        localZ: Float,
+    ): WorldPoint3 {
+        val radians = Math.toRadians(POND_GROUP_HEADING.toDouble())
+        return WorldPoint3(
+            x = POND_X + localX * cos(radians).toFloat() + localZ * sin(radians).toFloat(),
+            y = y,
+            z = POND_Z - localX * sin(radians).toFloat() + localZ * cos(radians).toFloat(),
+        )
+    }
+
+    private fun actorWorldPoint(
+        centerX: Float,
+        centerZ: Float,
+        heading: Float,
+        localX: Float,
+        y: Float,
+        forward: Float,
+    ): WorldPoint3 {
+        val radians = Math.toRadians(heading.toDouble())
+        return WorldPoint3(
+            x = centerX + localX * cos(radians).toFloat() + forward * sin(radians).toFloat(),
+            y = y,
+            z = centerZ - localX * sin(radians).toFloat() + forward * cos(radians).toFloat(),
+        )
+    }
+
     private fun smoothStep(value: Float): Float {
         val progress = value.coerceIn(0f, 1f)
         return progress * progress * (3f - 2f * progress)
@@ -4062,6 +4534,15 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private fun facingCenter(x: Float, z: Float): Float =
         Math.toDegrees(kotlin.math.atan2(-x, -z).toDouble()).toFloat()
 
+    private fun facingPoint(
+        fromX: Float,
+        fromZ: Float,
+        toX: Float,
+        toZ: Float,
+    ): Float = Math.toDegrees(
+        kotlin.math.atan2((toX - fromX).toDouble(), (toZ - fromZ).toDouble()),
+    ).toFloat()
+
     private fun crossroadsPlaqueHeading(): Float {
         val worldHeading = Math.toDegrees(
             kotlin.math.atan2(eyeX.toDouble(), eyeZ.toDouble()),
@@ -4069,39 +4550,27 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         return worldHeading - frame.sceneRotation
     }
 
-    private fun crossroadsPlaquePoint(
-        localX: Float,
-        y: Float,
-        forward: Float,
-    ): WorldPoint3 {
-        val heading = crossroadsPlaqueHeading()
+    private fun crossroadsPlaquePoint(spec: CrossroadsPlaqueSpec): WorldPoint3 {
+        val heading = crossroadsPlaqueHeading() + spec.azimuth
         val radians = Math.toRadians(heading.toDouble())
+        val forward = (spec.outerRadius + .035f) * CROSSROADS_SCALE
         return WorldPoint3(
-            x = localX * cos(radians).toFloat() + forward * sin(radians).toFloat(),
-            y = y,
-            z = -localX * sin(radians).toFloat() + forward * cos(radians).toFloat(),
+            x = forward * sin(radians).toFloat(),
+            y = spec.y * CROSSROADS_SCALE,
+            z = forward * cos(radians).toFloat(),
         )
     }
 
-    private fun crossroadsPlaqueTransform(
-        localX: Float,
-        y: Float,
-        forward: Float,
-        scaleX: Float,
-        scaleY: Float,
-        scaleZ: Float,
-        rotationZ: Float,
-    ): Transform {
-        val point = crossroadsPlaquePoint(localX, y, forward)
+    private fun crossroadsPlaqueLabelTransform(spec: CrossroadsPlaqueSpec): Transform {
         return Transform(
-            x = point.x,
-            y = point.y,
-            z = point.z,
-            scaleX = scaleX,
-            scaleY = scaleY,
-            scaleZ = scaleZ,
-            rotationY = crossroadsPlaqueHeading(),
-            rotationZ = rotationZ,
+            x = 0f,
+            y = spec.y * CROSSROADS_SCALE,
+            z = 0f,
+            scaleX = 1f,
+            scaleY = spec.labelScaleY * .95f,
+            scaleZ = 1f,
+            rotationY = crossroadsPlaqueHeading() + spec.azimuth,
+            rotationZ = spec.tilt,
         )
     }
 
@@ -4196,15 +4665,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        addTarget("grandpa", -4.04f, .88f, 4.18f, .115f)
+        val grandpa = pondLocalPoint(POND_GRANDPA_LOCAL_X, .90f, POND_GRANDPA_LOCAL_Z)
+        val willow = pondLocalPoint(.50f, 1.42f, 1.90f)
+        val pond = pondLocalPoint(0f, .30f, 0f)
+        addTarget("grandpa", grandpa.x, grandpa.y, grandpa.z, .115f)
         addTarget("chimney", .66f, 2.65f, 6.50f, .075f)
         addTarget("izba", -.48f, .92f, 5.28f, .120f)
         addTarget("izba", 0f, 2.08f, 5.30f, .105f)
-        addTarget("willow", -1.18f, 1.42f, 5.05f, .115f)
-        addTarget("pond", -3.21f, .30f, 4.19f, .090f)
-        val addPlaque = crossroadsPlaquePoint(-.08f, 1.48f, .79f)
-        val createPlaque = crossroadsPlaquePoint(.08f, 1.13f, .81f)
-        val libraryPlaque = crossroadsPlaquePoint(-.04f, .78f, .795f)
+        addTarget("willow", willow.x, willow.y, willow.z, .115f)
+        addTarget("pond", pond.x, pond.y, pond.z, .105f)
+        val addPlaque = crossroadsPlaquePoint(crossroadsPlaqueSpecs[0])
+        val createPlaque = crossroadsPlaquePoint(crossroadsPlaqueSpecs[1])
+        val libraryPlaque = crossroadsPlaquePoint(crossroadsPlaqueSpecs[2])
         addTarget("menu_add", addPlaque.x, addPlaque.y, addPlaque.z, .072f)
         addTarget("menu_create", createPlaque.x, createPlaque.y, createPlaque.z, .075f)
         addTarget("menu_library", libraryPlaque.x, libraryPlaque.y, libraryPlaque.z, .070f)
@@ -4659,19 +5131,28 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val wingOffset = .044f + (.095f - .044f) * flight
             val wingWidth = .032f + (.080f - .032f) * flight
             val wingDepth = .090f + (.055f - .090f) * flight
+            val wingAngle = side * flap
+            val wingRadians = Math.toRadians(wingAngle.toDouble())
+            val wingRoot = (wingOffset - wingWidth).coerceAtLeast(.010f)
+            val wingCenterX =
+                side * wingRoot * birdScale +
+                    side * cos(wingRadians).toFloat() * wingWidth * birdScale
+            val wingCenterYOffset =
+                side * sin(wingRadians).toFloat() * wingWidth * birdScale
+            val wingCenter = pitched(wingCenterYOffset, 0f)
             drawActorPart(
                 requireNotNull(cube),
                 bodyColor,
                 x,
                 z,
-                side * wingOffset * birdScale,
-                y,
-                0f,
+                wingCenterX,
+                y + wingCenter.first,
+                wingCenter.second,
                 wingWidth * birdScale,
                 .014f * birdScale,
                 wingDepth * birdScale,
                 heading,
-                rotationZ = side * flap,
+                rotationZ = wingAngle,
                 rotationX = posedPitch,
             )
         }
@@ -4719,8 +5200,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
     }
 
-    private fun drawTextLabel(texture: Int, transform: Transform) {
-        val mesh = textMesh ?: return
+    private fun drawTextLabel(
+        texture: Int,
+        mesh: TextGlMesh,
+        transform: Transform,
+    ) {
         if (texture == 0) return
 
         Matrix.setIdentityM(model, 0)
@@ -4971,14 +5455,38 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         return GlMesh(vao, vertexBuffer, indexBuffer, data.indices.size)
     }
 
-    private fun createTextMesh(): TextGlMesh {
-        val vertices = floatArrayOf(
-            -1f, -1f, 0f, 0f, 1f,
-            1f, -1f, 0f, 1f, 1f,
-            1f, 1f, 0f, 1f, 0f,
-            -1f, 1f, 0f, 0f, 0f,
-        )
-        val indices = shortArrayOf(0, 1, 2, 0, 2, 3)
+    private fun createCurvedTextMesh(
+        radius: Float,
+        arc: Float,
+        segments: Int,
+    ): TextGlMesh {
+        val vertices = mutableListOf<Float>()
+        val indices = mutableListOf<Short>()
+        val startAngle = -arc * .5f
+        for (segment in 0..segments) {
+            val u = segment / segments.toFloat()
+            val angle = startAngle + arc * u
+            val x = sin(angle) * radius
+            val z = cos(angle) * radius
+            vertices += listOf(x, -1f, z, u, 1f)
+            vertices += listOf(x, 1f, z, u, 0f)
+        }
+        repeat(segments) { segment ->
+            val bottom = (segment * 2).toShort()
+            val top = (bottom + 1).toShort()
+            val nextBottom = (bottom + 2).toShort()
+            val nextTop = (bottom + 3).toShort()
+            indices += listOf(
+                bottom,
+                nextBottom,
+                nextTop,
+                bottom,
+                nextTop,
+                top,
+            )
+        }
+        val vertexArray = vertices.toFloatArray()
+        val indexArray = indices.toShortArray()
         val handles = IntArray(1)
         GLES30.glGenVertexArrays(1, handles, 0)
         val vao = handles[0]
@@ -4989,8 +5497,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBuffer)
         GLES30.glBufferData(
             GLES30.GL_ARRAY_BUFFER,
-            vertices.size * Float.SIZE_BYTES,
-            vertices.toNativeBuffer(),
+            vertexArray.size * Float.SIZE_BYTES,
+            vertexArray.toNativeBuffer(),
             GLES30.GL_STATIC_DRAW,
         )
 
@@ -4999,8 +5507,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBuffer)
         GLES30.glBufferData(
             GLES30.GL_ELEMENT_ARRAY_BUFFER,
-            indices.size * Short.SIZE_BYTES,
-            indices.toNativeBuffer(),
+            indexArray.size * Short.SIZE_BYTES,
+            indexArray.toNativeBuffer(),
             GLES30.GL_STATIC_DRAW,
         )
 
@@ -5017,7 +5525,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             3 * Float.SIZE_BYTES,
         )
         GLES30.glBindVertexArray(0)
-        return TextGlMesh(vao, vertexBuffer, indexBuffer, indices.size)
+        return TextGlMesh(vao, vertexBuffer, indexBuffer, indexArray.size)
     }
 
     private fun createTextTexture(label: String): Int {
@@ -5123,6 +5631,16 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     companion object {
+        private const val POND_X = -3.2916f
+        private const val POND_Z = 4.5305f
+        private const val POND_GROUP_HEADING = 144f
+        private const val POND_GRANDPA_LOCAL_X = -1.82f
+        private const val POND_GRANDPA_LOCAL_Z = -.95f
+        private const val PATH_RADIUS = 4.6f
+        private const val BRIDGE_ARC_CENTER_DEGREES = 324f
+        private const val BRIDGE_ARC_HALF_DEGREES = 17f
+        private const val BRIDGE_SEGMENTS = 7
+        private const val CROSSROADS_SCALE = .91f
         private const val FOLLOW_CAMERA_BIAS_DEGREES = 110f
         private const val INSTANCED_VERTEX_SHADER = """#version 300 es
             layout(location = 0) in vec3 aPosition;
@@ -5292,6 +5810,18 @@ private data class PondPoint(
     val x: Float,
     val z: Float,
     val size: Float,
+)
+
+private data class CrossroadsPlaqueSpec(
+    val y: Float,
+    val innerRadius: Float,
+    val outerRadius: Float,
+    val height: Float,
+    val arcLength: Float,
+    val azimuth: Float,
+    val tilt: Float,
+    val labelScaleX: Float,
+    val labelScaleY: Float,
 )
 
 private data class WorldPoint3(
@@ -5472,6 +6002,289 @@ private object Geometry {
                 indices += (first + 1).toShort()
             }
         }
+        return MeshData(vertices.toFloatArray(), indices.toShortArray())
+    }
+
+    /**
+     * A seeded, shared outline used by both the pond rim and the water.
+     * Scaling one mesh keeps the nested shore/water edge coherent while the
+     * intentionally uneven radius avoids the stamped-circle look.
+     */
+    fun irregularDisc(segments: Int, seed: Int): MeshData {
+        val vertices = mutableListOf<Float>()
+        val indices = mutableListOf<Short>()
+
+        fun seeded(index: Int): Float {
+            val value = sin((seed * 31.17 + index * 12.9898)) * 43758.5453
+            return (value - kotlin.math.floor(value)).toFloat()
+        }
+
+        vertices += listOf(0f, 0f, 0f, 0f, 1f, 0f)
+        repeat(segments) { index ->
+            val angle = index.toDouble() / segments * PI * 2.0
+            val broadWave = sin(angle * 3.0 + .7).toFloat() * .055f
+            val radius = 1f + (seeded(index) * 2f - 1f) * .13f + broadWave
+            vertices += listOf(
+                sin(angle).toFloat() * radius,
+                0f,
+                cos(angle).toFloat() * radius,
+                0f,
+                1f,
+                0f,
+            )
+        }
+        repeat(segments) { index ->
+            val current = (index + 1).toShort()
+            val next = ((index + 1) % segments + 1).toShort()
+            indices += listOf(0.toShort(), current, next)
+        }
+        return MeshData(vertices.toFloatArray(), indices.toShortArray())
+    }
+
+    /**
+     * Low-poly lathed boulder with a planted base, lower-body bulge, tapered
+     * crown and three shallow horizontal channels for the menu tablets.
+     * Each ring receives deterministic angular variation so the silhouette
+     * is rocky rather than a stretched sphere.
+     */
+    fun profiledBoulder(segments: Int): MeshData {
+        val vertices = mutableListOf<Float>()
+        val indices = mutableListOf<Short>()
+        val heights = floatArrayOf(
+            -.16f, -.02f, .25f, .55f, .82f, 1.08f, 1.34f, 1.60f, 1.84f, 2.05f, 2.22f, 2.30f,
+        )
+        val baseRadii = floatArrayOf(
+            .72f, .99f, 1.15f, 1.11f, 1.07f, 1.01f, .94f, .84f, .75f, .57f, .30f, .08f,
+        )
+        val grooveHeights = floatArrayOf(.78f, 1.27f, 1.76f)
+
+        fun ringRadius(ring: Int): Float {
+            var radius = baseRadii[ring]
+            grooveHeights.forEach { grooveY ->
+                val distance = abs(heights[ring] - grooveY)
+                if (distance < .19f) {
+                    val dip = cos((distance / .19f * PI.toFloat() * .5f).toDouble()).toFloat()
+                    radius *= 1f - dip * .12f
+                }
+            }
+            return radius
+        }
+
+        fun seeded(index: Int): Float {
+            val value = sin(index * 12.9898 + 3.731) * 43758.5453
+            return (value - kotlin.math.floor(value)).toFloat()
+        }
+
+        heights.indices.forEach { ring ->
+            val previous = max(0, ring - 1)
+            val next = min(heights.lastIndex, ring + 1)
+            val deltaY = (heights[next] - heights[previous]).coerceAtLeast(.001f)
+            val radiusSlope = (ringRadius(next) - ringRadius(previous)) / deltaY
+            for (segment in 0..segments) {
+                val wrapped = segment % segments
+                val angle = wrapped.toDouble() / segments * PI * 2.0
+                val irregularity =
+                    1f +
+                        (seeded(ring * 97 + wrapped * 29 + 7) * 2f - 1f) * .055f +
+                        sin(angle * 3.0 + ring * .63).toFloat() * .018f
+                val radius = ringRadius(ring) * irregularity
+                val nx = sin(angle).toFloat()
+                val ny = -radiusSlope
+                val nz = cos(angle).toFloat()
+                val normalLength = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(.001f)
+                val yJitter = if (ring == 0 || ring == heights.lastIndex) {
+                    0f
+                } else {
+                    (seeded(ring * 151 + wrapped * 43 + 11) * 2f - 1f) * .018f
+                }
+                vertices += listOf(
+                    sin(angle).toFloat() * radius,
+                    heights[ring] + yJitter,
+                    cos(angle).toFloat() * radius,
+                    nx / normalLength,
+                    ny / normalLength,
+                    nz / normalLength,
+                )
+            }
+        }
+
+        val rowSize = segments + 1
+        for (ring in 0 until heights.lastIndex) {
+            for (segment in 0 until segments) {
+                val lower = ring * rowSize + segment
+                val lowerNext = lower + 1
+                val upper = lower + rowSize
+                val upperNext = upper + 1
+                indices += listOf(
+                    lower.toShort(),
+                    lowerNext.toShort(),
+                    upper.toShort(),
+                    lowerNext.toShort(),
+                    upperNext.toShort(),
+                    upper.toShort(),
+                )
+            }
+        }
+
+        val bottomCenter = (vertices.size / 6).toShort()
+        vertices += listOf(0f, heights.first() - .01f, 0f, 0f, -1f, 0f)
+        repeat(segments) { segment ->
+            val current = segment.toShort()
+            val next = (segment + 1).toShort()
+            indices += listOf(bottomCenter, next, current)
+        }
+
+        val topCenter = (vertices.size / 6).toShort()
+        vertices += listOf(0f, heights.last() + .035f, 0f, 0f, 1f, 0f)
+        val topRingStart = heights.lastIndex * rowSize
+        repeat(segments) { segment ->
+            val current = (topRingStart + segment).toShort()
+            val next = (topRingStart + segment + 1).toShort()
+            indices += listOf(topCenter, current, next)
+        }
+        return MeshData(vertices.toFloatArray(), indices.toShortArray())
+    }
+
+    /**
+     * Solid ring-sector tablet. Unlike a flat cube, its front and back faces
+     * follow the stone radius and its top/bottom/end caps expose real depth.
+     */
+    fun curvedArcBlock(
+        innerRadius: Float,
+        outerRadius: Float,
+        height: Float,
+        arc: Float,
+        segments: Int,
+        weatheringSeed: Int = 0,
+    ): MeshData {
+        val vertices = mutableListOf<Float>()
+        val indices = mutableListOf<Short>()
+        val halfHeight = height * .5f
+        val startAngle = -arc * .5f
+
+        fun point(angle: Float, y: Float, radius: Float): FloatArray =
+            floatArrayOf(sin(angle) * radius, y, cos(angle) * radius)
+
+        fun seeded(index: Int): Float {
+            if (weatheringSeed == 0) return .5f
+            val value = sin((weatheringSeed * 19.17 + index * 12.9898)) * 43758.5453
+            return (value - kotlin.math.floor(value)).toFloat()
+        }
+
+        fun edgeSample(index: Int): FloatArray {
+            if (weatheringSeed == 0) {
+                return floatArrayOf(-halfHeight, halfHeight, innerRadius, outerRadius)
+            }
+            val t = index / segments.toFloat()
+            val endAmount = ((abs(t - .5f) * 2f - .72f) / .28f).coerceIn(0f, 1f)
+            val taper = endAmount * (.032f + seeded(index * 17 + 3) * .020f)
+            val lower = -halfHeight + taper + (seeded(index * 23 + 5) - .5f) * .022f
+            val upper = halfHeight - taper + (seeded(index * 29 + 7) - .5f) * .022f
+            val inner = innerRadius + (seeded(index * 31 + 11) - .5f) * .008f
+            val outer = outerRadius + (seeded(index * 37 + 13) - .5f) * .018f
+            return floatArrayOf(lower, upper, inner, outer)
+        }
+
+        fun addQuad(
+            a: FloatArray,
+            b: FloatArray,
+            c: FloatArray,
+            d: FloatArray,
+            nx: Float,
+            ny: Float,
+            nz: Float,
+        ) {
+            val base = (vertices.size / 6).toShort()
+            listOf(a, b, c, d).forEach { p ->
+                vertices += listOf(p[0], p[1], p[2], nx, ny, nz)
+            }
+            indices += listOf(
+                base,
+                (base + 1).toShort(),
+                (base + 2).toShort(),
+                base,
+                (base + 2).toShort(),
+                (base + 3).toShort(),
+            )
+        }
+
+        repeat(segments) { segment ->
+            val a0 = startAngle + arc * segment / segments
+            val a1 = startAngle + arc * (segment + 1) / segments
+            val middle = (a0 + a1) * .5f
+            val outerNormalX = sin(middle)
+            val outerNormalZ = cos(middle)
+            val edge0 = edgeSample(segment)
+            val edge1 = edgeSample(segment + 1)
+
+            val outerBottom0 = point(a0, edge0[0], edge0[3])
+            val outerBottom1 = point(a1, edge1[0], edge1[3])
+            val outerTop1 = point(a1, edge1[1], edge1[3])
+            val outerTop0 = point(a0, edge0[1], edge0[3])
+            addQuad(
+                outerBottom0,
+                outerBottom1,
+                outerTop1,
+                outerTop0,
+                outerNormalX,
+                0f,
+                outerNormalZ,
+            )
+
+            val innerBottom0 = point(a0, edge0[0], edge0[2])
+            val innerBottom1 = point(a1, edge1[0], edge1[2])
+            val innerTop1 = point(a1, edge1[1], edge1[2])
+            val innerTop0 = point(a0, edge0[1], edge0[2])
+            addQuad(
+                innerBottom0,
+                innerTop0,
+                innerTop1,
+                innerBottom1,
+                -outerNormalX,
+                0f,
+                -outerNormalZ,
+            )
+            addQuad(
+                innerTop0,
+                outerTop0,
+                outerTop1,
+                innerTop1,
+                0f,
+                1f,
+                0f,
+            )
+            addQuad(
+                innerBottom0,
+                innerBottom1,
+                outerBottom1,
+                outerBottom0,
+                0f,
+                -1f,
+                0f,
+            )
+        }
+
+        val endAngle = startAngle + arc
+        val startEdge = edgeSample(0)
+        val endEdge = edgeSample(segments)
+        addQuad(
+            point(startAngle, startEdge[0], startEdge[2]),
+            point(startAngle, startEdge[0], startEdge[3]),
+            point(startAngle, startEdge[1], startEdge[3]),
+            point(startAngle, startEdge[1], startEdge[2]),
+            -cos(startAngle),
+            0f,
+            sin(startAngle),
+        )
+        addQuad(
+            point(endAngle, endEdge[0], endEdge[2]),
+            point(endAngle, endEdge[1], endEdge[2]),
+            point(endAngle, endEdge[1], endEdge[3]),
+            point(endAngle, endEdge[0], endEdge[3]),
+            cos(endAngle),
+            0f,
+            -sin(endAngle),
+        )
         return MeshData(vertices.toFloatArray(), indices.toShortArray())
     }
 
