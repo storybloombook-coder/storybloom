@@ -4,7 +4,7 @@ import { DoubleSide, Object3D, Vector3 } from 'three';
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
-import { eggManager } from './easterEggs';
+import { eggManager, eggMotion } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { BlobShadow } from './BlobShadow';
 import { Hare } from './characters/Hare';
@@ -151,16 +151,33 @@ function Landmark({ zone }) {
     return new Vector3(...CHIMNEY_LOCAL).applyMatrix4(o.matrixWorld);
   }, [zone.id, pos, a]);
 
+  // Live feedback: the chimney is now a press-and-hold interaction (long
+  // press "closes" it -- no smoke -- releasing makes smoke "go out"), not a
+  // tap -- see onZonePointerDown/onZoneRelease below. chimneyHeldRef tracks
+  // whether THIS press started on the chimney (proximity-gated, same spot
+  // the old tap discrimination lived, see IzbaChimney's own comment for why
+  // it can't live on a nested hitbox), so release only fires the burst if
+  // the hold actually began there.
+  const chimneyHeldRef = useRef(false);
+  const onZonePointerDown = (e) => {
+    if (!chimneyWorldPos || e.point.distanceTo(chimneyWorldPos) >= CHIMNEY_HIT_R) return;
+    e.stopPropagation();
+    chimneyHeldRef.current = true;
+    eggMotion.chimneyHeld = true;
+  };
+  const onZoneRelease = () => {
+    if (!chimneyHeldRef.current) return;
+    chimneyHeldRef.current = false;
+    eggMotion.chimneyHeld = false;
+    eggManager.tapChimney();
+  };
+
   const onTap = (e) => {
     e.stopPropagation();
-    // Live feedback: "I don't see smoke spheres when tapped" -- a tap on the
-    // chimney lands here too (its own nested hitbox is unreachable, see
-    // IzbaChimney), so check proximity to it FIRST and route to the smoke
-    // egg instead of starting the izba "encounter".
-    if (chimneyWorldPos && e.point.distanceTo(chimneyWorldPos) < CHIMNEY_HIT_R) {
-      eggManager.tapChimney();
-      return;
-    }
+    // A plain tap landing on the chimney is a no-op now (its own
+    // interaction is press-and-hold, above) -- just don't let it fall
+    // through to starting the izba "encounter".
+    if (chimneyWorldPos && e.point.distanceTo(chimneyWorldPos) < CHIMNEY_HIT_R) return;
     // The egg registry sees the tap first (fox 5-tap catch); if an egg
     // consumed it, the normal encounter is skipped (EASTER_EGGS.md §1).
     if (eggManager.tap(zone.id)) return;
@@ -185,7 +202,14 @@ function Landmark({ zone }) {
   const Ambience = AMBIENCE[zone.id];
 
   return (
-    <group position={pos} rotation={[0, a + Math.PI, 0]} onClick={onTap}>
+    <group
+      position={pos}
+      rotation={[0, a + Math.PI, 0]}
+      onClick={onTap}
+      onPointerDown={onZonePointerDown}
+      onPointerUp={onZoneRelease}
+      onPointerLeave={onZoneRelease}
+    >
       {zone.id === 'izba' ? (
         <>
           {/* Live feedback: "let there be a blob-like shadow cast by the

@@ -206,10 +206,30 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // over-measured and split the layout in an earlier attempt) and don't
   // mount the Canvas until we can hand it that exact pixel size, so the
   // surface is born full-size and only ever fades in.
+  // Live feedback (still reported after the above): "the scene ratio is
+  // jumping when switching between menus" -- nested flex:1 containers
+  // (this root -> MainScreen's own root -> the host route) can settle their
+  // OWN layout across a couple of passes during a navigation/mode-switch
+  // transition, each with a slightly different measured size; the guard
+  // above only skipped an update when the size was byte-for-byte IDENTICAL
+  // to the previous one, so a multi-step settle still drove the Canvas
+  // through several visible resizes. The FIRST measurement (canvasSize
+  // still null) is still applied immediately -- only later, already-
+  // mounted re-measurements get debounced, so a settling reflow commits
+  // once after things stop moving instead of on every intermediate step.
   const [canvasSize, setCanvasSize] = useState(null);
+  const canvasSizeTimer = useRef(null);
+  useEffect(() => () => {
+    if (canvasSizeTimer.current) clearTimeout(canvasSizeTimer.current);
+  }, []);
   const onRootLayout = (e) => {
     const { width, height } = e.nativeEvent.layout;
-    setCanvasSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+    const commit = () => {
+      setCanvasSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+    };
+    if (canvasSizeTimer.current) clearTimeout(canvasSizeTimer.current);
+    if (canvasSize === null) commit();
+    else canvasSizeTimer.current = setTimeout(commit, 120);
   };
 
   const onMainMenu = () => requestNavigation('/');

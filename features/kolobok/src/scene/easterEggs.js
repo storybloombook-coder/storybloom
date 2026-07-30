@@ -36,11 +36,18 @@ export const eggMotion = {
   // moon-wink (EASTER_EGGS.md §2 moon-wink)
   moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
 
-  // chimney smoke spheres (EASTER_EGGS.md §2 smoke-rings, reworked): burst
-  // counter -- ZoneAmbience.jsx's IzbaAmbience spawns 3 staggered gray
-  // spheres straight from the pipe on each increment, rather than "stealing"
-  // slots from the next few normal-smoke wrap events.
+  // chimney smoke spheres (EASTER_EGGS.md §2 smoke-rings, reworked twice
+  // now): burst counter -- ZoneAmbience.jsx's IzbaAmbience spawns 3
+  // staggered gray spheres straight from the pipe on each increment.
+  // Live feedback: the trigger is now a long press instead of a tap --
+  // "long press closes the pipe (no smoke), release makes smoke go out."
+  // ZoneLandmarks.jsx's onPointerDown/Up (chimney-proximity-gated, same
+  // spot the old tap discrimination lived) set chimneyHeld directly since
+  // it needs to react to press/release, not a single discrete event; the
+  // burst itself still fires (via eggManager.tapChimney -> this counter)
+  // only on release.
   chimneySmokeBurst: 0,
+  chimneyHeld: false,
 };
 
 // Dev override (EASTER_EGGS.md §3): 'silver' | 'boot' | 'gold' | null.

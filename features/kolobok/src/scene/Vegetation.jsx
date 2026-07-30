@@ -153,8 +153,18 @@ function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushD
 // was 80, then 112. Live feedback: "+50%, distributed randomly and evenly"
 // -- 112*1.5=168, and the hare-arc bias below is dropped entirely (see the
 // scatterAngles call).
-const GRASS_COUNT = 168;
-const GRASS_BEND_RADIUS = 0.55;
+// Live feedback: "+30%" -- was 168.
+const GRASS_COUNT = 218;
+// Live feedback: grass now avoids trees/mushrooms/landmarks/the path/the
+// pond (previously only checked the 16deg landmark keep-clear, via
+// scatterAngles -- nothing stopped it landing ON the road or IN the pond,
+// or overlapping a tree/mushroom). Small footprint since blades are thin.
+const GRASS_CANOPY_R = 0.06;
+// GRASS_BEND_MAX_TILT/DECAY/FREQ/DURATION are still used by the flower
+// bend-away reaction below (they share this spring shape) even though
+// grass's OWN bend-away is gone -- "the grass animation is simple, it just
+// sways in the wind" removed the bend-away-from-Kolobok reaction from grass
+// specifically, not from flowers.
 const GRASS_BEND_MAX_TILT = rad(28);
 const GRASS_BEND_DECAY = 9;
 const GRASS_BEND_FREQ = 3.2; // gives the "slight overshoot" on the spring back
@@ -860,27 +870,51 @@ export function Vegetation() {
     });
   }, []);
 
-  // Grass tufts: live feedback -- "distribute randomly and evenly" dropped
-  // the old 40%-biased-to-the-hare-arc split (scatterChance:1, no home
-  // zone, means every candidate rolls a fully free angle), still honoring
-  // the usual 16deg landmark keep-clear.
+  // Grass tufts: live feedback -- "spread across the stage surface, inside
+  // the pits, and on the hills, without falling into objects. There
+  // shouldn't be any grass in the lake or road." scatterAngles only ever
+  // checked the 16deg landmark keep-clear -- nothing stopped a tuft landing
+  // ON the path, IN the pond, or overlapping a tree/mushroom, since it
+  // rolled its own radius independently with no collision check at all.
+  // Switched to scatterNonOverlappingTrees (already handles path/pond/
+  // landmark keep-clear AND an arbitrary occupied-list check) with the
+  // SAME radius band as before -- hills/potholes aren't excluded by
+  // anything here, matching mushrooms' own placement, so grass can still
+  // land on them (and groundHeightAt below then sits it at the right
+  // height there).
   const grass = useMemo(() => {
     const rng = makeRng(61);
-    const angles = scatterAngles(rng, GRASS_COUNT, [], { scatterChance: 1, keepClearDeg: 16 });
-    return angles.map((deg) => {
-      const angleRad = rad(deg);
-      const radius = ISLAND_RADIUS * (0.3 + rng() * 0.6);
-      const [x, , z] = pointOnCircle(radius, angleRad);
+    const occupied = [
+      ...SPRUCE_OCCUPIED,
+      ...birch.map((p) => {
+        const [x, , z] = pointOnCircle(p.radius, p.angle);
+        return { x, z, r: TREE_CANOPY_R.birch * p.scale };
+      }),
+      ...mushroom.map((p) => {
+        const [x, , z] = pointOnCircle(p.radius, p.angle);
+        return { x, z, r: MUSHROOM_CANOPY_R * p.scale };
+      }),
+    ];
+    const plants = scatterNonOverlappingTrees(rng, GRASS_COUNT, [], {
+      scatterChance: 1,
+      keepClearDeg: 16,
+      radiusMin: ISLAND_RADIUS * 0.3,
+      radiusMax: ISLAND_RADIUS * 0.9,
+      scaleMin: 1,
+      scaleMax: 1,
+    }, GRASS_CANOPY_R, occupied);
+    return plants.map((p) => {
+      const [x, , z] = pointOnCircle(p.radius, p.angle);
       // Live feedback #1: rest on the actual terrain height under each tuft
       // (hills/pits), not flat Y=0. crossAngle: this tuft's own second-plane
       // offset (BackgroundForest.jsx's own "varied per-tree, not a fixed
       // 90deg" reasoning -- a fixed cross reads as identical rows of tufts
       // from a fixed camera angle).
       return {
-        x, z, yaw: rng() * Math.PI * 2, y: groundHeightAt(x, z), crossAngle: rad(70) + rng() * rad(40),
+        x, z, yaw: p.yaw, y: groundHeightAt(x, z), crossAngle: rad(70) + rng() * rad(40),
       };
     });
-  }, []);
+  }, [birch, mushroom]);
   const grassColors = useMemo(() => {
     const rng = makeRng(63);
     const c1 = new Color('#6f9b52');
@@ -890,7 +924,6 @@ export function Vegetation() {
   const grassTexture = useMemo(() => makeGrassSpriteTexture(), []);
   const grassGeometry = useMemo(() => makeGrassSpriteGeometry(), []);
   const grassRef = useRef();
-  const grassBend = useRef(grass.map(() => ({ t: -1, ax: 0, az: 0 })));
   const flowerWorldXZ = useMemo(
     () => flower.map((p) => { const [x, , z] = pointOnCircle(p.radius, p.angle); return [x, z]; }),
     [flower],
@@ -917,21 +950,9 @@ export function Vegetation() {
       // brightness multiplier so grass still darkens at night.
       const brightness = Math.min(1, atmosphereLive.dirInt);
       grass.forEach((g, i) => {
-        const b = grassBend.current[i];
-        if (b.t < 0) {
-          const dx = g.x - kx;
-          const dz = g.z - kz;
-          if (dx * dx + dz * dz < GRASS_BEND_RADIUS * GRASS_BEND_RADIUS) {
-            const len = Math.max(0.001, Math.sqrt(dx * dx + dz * dz));
-            b.t = 0; b.ax = dx / len; b.az = dz / len;
-          }
-        }
-        let bendAngle = 0;
-        if (b.t >= 0) {
-          b.t += dt;
-          if (b.t >= GRASS_BEND_DURATION) b.t = -1;
-          else bendAngle = GRASS_BEND_MAX_TILT * Math.exp(-b.t * GRASS_BEND_DECAY) * Math.cos(b.t * GRASS_BEND_FREQ * Math.PI * 2);
-        }
+        // Live feedback: "the grass animation is simple -- it just sways in
+        // the wind" -- the bend-away-from-Kolobok reaction is gone; wind
+        // sway is the only motion now.
         const swayAngle = windSway(g.x, g.z, clock, GRASS_SWAY_AMPLITUDE);
 
         // Two cross-planes per tuft (BackgroundForest.jsx's own technique)
@@ -942,11 +963,6 @@ export function Vegetation() {
           if (swayAngle) {
             tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
             tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);
-            dummy.quaternion.premultiply(tiltQuatTmp);
-          }
-          if (bendAngle) {
-            tiltAxisTmp.set(b.az, 0, -b.ax).normalize();
-            tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, bendAngle);
             dummy.quaternion.premultiply(tiltQuatTmp);
           }
           dummy.updateMatrix();
@@ -1233,10 +1249,11 @@ export function Vegetation() {
       </InstancedPart>
 
       {/* Grass tufts: alpha-cutout sprite cross (2 planes/tuft, live
-          feedback -- "same principle as the tree background"), wind sway +
-          bend-away from Kolobok + the day/night brightness tint all applied
-          per-frame above -- no static initial matrices/colors needed since
-          the useFrame writes every instance every frame from mount. */}
+          feedback -- "same principle as the tree background"), wind sway
+          (only -- no bend-away reaction, live feedback: "it just sways in
+          the wind") + the day/night brightness tint all applied per-frame
+          above -- no static initial matrices/colors needed since the
+          useFrame writes every instance every frame from mount. */}
       <instancedMesh
         ref={(mesh) => { grassRef.current = mesh; }}
         args={[grassGeometry, undefined, GRASS_COUNT * 2]}

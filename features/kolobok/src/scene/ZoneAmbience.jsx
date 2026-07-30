@@ -143,7 +143,14 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       pu.smokeSuppressS += dt;
       if (pu.smokeSuppressS >= SMOKE_SUPPRESS_S) pu.smokeSuppressS = -1;
     }
-    const smokeSuppressed = pu.smokeSuppressS >= 0;
+    // Live feedback: chimney reworked to a press-and-hold gesture -- "long
+    // press closes the pipe (no smoke), release makes smoke go out." While
+    // held, normal smoke is hidden AND its own simulation is frozen (not
+    // just hidden) so it reads as genuinely "closed" rather than quietly
+    // building up out of view; ZoneLandmarks.jsx's onZoneRelease fires the
+    // bubble-burst (which starts the timed smokeSuppressS window above) the
+    // instant the press ends.
+    const smokeSuppressed = pu.smokeSuppressS >= 0 || eggMotion.chimneyHeld;
 
     // --- Chimney smoke: always on, +30% spawn rate when active, and the
     // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
@@ -152,6 +159,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       const rate = (isActiveZone ? 1.3 : 1) * storyMotion.smokeBoost;
       const positions = smokeGeometry.attributes.position;
       smokeState.current.forEach((p, i) => {
+        if (eggMotion.chimneyHeld) return; // frozen mid-puff while "closed"
         p.t += dt * rate * 0.4;
         if (p.t > 1) {
           p.t = 0;
