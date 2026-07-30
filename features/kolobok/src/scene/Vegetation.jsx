@@ -149,8 +149,10 @@ function applyCollisionMatrix(mesh, index, plant, localOffset, localScale, pushD
 
 // POLISH_SPEC §4 grass tufts + bend-away (also applies to flowers).
 // BACKLOG.md #13 / live feedback "grass with flowers a little thicker":
-// was 80.
-const GRASS_COUNT = 112;
+// was 80, then 112. Live feedback: "+50%, distributed randomly and evenly"
+// -- 112*1.5=168, and the hare-arc bias below is dropped entirely (see the
+// scatterAngles call).
+const GRASS_COUNT = 168;
 const GRASS_BEND_RADIUS = 0.55;
 const GRASS_BEND_MAX_TILT = rad(28);
 const GRASS_BEND_DECAY = 9;
@@ -226,9 +228,16 @@ const TREE_CANOPY_R = { birch: 0.42, spruce: 0.58 };
 // underneath it never needs to move even while the tree is mid-spring.
 const BIRCH_SHADOW_R = 0.3;
 const SPRUCE_SHADOW_R = 0.42;
+// Live feedback #3: mushrooms get the same flat blob shadow treatment.
+// Small, roughly matching the cap's own footprint (see mushroomCapM's own
+// r=0.08 sphere below).
+const MUSHROOM_SHADOW_R = 0.1;
 
-function shadowMatrixAt(x, z, radius) {
-  dummy.position.set(x, 0.02, z);
+// `groundY` (live feedback #1): same terrain-height offset matrixAt itself
+// takes, so a shadow under a mushroom sitting on a hill/in a pit is
+// ground-anchored there too, not floating/sinking at flat Y=0.02.
+function shadowMatrixAt(x, z, radius, groundY = 0) {
+  dummy.position.set(x, groundY + 0.02, z);
   dummy.rotation.set(-Math.PI / 2, 0, 0);
   dummy.scale.set(radius * 2, radius * 2, 1);
   dummy.updateMatrix();
@@ -296,6 +305,7 @@ export const hedgehogPool = new Array(HEDGEHOG_POOL_SIZE).fill(0).map(() => ({
   phase: 'approach', // 'approach' | 'sniff' | 'return'
   t: 0, // 0..1 progress within the current phase
   endX: 0,
+  endY: 0, // live feedback #5: the mushroom's own ground height, so a hedgehog visiting one on a hill actually climbs to it
   endZ: 0,
   seed: 0, // randomizes each journey's S-curve so they don't all look identical
 }));
@@ -424,6 +434,7 @@ export function Vegetation() {
     slot.phase = 'approach';
     slot.t = 0;
     slot.endX = ex;
+    slot.endY = mushroomGroundY[idx]; // live feedback #5: climb to the mushroom's own elevation
     slot.endZ = ez;
     slot.seed = Math.random();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -772,12 +783,13 @@ export function Vegetation() {
     });
   }, []);
 
-  // Grass tufts: 40% biased to the hare arc (scatterChance 0.6 means 60%
-  // scatter freely, 40% land in-arc), scattered the rest of the way,
-  // honoring the usual 16deg landmark keep-clear.
+  // Grass tufts: live feedback -- "distribute randomly and evenly" dropped
+  // the old 40%-biased-to-the-hare-arc split (scatterChance:1, no home
+  // zone, means every candidate rolls a fully free angle), still honoring
+  // the usual 16deg landmark keep-clear.
   const grass = useMemo(() => {
     const rng = makeRng(61);
-    const angles = scatterAngles(rng, GRASS_COUNT, ['hare'], { scatterChance: 0.6, keepClearDeg: 16 });
+    const angles = scatterAngles(rng, GRASS_COUNT, [], { scatterChance: 1, keepClearDeg: 16 });
     return angles.map((deg) => {
       const angleRad = rad(deg);
       const radius = ISLAND_RADIUS * (0.3 + rng() * 0.6);
@@ -942,6 +954,15 @@ export function Vegetation() {
     () => spruce.map((p, i) => shadowMatrixAt(spruceWorldXZ[i][0], spruceWorldXZ[i][1], SPRUCE_SHADOW_R * p.scale)),
     [spruce, spruceWorldXZ],
   );
+  const mushroomShadowM = useMemo(
+    () => mushroom.map((p, i) => shadowMatrixAt(
+      mushroomWorldXZ[i][0],
+      mushroomWorldXZ[i][1],
+      MUSHROOM_SHADOW_R * p.scale,
+      mushroomGroundY[i],
+    )),
+    [mushroom, mushroomWorldXZ, mushroomGroundY],
+  );
 
   const bushPositions = useMemo(() => {
     const rng = makeRng(31);
@@ -998,6 +1019,22 @@ export function Vegetation() {
             ref={(mesh) => {
               if (!mesh) return;
               spruceShadowM.forEach((m, i) => mesh.setMatrixAt(i, m));
+              mesh.instanceMatrix.needsUpdate = true;
+            }}
+          >
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={shadowTexture} color="#1e1a14" transparent opacity={0.276} depthWrite={false} />
+          </instancedMesh>
+          {/* Live feedback #3: mushrooms get the same treatment -- static,
+              like birch/spruce's own shadows above (the mushroom's own
+              pop-out/hide/respawn animation doesn't need the shadow to
+              follow it, matching the established precedent). */}
+          <instancedMesh
+            args={[undefined, undefined, mushroomShadowM.length]}
+            renderOrder={1}
+            ref={(mesh) => {
+              if (!mesh) return;
+              mushroomShadowM.forEach((m, i) => mesh.setMatrixAt(i, m));
               mesh.instanceMatrix.needsUpdate = true;
             }}
           >

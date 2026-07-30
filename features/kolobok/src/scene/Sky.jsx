@@ -34,14 +34,14 @@ const STAR_COLOR = new Color('#fff6d6');
 // 3 -- "add one more cloud"). Each is the SAME hand-built 3-sphere shape
 // (medium, then large, then small, left to right, each overlapping the next
 // by 30% -- was 15%, "have the spheres overlap by 15% more") rather than a
-// randomly-jittered puff cluster. All orbit together, clustered within
-// roughly a third of the full circle, at a radius near Kolobok's own path
-// (+/-15%) and a height 10% lower again than the previous pass (was
+// randomly-jittered puff cluster. All orbit together, one per quadrant of
+// the full circle (was clustered within roughly a third of it), at a radius
+// near Kolobok's own path (+/-15%) and a height 10% lower again than the
+// previous pass (was
 // 5.1-6.8, "move the clouds 10% closer to the scene's surface" ->
 // ~4.59-6.12 now). Tap one -> it darkens and rains for RAIN_DURATION_MS
 // (not tappable meanwhile), then brightens back to white.
 const CLOUD_COUNT = 4;
-const CLOUD_ARC_DEG = 100; // "scattered across one-third of the scene"
 const CLOUD_HEIGHT_MIN = 5.1 * 0.9;
 const CLOUD_HEIGHT_MAX = 6.8 * 0.9;
 const CLOUD_RADIUS_MIN = PATH_RADIUS * 0.85;
@@ -58,12 +58,6 @@ const RAIN_FALL_S = 2; // seconds for one drop to cycle top->bottom
 // below both still apply on top of these).
 const CLOUD_WHITE = new Color('#ffffff').lerp(new Color('#808080'), 0.1);
 const CLOUD_RAIN_TINT = new Color('#9aa4b2').lerp(new Color('#808080'), 0.1);
-
-// Live feedback: the small sphere's radius, exported so ZoneAmbience.jsx's
-// chimney-smoke special puffs can be sized to match exactly ("the dense
-// smoke sphere should be the same size as the small sphere used in the
-// cloud").
-export const CLOUD_SMALL_SPHERE_R = 0.38;
 
 /** The cloud's fixed silhouette: medium sphere, then large, then small,
  *  left to right, each overlapping the previous by 30% (gap between
@@ -174,12 +168,20 @@ export function Sky() {
   }, []);
   const cloudState = useRef((() => {
     const rng = makeRng(44);
-    const centerAngle = rng() * Math.PI * 2;
+    // Live feedback: "distribute the clouds across the four quarters of the
+    // scene" -- one cloud per 90deg quadrant (CLOUD_COUNT is exactly 4),
+    // replacing the old single 100deg cluster. Each still lands at a random
+    // angle WITHIN its own quadrant (10..80deg in, clear of the seams) so
+    // they don't read as mechanically evenly-spaced either. "Random
+    // orientation relative to the horizontal axis" -- spinYaw is a fresh
+    // random yaw per cloud for the medium-large-small silhouette's own
+    // facing, independent of where it sits on the orbit.
     return new Array(CLOUD_COUNT).fill(0).map((_, i) => ({
-      angle: centerAngle + rad((i - (CLOUD_COUNT - 1) / 2) * (CLOUD_ARC_DEG / (CLOUD_COUNT - 1))),
+      angle: rad(i * 90 + 10 + rng() * 70),
       radius: CLOUD_RADIUS_MIN + rng() * (CLOUD_RADIUS_MAX - CLOUD_RADIUS_MIN),
       scale: 0.85 + rng() * 0.35,
       bobPhase: rng() * Math.PI * 2,
+      spinYaw: rng() * Math.PI * 2,
       isRaining: false,
       rainMs: -1,
       worldX: 0, worldY: 0, worldZ: 0, // stashed each frame for the rain pool + shadow below
@@ -326,7 +328,7 @@ export function Sky() {
         c.worldZ = cz;
 
         dummy.position.set(cx, cy, cz);
-        dummy.rotation.set(0, 0, 0);
+        dummy.rotation.set(0, c.spinYaw, 0);
         dummy.scale.setScalar(c.scale);
         dummy.updateMatrix();
         cmesh.setMatrixAt(ci, dummy.matrix);

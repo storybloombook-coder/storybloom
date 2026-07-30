@@ -8,8 +8,6 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
 import { eggMotion } from './easterEggs';
-import { makeRadialAlphaTexture } from './textures/proceduralTextures';
-import { CLOUD_SMALL_SPHERE_R } from './Sky';
 
 const dummy = new Object3D();
 
@@ -18,12 +16,20 @@ const dummy = new Object3D();
 // pool); grandma's silhouette + the ridge bird are izba's "active" extras.
 const SMOKE_COUNT = 24;
 
-// smoke-rings (EASTER_EGGS.md §2): a separate tiny pool of ring-sprite
-// puffs, "stolen" from the next 3 normal-smoke spawn (wrap) events after a
-// chimney tap -- same fixed-pool-with-per-particle-t idiom as the smoke
-// itself, just rendered via a ring-shaped alpha texture instead of the
-// flat round one, at 2x size, per the doc.
-const RING_COUNT = 3;
+// Chimney smoke spheres (EASTER_EGGS.md §2, reworked per live feedback): on
+// tap, 3 gray semi-transparent spheres emerge from the pipe along the SAME
+// rise/sway/wind path as normal smoke, each sized to exactly 2x the pipe's
+// own diameter (CHIMNEY_PIPE_TOP_R below must match ZoneLandmarks.jsx's own
+// IzbaChimney cylinder top radius -- same "this file already duplicates the
+// pipe's own geometry knowledge" precedent as the chimneyPos prop's default
+// just below), individually varied +/-20% in size, staggered by a small gap
+// so they emerge as a visible sequence rather than one clump.
+const PUFF_COUNT = 3;
+const CHIMNEY_PIPE_TOP_R = 0.055;
+const PUFF_BASE_R = CHIMNEY_PIPE_TOP_R * 2; // sphere diameter = 2x pipe diameter -> sphere radius = pipe diameter
+const PUFF_SIZE_VARIANCE = 0.2;
+const PUFF_GAP_S = 0.3;
+const PUFF_RISE_S = 3;
 
 export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
   const smokeRef = useRef();
@@ -39,22 +45,15 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     new Array(SMOKE_COUNT).fill(0).map(() => ({ t: Math.random(), drift: Math.random() * Math.PI * 2 })),
   );
 
-  const ringRef = useRef();
-  // Live feedback: the ring-shaped texture read as basically invisible at
-  // any size -- swapped for the same solid radial-falloff blob normal
-  // smoke uses, just bigger (see the pointsMaterial size below), so the
-  // "special" puffs read as clearly larger smoke spheres instead.
-  const ringTexture = useMemo(() => makeRadialAlphaTexture(24), []);
-  const ringGeometry = useMemo(() => {
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(new Float32Array(RING_COUNT * 3), 3));
-    return geo;
-  }, []);
-  // t >= 1 = parked/inactive slot; ringSlot round-robins which one the next
-  // stolen wrap-event lands in.
-  const ringState = useRef({
-    slot: 0,
-    puffs: new Array(RING_COUNT).fill(0).map(() => ({ t: 1, drift: 0 })),
+  const puffRef = useRef();
+  // seen: burst-counter edge-detect, seeded from the counter's CURRENT value
+  // at mount (same anti-replay pattern as every other burst tracker in this
+  // codebase -- see KolobokParticles.jsx's own catchBurstWas for the full
+  // reasoning). t < 0 = still waiting its own stagger delay; 0..1 = rising;
+  // >= 1 = parked/done.
+  const puffState = useRef({
+    seen: eggMotion.chimneySmokeBurst,
+    puffs: new Array(PUFF_COUNT).fill(0).map(() => ({ t: 1, radius: PUFF_BASE_R, drift: 0 })),
   });
 
   const grandmaGeometry = useMemo(() => mergeColoredParts([
@@ -92,16 +91,6 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         if (p.t > 1) {
           p.t = 0;
           p.drift = Math.random() * Math.PI * 2;
-          // smoke-rings: this wrap becomes a ring-sprite puff instead of a
-          // normal one, "stealing" one of the next 3 spawns after a tap.
-          if (eggMotion.smokeRingsRemaining > 0) {
-            eggMotion.smokeRingsRemaining -= 1;
-            const rs = ringState.current;
-            const puff = rs.puffs[rs.slot % RING_COUNT];
-            rs.slot += 1;
-            puff.t = 0;
-            puff.drift = Math.random() * Math.PI * 2;
-          }
         }
         const rise = p.t * 1.5;
         const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
@@ -123,38 +112,44 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       smokeGeometry.computeBoundingSphere();
     }
 
-    // smoke-rings: same rise/sway/wind shape as the normal puffs above, at
-    // 2x rise speed's slower cousin -- t 0..1 once, then the slot parks
-    // (position pinned at the chimney, texture faded via its own opacity)
-    // until the next tap steals it again.
-    if (ringRef.current) {
-      const ringPositions = ringGeometry.attributes.position;
-      ringState.current.puffs.forEach((p, i) => {
-        if (p.t >= 1) {
-          // Parked well below the ground plane -- depth-occluded there, so
-          // a finished/never-triggered slot simply isn't visible, without
-          // needing per-point alpha (PointsMaterial has none).
-          ringPositions.setXYZ(i, chimneyPos[0], -5, chimneyPos[2]);
-          return;
-        }
-        p.t += dt * 0.3;
-        const rise = Math.min(p.t, 1) * 1.5;
-        // A slow orbiting drift stands in for "spin" -- a true ring alpha
-        // texture is radially symmetric, so an actual per-sprite roll
-        // would be invisible anyway; this sells the same lazy-turning read.
-        const orbit = p.t * Math.PI * 1.4 + p.drift;
-        const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15 + Math.cos(orbit) * 0.05;
-        const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
-        const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
-        ringPositions.setXYZ(
-          i,
-          chimneyPos[0] + sway + windDriftX,
-          chimneyPos[1] + rise,
-          chimneyPos[2] + sway * 0.6 + windDriftZ,
-        );
+    // Chimney smoke spheres: burst-counter edge-detect starts all 3 puffs at
+    // once, each with its own stagger delay (negative t counts up to 0
+    // before it actually starts rising) and its own +/-20% random size.
+    const pu = puffState.current;
+    if (eggMotion.chimneySmokeBurst !== pu.seen) {
+      pu.seen = eggMotion.chimneySmokeBurst;
+      pu.puffs.forEach((p, i) => {
+        p.t = -i * PUFF_GAP_S;
+        p.radius = PUFF_BASE_R * (1 + (Math.random() * 2 - 1) * PUFF_SIZE_VARIANCE);
+        p.drift = Math.random() * Math.PI * 2;
       });
-      ringPositions.needsUpdate = true;
-      ringGeometry.computeBoundingSphere();
+    }
+    if (puffRef.current) {
+      pu.puffs.forEach((p, i) => {
+        if (p.t < 1) p.t += dt / PUFF_RISE_S;
+        const rising = p.t >= 0 && p.t < 1;
+        if (rising) {
+          const rise = p.t * 1.5;
+          const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
+          const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
+          const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
+          dummy.position.set(
+            chimneyPos[0] + sway + windDriftX,
+            chimneyPos[1] + rise,
+            chimneyPos[2] + sway * 0.6 + windDriftZ,
+          );
+          dummy.scale.setScalar(p.radius);
+        } else {
+          // Still waiting its own stagger delay, or already done -- parked
+          // well below the ground either way.
+          dummy.position.set(chimneyPos[0], -5, chimneyPos[2]);
+          dummy.scale.setScalar(0.001);
+        }
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        puffRef.current.setMatrixAt(i, dummy.matrix);
+      });
+      puffRef.current.instanceMatrix.needsUpdate = true;
     }
 
     // --- Birth chapter: kneading/shaping motion takes over the same
@@ -220,13 +215,14 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       <points ref={smokeRef} geometry={smokeGeometry}>
         <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.55} depthWrite={false} />
       </points>
-      <points ref={ringRef} geometry={ringGeometry}>
-        {/* Live feedback: rings were invisible -- these are now just clearly
-            bigger smoke puffs, same darker soot gray for contrast against
-            the bright sky, sized to match the cloud's own small sphere
-            (Sky.jsx's CLOUD_SMALL_SPHERE_R, doubled for a diameter). */}
-        <pointsMaterial map={ringTexture} color="#7a756c" size={CLOUD_SMALL_SPHERE_R * 2} transparent opacity={0.95} depthWrite={false} />
-      </points>
+      {/* Chimney smoke spheres (live feedback, reworked): actual sphere
+          meshes now (not Points) since each one needs its own independent
+          size -- a PointsMaterial's `size` is one shared value for the
+          whole pool, which can't express "vary by +/-20% each". */}
+      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]}>
+        <sphereGeometry args={[1, 10, 8]} />
+        <meshBasicMaterial color="#7a756c" transparent opacity={0.55} depthWrite={false} fog={false} />
+      </instancedMesh>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />
       </mesh>

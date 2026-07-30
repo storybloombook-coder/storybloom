@@ -64,6 +64,7 @@ export const STRINGS = {
       disableFollow: 'Free the camera',
       mainMenu: 'Main menu',
       switchLanguage: 'Switch to Russian',
+      eggTooltip: 'Find all the secrets',
     },
     weather: {
       permission: "Allow location so the sky above Kolobok matches yours — sunrise, clouds, even snow.",
@@ -132,6 +133,7 @@ export const STRINGS = {
       disableFollow: 'Свободная камера',
       mainMenu: 'Главное меню',
       switchLanguage: 'Переключить на английский',
+      eggTooltip: 'Найди все секреты',
     },
     weather: {
       permission: 'Разрешите доступ к геолокации — и небо над Колобком станет таким же, как у вас: рассвет, облака и даже снег.',

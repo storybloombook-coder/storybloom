@@ -17,10 +17,13 @@ const dummy = new Object3D();
 // a single shared cycle clock (magpieCycle) drives all 3 -- simpler than a
 // per-magpie state machine since they're never out of sync with each other.
 const MAGPIE_COUNT = 3;
-const LAUNCH_S = 1.8; // fly up and away, S-shaped
+// Live feedback: "fly 30% slower" -- speed x0.7 means duration /0.7 for the
+// same distance (was a flat 1.8s each way).
+const FLIGHT_SPEED_MULT = 0.7;
+const LAUNCH_S = 1.8 / FLIGHT_SPEED_MULT; // fly up and away, S-shaped
 const AWAY_S = 15; // "return after 15 seconds"
-const RETURN_S = 1.8; // same S-path in reverse (mirrors Hedgehog.jsx's own
-// "returns along the same trajectory" convention)
+const RETURN_S = 1.8 / FLIGHT_SPEED_MULT; // same S-path in reverse (mirrors
+// Hedgehog.jsx's own "returns along the same trajectory" convention)
 const WING_FLAP_HZ = 8;
 const WING_FLAP_AMP = (50 * Math.PI) / 180;
 const BODY_R = 0.09;

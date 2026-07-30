@@ -36,8 +36,11 @@ export const eggMotion = {
   // moon-wink (EASTER_EGGS.md §2 moon-wink)
   moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
 
-  // smoke-rings (EASTER_EGGS.md §2 smoke-rings)
-  smokeRingsRemaining: 0, // next N puffs spawned by ZoneAmbience's IzbaAmbience are ring sprites
+  // chimney smoke spheres (EASTER_EGGS.md §2 smoke-rings, reworked): burst
+  // counter -- ZoneAmbience.jsx's IzbaAmbience spawns 3 staggered gray
+  // spheres straight from the pipe on each increment, rather than "stealing"
+  // slots from the next few normal-smoke wrap events.
+  chimneySmokeBurst: 0,
 };
 
 // Dev override (EASTER_EGGS.md §3): 'silver' | 'boot' | 'gold' | null.
@@ -129,7 +132,7 @@ function runMoonWink(ctx) {
 // ---------------------------------------------------------------- smoke-rings
 
 function runSmokeRings(ctx) {
-  eggMotion.smokeRingsRemaining = 3;
+  eggMotion.chimneySmokeBurst += 1;
   return createTimeline([
     { at: 0, call: () => {} },
   ]);

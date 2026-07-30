@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
-  AdditiveBlending, BufferAttribute, BufferGeometry, Object3D,
+  AdditiveBlending, BufferAttribute, BufferGeometry, Object3D, Quaternion, Vector3,
 } from 'three';
 import { storyMotion } from '../state/sceneStore';
 import { KOLOBOK_RADIUS } from '../config/zones';
@@ -18,21 +18,47 @@ const NOTE_LIFE = 1.2;
 const DUST_COUNT = 6;
 const DUST_LIFE = 0.5;
 
-// BACKLOG.md #5 fox-catch VFX: rays of light radiating out to 4 Kolobok-
-// radii, plus a smoke puff, both triggered once via storyMotion.catchBurstId
+// BACKLOG.md #5 fox-catch VFX: rays of light radiating out from Kolobok's
+// center, plus a smoke puff, both triggered once via storyMotion.catchBurstId
 // (same burst-counter convention as notes/dust above) right at the gulp.
-// Ray count and direction are re-rolled per burst (8-10 rays, random angles)
-// so the burst doesn't read as a mechanical evenly-spaced starburst.
-const RAY_COUNT_MIN = 8;
-const RAY_COUNT_MAX = 10;
-const RAY_CAPACITY = RAY_COUNT_MAX;
-const RAY_LENGTH = KOLOBOK_RADIUS * 4;
+// Live feedback: rays now radiate in EVERY direction (the old version only
+// ever rotated around Y, so every ray sat flat in the horizontal plane --
+// never up or down) out to 135% of Kolobok's own length (diameter), exactly
+// 40 of them, evenly distributed so none of them bunch up near each other.
+const RAY_COUNT = 40;
+const RAY_CAPACITY = RAY_COUNT;
+const RAY_LENGTH = KOLOBOK_RADIUS * 2 * 1.35; // "exceeds kolobok's length by 35%"
 const RAY_GROW_S = 0.15;
 const RAY_LIFE = 0.5;
 const CATCH_SMOKE_COUNT = 16;
 const CATCH_SMOKE_LIFE = 2.6;
 
 const dummy = new Object3D();
+const X_AXIS = new Vector3(1, 0, 0);
+const rayQuatTmp = new Quaternion();
+const burstAxisTmp = new Vector3();
+const burstQuatTmp = new Quaternion();
+
+/** Fibonacci lattice: the standard even-point-on-a-sphere distribution --
+ *  consecutive points are always exactly the golden angle apart, which is
+ *  what keeps them spread out with no clustering no matter how many points
+ *  (unlike a naive lat/long grid, which bunches up at the poles). Pure/
+ *  count-only, so this is computed ONCE at module scope, not re-rolled --
+ *  each burst instead applies a fresh random overall rotation on top (see
+ *  the catchBurstId handler below) so consecutive explosions don't look
+ *  identical, without disturbing the even spacing itself. */
+function fibonacciSphere(n) {
+  const pts = [];
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i += 1) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = goldenAngle * i;
+    pts.push(new Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r));
+  }
+  return pts;
+}
+const RAY_BASE_DIRECTIONS = fibonacciSphere(RAY_COUNT);
 
 export function KolobokParticles() {
   const notesRef = useRef();
@@ -75,8 +101,10 @@ export function KolobokParticles() {
     catchBurstWas: storyMotion.catchBurstId,
     rayT: RAY_LIFE + 1,
     rayOrigin: [0, 0, 0],
-    rayCount: 0,
-    rayAngles: new Array(RAY_CAPACITY).fill(0),
+    // Rotated copies of RAY_BASE_DIRECTIONS, refreshed each burst (see
+    // catchBurstId handler below) -- keeps the even golden-angle spacing
+    // while still varying which way the whole lattice faces each time.
+    rayDirections: RAY_BASE_DIRECTIONS.map((v) => v.clone()),
     catchSmoke: new Array(CATCH_SMOKE_COUNT).fill(0).map(() => ({ t: CATCH_SMOKE_LIFE + 1, dx: 0, dz: 0 })),
   });
 
@@ -155,10 +183,14 @@ export function KolobokParticles() {
       s.catchBurstWas = storyMotion.catchBurstId;
       s.rayT = 0;
       s.rayOrigin = [kx, ky, kz];
-      s.rayCount = RAY_COUNT_MIN + Math.floor(Math.random() * (RAY_COUNT_MAX - RAY_COUNT_MIN + 1));
-      for (let i = 0; i < RAY_CAPACITY; i += 1) {
-        s.rayAngles[i] = Math.random() * Math.PI * 2;
-      }
+      // Fresh random overall rotation of the whole Fibonacci lattice this
+      // burst (see RAY_BASE_DIRECTIONS' own comment) -- varies which way the
+      // 40 rays face without disturbing their even spacing.
+      burstAxisTmp.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+      burstQuatTmp.setFromAxisAngle(burstAxisTmp, Math.random() * Math.PI * 2);
+      RAY_BASE_DIRECTIONS.forEach((base, i) => {
+        s.rayDirections[i].copy(base).applyQuaternion(burstQuatTmp);
+      });
       s.catchSmoke.forEach((p) => {
         p.t = 0;
         const a = Math.random() * Math.PI * 2;
@@ -175,30 +207,18 @@ export function KolobokParticles() {
         const growT = Math.min(1, s.rayT / RAY_GROW_S);
         const len = growT * RAY_LENGTH;
         for (let i = 0; i < RAY_CAPACITY; i += 1) {
-          if (i >= s.rayCount) {
-            // Unused slot this burst: park it with zero scale (invisible).
-            dummy.position.set(s.rayOrigin[0], s.rayOrigin[1] - 10, s.rayOrigin[2]);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(0.001, 1, 1);
-            dummy.updateMatrix();
-            mesh.setMatrixAt(i, dummy.matrix);
-            continue;
-          }
-          // A Y-axis rotation by rayAngle sends local +X (the plane's long
-          // axis) to world (cos, 0, -sin) -- NOT (sin, 0, cos). Using the
-          // wrong pairing here left each ray's center offset along one
-          // direction while the plane itself was stretched along a
-          // different one, so rays floated off to the side instead of
-          // touching Kolobok's center and pointing outward from it.
-          const rayAngle = s.rayAngles[i];
-          const dx = Math.cos(rayAngle);
-          const dz = -Math.sin(rayAngle);
+          // Full 3D direction (not just a Y-axis angle) -- setFromUnitVectors
+          // finds the quaternion that rotates the plane's local +X (its long
+          // axis) to point exactly along this ray's own direction, whichever
+          // way that is (up, down, sideways, anything between).
+          const dir = s.rayDirections[i];
+          rayQuatTmp.setFromUnitVectors(X_AXIS, dir);
           dummy.position.set(
-            s.rayOrigin[0] + dx * (len / 2),
-            s.rayOrigin[1],
-            s.rayOrigin[2] + dz * (len / 2),
+            s.rayOrigin[0] + dir.x * (len / 2),
+            s.rayOrigin[1] + dir.y * (len / 2),
+            s.rayOrigin[2] + dir.z * (len / 2),
           );
-          dummy.rotation.set(0, rayAngle, 0);
+          dummy.quaternion.copy(rayQuatTmp);
           dummy.scale.set(Math.max(0.001, len), 1, 1);
           dummy.updateMatrix();
           mesh.setMatrixAt(i, dummy.matrix);

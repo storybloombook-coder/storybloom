@@ -31,6 +31,13 @@ const LOOKAROUND_MAX_S = 3; // auto-ducks if never tapped, same as the original 
 const LOOKAROUND_SWIVEL_HZ = 0.35;
 const LOOKAROUND_SWIVEL_MAX = (35 * Math.PI) / 180;
 const OWL_HIT_R = 0.22; // generous invisible tap target (mobile)
+// Live feedback: "the owl appears with its wings spread, and nothing
+// happens... it should appear without wings" -- rotation.z=0 (the flap's
+// own rest/center value) is the wing geometry's OWN "spread out to the
+// side" pose (see wingGeometry's own comment), so sitting at flap=0 through
+// the whole look-around read as wings permanently out. Folded now tucks
+// each wing down against the body except during the 'flapping' phase.
+const WING_FOLD_Z = (65 * Math.PI) / 180;
 
 /** Owl (EASTER_EGGS.md §2 owl): hidden until a spruce is triple-tapped,
  *  then pops from that tree's canopy top (SPRUCE_TOP_MATRICES anchor) and
@@ -146,11 +153,13 @@ export function Owl() {
     if (headRef.current) headRef.current.rotation.y = headYaw;
 
     // Wing flap: only during the 'flapping' phase now (was continuous
-    // while popped) -- wings stay folded/still through the look-around.
+    // while popped) -- wings stay FOLDED (not just still) through the
+    // look-around, only swinging out to the spread/flapping pose once tapped.
     flapPhase.current += dt * FLAP_HZ * Math.PI * 2;
+    const wingBase = phase === 'flapping' ? 0 : WING_FOLD_Z;
     const flap = Math.sin(flapPhase.current) * FLAP_MAX * flapAmp;
-    if (leftWingRef.current) leftWingRef.current.rotation.z = flap;
-    if (rightWingRef.current) rightWingRef.current.rotation.z = -flap;
+    if (leftWingRef.current) leftWingRef.current.rotation.z = wingBase + flap;
+    if (rightWingRef.current) rightWingRef.current.rotation.z = -wingBase - flap;
 
     const isNight = atmosphereLive.windowGlow > 0.5;
     materials.eyes.emissive.set(isNight ? '#ffd27a' : '#000000');

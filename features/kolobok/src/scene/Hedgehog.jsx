@@ -107,6 +107,12 @@ function HedgehogInstance({ slotIndex }) {
     const [x, z] = sPathPoint(sT, CENTER_X, CENTER_Z, h.endX, h.endZ, h.seed);
     rootRef.current.position.x = x;
     rootRef.current.position.z = z;
+    // Live feedback #5: "if a mushroom is on a hill... the hedgehog must
+    // move up the hill" -- plain linear climb from the center (Y=0) to the
+    // mushroom's own ground height (h.endY, set in Vegetation.jsx's
+    // spawnHedgehog from that mushroom's own groundHeightAt), riding
+    // alongside the SAME sT the horizontal S-path already uses.
+    const groundY = h.endY * sT;
 
     if (h.phase === 'sniff') {
       // "Sniffing" -- a gentle nose-down/up nod in place, facing the mushroom.
@@ -114,14 +120,14 @@ function HedgehogInstance({ slotIndex }) {
       bobPhase.current += dt * SNIFF_BOB_HZ * Math.PI * 2;
       const bob = Math.sin(bobPhase.current) * 0.06;
       rootRef.current.rotation.x = bob;
-      rootRef.current.position.y = Math.abs(bob) * 0.02;
+      rootRef.current.position.y = groundY + Math.abs(bob) * 0.02;
     } else {
       const dirSign = h.phase === 'approach' ? 1 : -1;
       const aheadT = Math.min(1, Math.max(0, sT + dirSign * 0.02));
       const [nx, nz] = sPathPoint(aheadT, CENTER_X, CENTER_Z, h.endX, h.endZ, h.seed);
       rootRef.current.rotation.y = Math.atan2(nx - x, nz - z);
       rootRef.current.rotation.x = 0;
-      rootRef.current.position.y = 0;
+      rootRef.current.position.y = groundY;
     }
 
     if (spinesRef.current) {

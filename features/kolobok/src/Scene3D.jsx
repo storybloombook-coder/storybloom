@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Animated, AppState, StyleSheet, View, Text,
+  Animated, AppState, StyleSheet, View, Text, Pressable,
 } from 'react-native';
 import { Canvas } from '@react-three/fiber/native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -56,6 +56,19 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // One accelerometer subscription shared by every button's own GlassGlare
   // below -- see useDeviceTilt's own comment for why.
   const { tiltX, tiltY } = useDeviceTilt();
+
+  // Live feedback: tapping the egg counter shows a small tooltip underneath
+  // it, auto-hiding after a few seconds (tapping again re-shows it).
+  const [showEggTooltip, setShowEggTooltip] = useState(false);
+  const eggTooltipTimer = useRef(null);
+  const onEggCounterTap = () => {
+    setShowEggTooltip(true);
+    if (eggTooltipTimer.current) clearTimeout(eggTooltipTimer.current);
+    eggTooltipTimer.current = setTimeout(() => setShowEggTooltip(false), 2500);
+  };
+  useEffect(() => () => {
+    if (eggTooltipTimer.current) clearTimeout(eggTooltipTimer.current);
+  }, []);
 
   // Encounter beat lifecycle (show bubble, fade, clear) is owned by the
   // directors' timelines; this component only renders the current text.
@@ -238,9 +251,17 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
             comment for what's counted. Deliberately unlabeled (just "N/7"):
             EASTER_EGGS.md never specifies UI copy for this, and a bare
             fraction reads as "there's more to find" without spelling out
-            what, which fits the hidden/discoverable spirit of the feature. */}
-        <View style={styles.eggCounterWrap} pointerEvents="none">
-          <Text style={styles.eggCounterText}>{discoveredEggCount}/{TOTAL_EGGS}</Text>
+            what, which fits the hidden/discoverable spirit of the feature.
+            Live feedback: tapping it now shows a small tooltip underneath. */}
+        <View style={styles.eggCounterColumn} pointerEvents="box-none">
+          <Pressable style={styles.eggCounterWrap} onPress={onEggCounterTap}>
+            <Text style={styles.eggCounterText}>{discoveredEggCount}/{TOTAL_EGGS}</Text>
+          </Pressable>
+          {showEggTooltip && (
+            <View style={styles.eggTooltipWrap} pointerEvents="none">
+              <Text style={styles.eggTooltipText}>{t('ui.eggTooltip', locale)}</Text>
+            </View>
+          )}
         </View>
 
       </View>
@@ -397,16 +418,28 @@ const styles = StyleSheet.create({
   zoneCard: { alignItems: 'center', marginTop: 64 },
   zoneTitle: { fontSize: 22, fontWeight: '600', color: '#2e2a22' },
   zoneHint: { fontSize: 13, color: '#4a463c', marginTop: 4, opacity: 0.8 },
-  eggCounterWrap: {
+  eggCounterColumn: {
     position: 'absolute',
     top: 64,
     right: 14,
+    alignItems: 'flex-end',
+  },
+  eggCounterWrap: {
     backgroundColor: 'rgba(255,255,255,0.55)',
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
   eggCounterText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
+  eggTooltipWrap: {
+    marginTop: 6,
+    maxWidth: 160,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  eggTooltipText: { fontSize: 12, color: '#2e2a22', textAlign: 'center' },
   // Absolutely positioned (left/bottom driven by the rAF loop above) rather
   // than laid out in the flex overlay, so it can track wherever the actual
   // speaker projects to on screen. Fixed width (matching BUBBLE_WRAP_WIDTH)
