@@ -336,6 +336,14 @@ function potholeFactorAt(x, z) {
   return f;
 }
 
+// Live feedback: grass/flowers/mushrooms were sitting at flat Y=0 regardless
+// of the hills/potholes carved into the ground right underneath them --
+// exported so Vegetation.jsx can sample the SAME height the ground mesh
+// itself uses at any (x,z) and place small ground-hugging props on it.
+export function groundHeightAt(x, z) {
+  return hillBumpAt(x, z) - potholeFactorAt(x, z) * POTHOLE_DEPTH;
+}
+
 function usePebbleMatrices() {
   return useMemo(() => {
     const rng = makeRng(70);

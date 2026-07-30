@@ -57,8 +57,13 @@ function HedgehogInstance({ slotIndex }) {
   const spinesRef = useRef();
   const mushroomRef = useRef();
 
+  // Live feedback: the body read as hollow -- a partial-theta SphereGeometry
+  // is an open shell with no bottom cap, so the inside was visible from any
+  // angle looking up into it. A full closed sphere (flattened in Y to keep
+  // the same low, rounded silhouette the half-dome was going for) fixes
+  // that while looking effectively identical from above/the side.
   const bodyGeometry = useMemo(() => mergeColoredParts([
-    { geometry: new SphereGeometry(0.1, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), color: '#6b5a48', rotation: [Math.PI, 0, 0], position: [0, 0.1, 0] },
+    { geometry: new SphereGeometry(0.1, 10, 8), color: '#6b5a48', scale: [1, 0.65, 1], position: [0, 0.1, 0] },
     { geometry: new ConeGeometry(0.045, 0.09, 8), color: '#8a7862', position: [0, 0.06, 0.12], rotation: [Math.PI / 2, 0, 0] },
     { geometry: new SphereGeometry(0.015, 6, 6), color: '#2a2016', position: [0, 0.06, 0.19] },
   ]), []);

@@ -5,7 +5,7 @@ import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, Object3D, Quaternion, Vector3,
 } from 'three';
 import {
-  ISLAND_RADIUS, rad, pointOnCircle, PATH_RADIUS,
+  ISLAND_RADIUS, rad, pointOnCircle, PATH_RADIUS, PATH_HALF_WIDTH,
 } from '../config/zones';
 import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement';
 import { makeRng } from './prng';
@@ -16,6 +16,14 @@ import { windSway, wind } from './wind';
 import { polish } from '../config/devFlags';
 import { getSharedTexture } from './BlobShadow';
 import { eggManager } from './easterEggs';
+// Live feedback #1: ground-hugging props (grass/flowers/mushrooms) need the
+// SAME terrain height Island.jsx's own ground mesh uses at each (x,z), so
+// they sit ON the hills/in the pits instead of floating/sinking at flat
+// Y=0. Only ever called from inside Vegetation()'s own render (useMemo/
+// useFrame), never at this module's own top level, so the mutual import
+// (Island.jsx already imports SPRUCE_OCCUPIED from this file) settles
+// safely by the time either side actually runs.
+import { groundHeightAt } from './Island';
 
 const dummy = new Object3D();
 const tiltAxisTmp = new Vector3();
@@ -45,17 +53,17 @@ const BEND_DURATION = 1.1; // seconds until the spring is fully settled
 const STRETCH_Y = 0.16;   // +16% taller at peak spring intensity
 const STRETCH_XZ = 0.08;  // -8% thinner at peak, so volume feels conserved
 
-// Live feedback: "tap the birch tree 5 times, leaves fall... green
-// particles... fall from the foliage to the base in random trajectories,
-// not quickly." No cooldown -- every birch tracks its own 5-tap count
-// independently, and can be retriggered immediately after falling.
-const LEAF_FALL_TAP_COUNT = 5;
-const LEAF_FALL_WINDOW_MS = 3000;
-const LEAF_FALL_BATCH = 14;
+// Live feedback: "have the birch leaves fall with the first tap" (was a
+// 5-tap-within-a-window threshold) -- every tap fires a fresh batch
+// immediately, no counting, no cooldown, matching the willow's own
+// one-shot-per-tap reaction. "3x as many leaves" -- was 14; "dark green" --
+// was #5d8a3f.
+const LEAF_FALL_BATCH = 42;
 // Generous shared pool (4 batches' worth) so several birches can be
 // mid-fall at once without one tree's leaves stealing another's slots.
 const LEAF_POOL_SIZE = LEAF_FALL_BATCH * 4;
 const LEAF_CANOPY_Y = 1.7; // matches birchCanopyAM's own local Y offset below
+const LEAF_COLOR = '#2e4a1e';
 
 // Live feedback #7: 12 mushrooms scattered randomly across the WHOLE island
 // (no home-zone bias), never too close to each other/trees/the path/the
@@ -64,6 +72,13 @@ const LEAF_CANOPY_Y = 1.7; // matches birchCanopyAM's own local Y offset below
 // a per-mushroom roll between -10% and +20% of the old baseline size.
 const MUSHROOM_COUNT = 12;
 const MUSHROOM_CANOPY_R = 0.12; // small footprint -- just needs "not touching"
+// Live feedback #8: 5 more, specifically scattered in the perimeter band
+// between the road and the island's edge (outside PATH_RADIUS, short of the
+// outer skirt) -- on top of the 12 general ones above, sharing the same
+// hedgehog/respawn mechanic.
+const PERIMETER_MUSHROOM_COUNT = 5;
+const PERIMETER_BAND_MIN_R = PATH_RADIUS + PATH_HALF_WIDTH + 0.5;
+const PERIMETER_BAND_MAX_R = ISLAND_RADIUS * 0.95;
 // "Mushrooms respawn every 10 seconds" -- was 20000ms under the old single-
 // mushroom design.
 const MUSHROOM_POP_MS = 300;
@@ -173,11 +188,17 @@ function makePlants(rng, count, homeZoneIds, opts) {
   }));
 }
 
-function matrixAt(plant, localOffset = [0, 0, 0], localScale = [1, 1, 1]) {
+// `groundY` (live feedback #1): the terrain height under this plant's own
+// (x,z) -- see Island.jsx's groundHeightAt, sampled once by the caller and
+// passed in here rather than recomputed per-part, since several parts
+// (stem/cap, trunk/canopy) share the same base point. Defaults to 0 (flat)
+// for plants that don't need it (birch/spruce trunks are tall enough that
+// the hill/pothole bumps under them are imperceptible).
+function matrixAt(plant, localOffset = [0, 0, 0], localScale = [1, 1, 1], groundY = 0) {
   const [x, , z] = pointOnCircle(plant.radius, plant.angle);
   dummy.position.set(
     x + localOffset[0] * plant.scale,
-    localOffset[1] * plant.scale,
+    groundY + localOffset[1] * plant.scale,
     z + localOffset[2] * plant.scale,
   );
   dummy.rotation.set(0, plant.yaw, 0);
@@ -331,7 +352,7 @@ export function Vegetation() {
       const [x, , z] = pointOnCircle(p.radius, p.angle);
       return { x, z, r: TREE_CANOPY_R.birch * p.scale };
     })];
-    return scatterNonOverlappingTrees(rng, MUSHROOM_COUNT, [], {
+    const general = scatterNonOverlappingTrees(rng, MUSHROOM_COUNT, [], {
       scatterChance: 1,
       radiusMin: ISLAND_RADIUS * 0.22,
       radiusMax: ISLAND_RADIUS * 0.92,
@@ -339,10 +360,29 @@ export function Vegetation() {
       scaleMax: 1.2,
       touchFactor: 1.6, // extra spacing beyond bare-touching, so mushrooms visibly don't crowd
     }, MUSHROOM_CANOPY_R, occupied);
+    // Live feedback #8: 5 more, confined to the perimeter band -- occupied
+    // already carries every general mushroom placed just above, so these
+    // keep clear of them too.
+    const perimeter = scatterNonOverlappingTrees(rng, PERIMETER_MUSHROOM_COUNT, [], {
+      scatterChance: 1,
+      radiusMin: PERIMETER_BAND_MIN_R,
+      radiusMax: PERIMETER_BAND_MAX_R,
+      scaleMin: 0.9,
+      scaleMax: 1.2,
+      touchFactor: 1.6,
+    }, MUSHROOM_CANOPY_R, occupied);
+    return [...general, ...perimeter];
   }, [birch]);
   const mushroomWorldXZ = useMemo(
     () => mushroom.map((p) => { const [x, , z] = pointOnCircle(p.radius, p.angle); return [x, z]; }),
     [mushroom],
+  );
+  // Live feedback #1: sample the same terrain height Island.jsx's ground
+  // mesh uses at each mushroom's own (x,z), so it sits on a hill's slope or
+  // a pit's floor instead of floating/sinking at flat Y=0.
+  const mushroomGroundY = useMemo(
+    () => mushroomWorldXZ.map(([x, z]) => groundHeightAt(x, z)),
+    [mushroomWorldXZ],
   );
 
   // hedgehog (live feedback #7 rework): refs to the mushroom instancedMeshes
@@ -356,8 +396,14 @@ export function Vegetation() {
   const mushroomStemRef = useRef();
   const mushroomCapRef = useRef();
   const mushroomGround = useRef(mushroom.map(() => ({ reserved: false, hiddenMs: -1 })));
-  const mushroomStemM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.05, 0])), [mushroom]);
-  const mushroomCapM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1])), [mushroom]);
+  const mushroomStemM = useMemo(
+    () => mushroom.map((p, i) => matrixAt(p, [0, 0.05, 0], [1, 1, 1], mushroomGroundY[i])),
+    [mushroom, mushroomGroundY],
+  );
+  const mushroomCapM = useMemo(
+    () => mushroom.map((p, i) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1], mushroomGroundY[i])),
+    [mushroom, mushroomGroundY],
+  );
 
   /** Live feedback #7: tapping a mushroom sends the next free hedgehog-pool
    *  slot on a round trip from the center of the scene to that mushroom (see
@@ -406,12 +452,12 @@ export function Vegetation() {
     t: -1, ax: 0, az: 0, held: false, releaseAmp: 1,
   })));
 
-  // Birch leaf-fall (live feedback #10): per-tree 5-tap log (own timestamps,
-  // independent of the grab/bend physics above and of easterEggs.js's
-  // suppression/cooldown -- this is a no-cooldown ambient interaction, not
-  // a registry egg). leafPool is a SHARED, generously-sized pool (several
-  // batches' worth) so multiple birches can be mid-fall at once.
-  const leafTapLog = useRef({}); // birch idx -> [timestamps]
+  // Birch leaf-fall (live feedback #10, simplified: fires on the very FIRST
+  // tap now, no tap-counting): independent of the grab/bend physics above
+  // and of easterEggs.js's suppression/cooldown -- this is a no-cooldown
+  // ambient interaction, not a registry egg. leafPool is a SHARED,
+  // generously-sized pool (several batches' worth) so multiple birches can
+  // be mid-fall at once.
   const leafPool = useRef(new Array(LEAF_POOL_SIZE).fill(0).map(() => ({
     t: 1, x: 0, y: 0, z: 0, driftX: 0, driftZ: 0, fallDur: 1, spinPhase: 0,
   })));
@@ -467,16 +513,7 @@ export function Vegetation() {
     // reaction below, matching the doc's "taps still give their normal
     // reactions" even while an egg is running.
     if (type === 'spruce') eggManager.tapSpruce(idx);
-    if (type === 'birch') {
-      const t = Date.now();
-      const log = (leafTapLog.current[idx] ?? []).filter((x) => t - x <= LEAF_FALL_WINDOW_MS);
-      log.push(t);
-      leafTapLog.current[idx] = log;
-      if (log.length >= LEAF_FALL_TAP_COUNT) {
-        leafTapLog.current[idx] = [];
-        spawnLeafFall(idx);
-      }
-    }
+    if (type === 'birch') spawnLeafFall(idx);
     const bendArr = type === 'birch' ? birchBend.current : spruceBend.current;
     const worldXZArr = type === 'birch' ? birchWorldXZ : spruceWorldXZ;
     const b = bendArr[idx];
@@ -745,7 +782,11 @@ export function Vegetation() {
       const angleRad = rad(deg);
       const radius = ISLAND_RADIUS * (0.3 + rng() * 0.6);
       const [x, , z] = pointOnCircle(radius, angleRad);
-      return { x, z, yaw: rng() * Math.PI * 2 };
+      // Live feedback #1: rest on the actual terrain height under each tuft
+      // (hills/pits), not flat Y=0.
+      return {
+        x, z, yaw: rng() * Math.PI * 2, y: groundHeightAt(x, z),
+      };
     });
   }, []);
   const grassColors = useMemo(() => {
@@ -760,6 +801,11 @@ export function Vegetation() {
   const flowerWorldXZ = useMemo(
     () => flower.map((p) => { const [x, , z] = pointOnCircle(p.radius, p.angle); return [x, z]; }),
     [flower],
+  );
+  // Live feedback #1: same terrain-height grounding as grass/mushrooms.
+  const flowerGroundY = useMemo(
+    () => flowerWorldXZ.map(([x, z]) => groundHeightAt(x, z)),
+    [flowerWorldXZ],
   );
   const flowerBend = useRef(flower.map(() => ({ t: -1, ax: 0, az: 0 })));
   const flowerHeadRef = useRef();
@@ -790,7 +836,7 @@ export function Vegetation() {
         }
         const swayAngle = windSway(g.x, g.z, clock, GRASS_SWAY_AMPLITUDE);
 
-        dummy.position.set(g.x, 0, g.z);
+        dummy.position.set(g.x, g.y, g.z);
         dummy.rotation.set(0, g.yaw, 0);
         if (swayAngle) {
           tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
@@ -830,7 +876,7 @@ export function Vegetation() {
           if (b.t >= GRASS_BEND_DURATION) b.t = -1;
           else bendAngle = GRASS_BEND_MAX_TILT * Math.exp(-b.t * GRASS_BEND_DECAY) * Math.cos(b.t * GRASS_BEND_FREQ * Math.PI * 2);
         }
-        dummy.position.set(x, 0.13 * p.scale, z);
+        dummy.position.set(x, flowerGroundY[i] + 0.13 * p.scale, z);
         dummy.rotation.set(0, p.yaw, 0);
         if (bendAngle) {
           tiltAxisTmp.set(b.az, 0, -b.ax).normalize();
@@ -910,8 +956,14 @@ export function Vegetation() {
     return out;
   }, [bush]);
 
-  const flowerStemM = useMemo(() => flower.map((p) => matrixAt(p, [0, 0.06, 0])), [flower]);
-  const flowerHeadM = useMemo(() => flower.map((p) => matrixAt(p, [0, 0.13, 0])), [flower]);
+  const flowerStemM = useMemo(
+    () => flower.map((p, i) => matrixAt(p, [0, 0.06, 0], [1, 1, 1], flowerGroundY[i])),
+    [flower, flowerGroundY],
+  );
+  const flowerHeadM = useMemo(
+    () => flower.map((p, i) => matrixAt(p, [0, 0.13, 0], [1, 1, 1], flowerGroundY[i])),
+    [flower, flowerGroundY],
+  );
   const flowerColors = useMemo(() => {
     const palette = ['#e8e26e', '#e0e9f2', '#e8a8c8'];
     const rng = makeRng(51);
@@ -986,7 +1038,7 @@ export function Vegetation() {
       {/* Birch leaf-fall: shared pool, parked far below ground (invisible)
           when idle -- see spawnLeafFall/the useFrame block above. */}
       <points ref={leafRef} geometry={leafGeometry}>
-        <pointsMaterial map={leafTexture} color="#5d8a3f" size={0.09} transparent opacity={0.9} depthWrite={false} />
+        <pointsMaterial map={leafTexture} color={LEAF_COLOR} size={0.09} transparent opacity={0.9} depthWrite={false} />
       </points>
 
       {/* Spruce: all 3 cone tiers of all trees in one merged instancedMesh */}

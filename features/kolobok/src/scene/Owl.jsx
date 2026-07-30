@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber/native';
+import * as Haptics from 'expo-haptics';
 import { ConeGeometry, Object3D, SphereGeometry } from 'three';
 import { atmosphereLive } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
@@ -14,22 +15,34 @@ const dummy = new Object3D();
 // r=0.038 + pupils, beak cone `#d9a441`. Head is a SEPARATE sphere r=0.085
 // stacked on the body. Spawns from spruce canopy tops.
 //
-// Live feedback: the interaction is now a single beat -- pop out, flap its
-// (hand-designed) wings for the ~1.7s it's up, duck back down and
-// disappear (easterEggs.js's runOwl owns that timing; this component just
-// flaps continuously, scaled by owlPopT, so the flap naturally fades in
-// and out with the pop instead of needing its own separate on/off signal).
+// Live feedback: two-stage interaction -- pop out and look around (restored
+// from the original design) until TAPPED, which triggers the wing flap,
+// then it ducks away and disappears, same ending as before. This component
+// now owns the ENTIRE phase progression itself (eggMotion.owlPhase/
+// owlPhaseT), since a tap-triggered interrupt mid-lookaround doesn't fit a
+// fixed linear timeline -- easterEggs.js's runOwl only ever sets the INITIAL
+// 'popping' phase; every transition after that happens here.
 const FLAP_HZ = 4.5;
 const FLAP_MAX = (55 * Math.PI) / 180;
+const POP_S = 0.25;
+const DUCK_S = 0.25;
+const FLAP_S = 1.4; // "an animation for 1-2 seconds"
+const LOOKAROUND_MAX_S = 3; // auto-ducks if never tapped, same as the original design
+const LOOKAROUND_SWIVEL_HZ = 0.35;
+const LOOKAROUND_SWIVEL_MAX = (35 * Math.PI) / 180;
+const OWL_HIT_R = 0.22; // generous invisible tap target (mobile)
 
 /** Owl (EASTER_EGGS.md §2 owl): hidden until a spruce is triple-tapped,
  *  then pops from that tree's canopy top (SPRUCE_TOP_MATRICES anchor) and
- *  flaps its wings until it ducks back down. eggMotion.owlTreeIdx/owlPopT
- *  are the entire interface -- Vegetation.jsx's onTreeGrab drives them via
- *  eggManager.tapSpruce(), the registry (easterEggs.js runOwl) owns the
- *  timeline, this component only ever READS them. */
+ *  looks around until TAPPED (on the owl itself), which triggers the wing
+ *  flap, then it ducks back down. eggMotion.owlTreeIdx/owlPhase/owlPhaseT
+ *  are the entire interface -- Vegetation.jsx's onTreeGrab drives the
+ *  INITIAL trigger via eggManager.tapSpruce() (easterEggs.js's runOwl seeds
+ *  owlPhase='popping'), but every phase transition after that (including the
+ *  tap-to-flap below) is owned entirely by this component. */
 export function Owl() {
   const rootRef = useRef();
+  const headRef = useRef();
   const leftWingRef = useRef();
   const rightWingRef = useRef();
 
@@ -71,6 +84,14 @@ export function Owl() {
   const flapPhase = useRef(0);
   const { camera } = useThree();
 
+  const onOwlTap = (e) => {
+    e.stopPropagation();
+    if (eggMotion.owlPhase !== 'lookaround') return; // already flapping/ducking, or not out yet
+    eggMotion.owlPhase = 'flapping';
+    eggMotion.owlPhaseT = 0;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
   useFrame((_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const active = eggMotion.owlTreeIdx >= 0;
@@ -85,23 +106,49 @@ export function Owl() {
       dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
       rootRef.current.position.copy(dummy.position);
     }
-    // Pops UP out of the canopy as owlPopT climbs (starts a touch lower/
+
+    // Phase progression is entirely local to this component (see
+    // eggMotion.owlPhase's own comment) -- popping (pop in) -> lookaround
+    // (head swivels, tappable, auto-ducks if never tapped) -> flapping (the
+    // tap-triggered wing flap) -> ducking (pop back down) -> gone.
+    eggMotion.owlPhaseT += dt;
+    const { phase } = eggMotion;
+    let popT = 1;
+    let headYaw = 0;
+    let flapAmp = 0;
+
+    if (phase === 'popping') {
+      popT = Math.min(1, eggMotion.owlPhaseT / POP_S);
+      if (eggMotion.owlPhaseT >= POP_S) { eggMotion.owlPhase = 'lookaround'; eggMotion.owlPhaseT = 0; }
+    } else if (phase === 'lookaround') {
+      headYaw = Math.sin(eggMotion.owlPhaseT * LOOKAROUND_SWIVEL_HZ * Math.PI * 2) * LOOKAROUND_SWIVEL_MAX;
+      if (eggMotion.owlPhaseT >= LOOKAROUND_MAX_S) { eggMotion.owlPhase = 'ducking'; eggMotion.owlPhaseT = 0; }
+    } else if (phase === 'flapping') {
+      flapAmp = 1;
+      if (eggMotion.owlPhaseT >= FLAP_S) { eggMotion.owlPhase = 'ducking'; eggMotion.owlPhaseT = 0; }
+    } else if (phase === 'ducking') {
+      popT = Math.max(0.001, 1 - eggMotion.owlPhaseT / DUCK_S);
+      if (eggMotion.owlPhaseT >= DUCK_S) { eggMotion.owlPhase = 'idle'; eggMotion.owlTreeIdx = -1; }
+    }
+
+    // Pops UP out of the canopy as popT climbs (starts a touch lower/
     // smaller, inside the foliage, rises to its perched scale/height).
-    const popT = eggMotion.owlPopT;
     rootRef.current.scale.setScalar(Math.max(0.001, popT));
     rootRef.current.position.y += 0.05 + popT * 0.1;
 
     // "It should look in the camera" -- face is on local +Z (see
     // eyeGeometry/beak's own +Z offsets above), so yaw the whole owl
-    // toward wherever the camera currently is.
+    // toward wherever the camera currently is; the head group swivels an
+    // EXTRA look-around wobble on top of that base orientation.
     const dx = camera.position.x - rootRef.current.position.x;
     const dz = camera.position.z - rootRef.current.position.z;
     rootRef.current.rotation.y = Math.atan2(dx, dz);
+    if (headRef.current) headRef.current.rotation.y = headYaw;
 
-    // Wing flap: continuous while popped, amplitude scaled by popT so it
-    // fades in/out with the pop instead of snapping on/off.
+    // Wing flap: only during the 'flapping' phase now (was continuous
+    // while popped) -- wings stay folded/still through the look-around.
     flapPhase.current += dt * FLAP_HZ * Math.PI * 2;
-    const flap = Math.sin(flapPhase.current) * FLAP_MAX * popT;
+    const flap = Math.sin(flapPhase.current) * FLAP_MAX * flapAmp;
     if (leftWingRef.current) leftWingRef.current.rotation.z = flap;
     if (rightWingRef.current) rightWingRef.current.rotation.z = -flap;
 
@@ -112,7 +159,7 @@ export function Owl() {
   return (
     <group ref={rootRef} visible={false}>
       <mesh geometry={bodyGeometry} material={materials.body} />
-      <group position={[0, 0.16, 0.02]}>
+      <group ref={headRef} position={[0, 0.16, 0.02]}>
         <mesh geometry={headGeometry} material={materials.head} />
         <mesh geometry={eyeGeometry} material={materials.eyes} />
       </group>
@@ -122,6 +169,12 @@ export function Owl() {
       <group ref={rightWingRef} position={[0.095, 0.02, -0.01]}>
         <mesh geometry={wingGeometry} material={materials.wing} />
       </group>
+      {/* Generous invisible hitbox -- live feedback: "the wing animation
+          should trigger when the owl is tapped again after it appears". */}
+      <mesh position={[0, 0.1, 0]} visible={false} onPointerDown={onOwlTap}>
+        <sphereGeometry args={[OWL_HIT_R, 8, 8]} />
+        <meshBasicMaterial transparent opacity={0} />
+      </mesh>
     </group>
   );
 }

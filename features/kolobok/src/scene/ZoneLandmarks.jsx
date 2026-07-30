@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
-import { DoubleSide } from 'three';
+import { DoubleSide, Object3D, Vector3 } from 'three';
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
@@ -20,6 +20,12 @@ const AMBIENCE = {
   izba: IzbaAmbience, hare: HareAmbience, wolf: WolfAmbience, bear: BearAmbience, fox: FoxAmbience,
 };
 
+// The chimney's own local position/hit radius, shared between the visual
+// pipe below and the Landmark's own onTap discrimination (see CHIMNEY_LOCAL
+// use there for why the hitbox can't live nested on this component anymore).
+const CHIMNEY_LOCAL = [0.55, 1.8, 0.15];
+const CHIMNEY_HIT_R = 0.3;
+
 /** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
  *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
  *  at chimneyPos ([0.55, 1.95, 0.15], its own default) but nothing was ever
@@ -28,26 +34,23 @@ const AMBIENCE = {
  *  surface height there is ~1.82; base sits a bit lower, at 1.65, so it's
  *  solidly buried rather than floating just above the surface); top sits
  *  right at the smoke's own spawn Y (1.95) so smoke reads as coming out of
- *  the opening, not out of thin air above it or from inside a solid pipe. */
+ *  the opening, not out of thin air above it or from inside a solid pipe.
+ *  Live feedback: "I don't see smoke spheres when tapped" -- root cause was
+ *  a nested invisible hitbox sphere HERE that could never actually be
+ *  reached: the Landmark's own generous whole-zone hitbox (radius 1.7,
+ *  sibling below) fully ENCLOSES this one (chimney sits only ~1 unit from
+ *  the zone's own hitbox center), so react-three-fiber's nearest-object-
+ *  first dispatch always hit that bigger sphere FIRST and its onTap calls
+ *  e.stopPropagation() unconditionally -- this nested handler was
+ *  structurally unreachable no matter where you tapped. Fixed by moving the
+ *  chimney-vs-zone discrimination into the Landmark's own onTap (see
+ *  CHIMNEY_LOCAL/CHIMNEY_HIT_R there) instead of a more-nested hitbox trying
+ *  to win a race it never could. */
 function IzbaChimney({ material }) {
   return (
-    <group position={[0.55, 1.8, 0.15]}>
+    <group position={CHIMNEY_LOCAL}>
       <mesh material={material}>
         <cylinderGeometry args={[0.055, 0.065, 0.3, 8]} />
-      </mesh>
-      {/* Generous invisible hitbox -- live feedback: the bare pipe (radius
-          ~0.06) was too small to reliably land a tap on. */}
-      <mesh
-        visible={false}
-        onClick={(e) => {
-          // smoke-rings (EASTER_EGGS.md §2): stopPropagation so this doesn't
-          // also fire the izba Landmark's own onTap encounter below it.
-          e.stopPropagation();
-          eggManager.tapChimney();
-        }}
-      >
-        <sphereGeometry args={[0.3, 8, 8]} />
-        <meshBasicMaterial transparent opacity={0} />
       </mesh>
     </group>
   );
@@ -132,8 +135,32 @@ function Landmark({ zone }) {
     ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
     : 'idle';
 
+  // See IzbaChimney's own comment: its nested hitbox could never actually be
+  // reached (this Landmark's own generous whole-zone hitbox below always
+  // wins the raycast first and stops propagation), so the discrimination
+  // happens here instead -- world position of the chimney's known local
+  // point, composed through this SAME group's position+rotation via a
+  // throwaway Object3D (guarantees it matches the actual rendered transform
+  // exactly, rather than hand-deriving the rotation's sign convention).
+  const chimneyWorldPos = useMemo(() => {
+    if (zone.id !== 'izba') return null;
+    const o = new Object3D();
+    o.position.set(...pos);
+    o.rotation.set(0, a + Math.PI, 0);
+    o.updateMatrixWorld(true);
+    return new Vector3(...CHIMNEY_LOCAL).applyMatrix4(o.matrixWorld);
+  }, [zone.id, pos, a]);
+
   const onTap = (e) => {
     e.stopPropagation();
+    // Live feedback: "I don't see smoke spheres when tapped" -- a tap on the
+    // chimney lands here too (its own nested hitbox is unreachable, see
+    // IzbaChimney), so check proximity to it FIRST and route to the smoke
+    // egg instead of starting the izba "encounter".
+    if (chimneyWorldPos && e.point.distanceTo(chimneyWorldPos) < CHIMNEY_HIT_R) {
+      eggManager.tapChimney();
+      return;
+    }
     // The egg registry sees the tap first (fox 5-tap catch); if an egg
     // consumed it, the normal encounter is skipped (EASTER_EGGS.md §1).
     if (eggManager.tap(zone.id)) return;

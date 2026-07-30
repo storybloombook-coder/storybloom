@@ -9,6 +9,7 @@ import { rad } from '../config/zones';
 import { wind } from './wind';
 import { eggMotion } from './easterEggs';
 import { makeRadialAlphaTexture } from './textures/proceduralTextures';
+import { CLOUD_SMALL_SPHERE_R } from './Sky';
 
 const dummy = new Object3D();
 
@@ -221,9 +222,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       </points>
       <points ref={ringRef} geometry={ringGeometry}>
         {/* Live feedback: rings were invisible -- these are now just clearly
-            bigger smoke puffs (3x+ the normal size=0.18), same darker soot
-            gray for contrast against the bright sky. */}
-        <pointsMaterial map={ringTexture} color="#7a756c" size={0.6} transparent opacity={0.95} depthWrite={false} />
+            bigger smoke puffs, same darker soot gray for contrast against
+            the bright sky, sized to match the cloud's own small sphere
+            (Sky.jsx's CLOUD_SMALL_SPHERE_R, doubled for a diameter). */}
+        <pointsMaterial map={ringTexture} color="#7a756c" size={CLOUD_SMALL_SPHERE_R * 2} transparent opacity={0.95} depthWrite={false} />
       </points>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />

@@ -289,11 +289,10 @@ export function PondAndGrandpa() {
     for (let i = 0; i < FROND_COUNT; i++) {
       const angle = (i / FROND_COUNT) * Math.PI * 2 + rng() * 0.5;
       const len = 0.5 + rng() * 0.3;
-      // Live feedback: fronds were growing out to the sides, not falling
-      // down -- the old 58-76deg tilt off vertical is CLOSER to horizontal
-      // than vertical (sin(58deg)=0.85 sideways vs cos(58deg)=0.53 down).
-      // Now a small lean off straight-down instead.
-      const tilt = rad(8) + rng() * rad(14);
+      // Live feedback: still reading as "at an angle" with any outward
+      // lean at all -- real weeping-willow branches hang straight down from
+      // the canopy, so tilt is 0 (pure vertical, no lean off straight-down).
+      const tilt = 0;
       const rIn = 0.16 + rng() * 0.08;
       // Anchor at the canopy attach point and hang the cylinder's CENTER
       // half its own length below that, along the same rotated "down"

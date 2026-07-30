@@ -17,9 +17,16 @@ export const eggMotion = {
   rippleBurst: 0,  // increment -> PondAndGrandpa spawns a 3-ring ripple
   headShake: 0,    // grandpa head shake amount (boot catch)
 
-  // owl (EASTER_EGGS.md §2 owl)
-  owlTreeIdx: -1,     // which spruce (index into Vegetation's SPRUCE_PLANTS) is hosting the owl, -1 = none
-  owlPopT: 0,         // 0..1 popped-out amount (canopy -> perched); Owl.jsx flaps its wings continuously while this is ~1
+  // owl (EASTER_EGGS.md §2 owl). Live feedback: now a two-stage interaction
+  // (appear + look around, THEN a separate tap triggers the wing flap, THEN
+  // it ducks away) rather than one fixed-length auto-playing beat -- that
+  // needs to react to an interrupt (the tap) mid-flight, which a linear
+  // createTimeline can't express, so Owl.jsx now owns its OWN phase
+  // progression entirely (reading/writing these fields directly every
+  // frame) instead of a timeline driving eggMotion.owlPopT from the outside.
+  owlTreeIdx: -1,       // which spruce is hosting the owl, -1 = none
+  owlPhase: 'idle',     // 'idle' | 'popping' | 'lookaround' | 'flapping' | 'ducking'
+  owlPhaseT: 0,         // seconds elapsed in the CURRENT phase
 
   // hedgehog (live feedback #7 rework): "any number of hedgehogs" simultaneous
   // journeys don't fit this module's single shared "one egg at a time" active
@@ -94,23 +101,20 @@ function runFishing(ctx) {
 
 // ---------------------------------------------------------------- owl
 
-/** Triple-tap-a-spruce (EASTER_EGGS.md §2 owl). Pop out, swivel twice, one
- *  blink, duck back. Night-only emissive eyes / hoot pulses are the OWL
- *  COMPONENT's own concern (it can read the same day/night signal Sky.jsx
- *  uses), not modeled as extra eggMotion fields here. */
-// Live feedback: simplified to a single beat -- pop out, flap its wings
-// (Owl.jsx's own concern, driven continuously off owlPopT while it's
-// fully popped -- no separate signal needed here), duck back down and
-// disappear, ~2s total ("an animation for 1-2 seconds... and disappears
-// after"). The old swivel/blink sub-beats are gone.
+/** Triple-tap-a-spruce (EASTER_EGGS.md §2 owl). Live feedback: pop out and
+ *  look around (restored from the original design) until TAPPED, which
+ *  triggers the wing flap, then it ducks away -- Owl.jsx's own useFrame owns
+ *  that whole phase progression (see eggMotion.owlPhase's own comment for
+ *  why), so this just seeds the trigger and hands off to it. The returned
+ *  timeline is a trivial instant no-op purely so this module's shared
+ *  "active" slot frees up immediately -- the owl's actual multi-second
+ *  visible lifetime does NOT hog it (matching cloud-rain/hedgehog's own
+ *  "self-contained, not routed through the timeline" reasoning). */
 function runOwl(ctx, treeIdx) {
   eggMotion.owlTreeIdx = treeIdx;
-  return createTimeline([
-    { at: 0, dur: 250, ease: 'easeOutBack', update: (t) => { eggMotion.owlPopT = t; } },
-    { at: 1700, dur: 250, ease: 'easeOutCubic', update: (t) => { eggMotion.owlPopT = 1 - t; } },
-    { at: 1950, call: () => { eggMotion.owlPopT = 0; eggMotion.owlTreeIdx = -1; } },
-    { at: 2050, call: () => {} },
-  ]);
+  eggMotion.owlPhase = 'popping';
+  eggMotion.owlPhaseT = 0;
+  return createTimeline([{ at: 0, call: () => {} }]);
 }
 
 // ---------------------------------------------------------------- moon-wink

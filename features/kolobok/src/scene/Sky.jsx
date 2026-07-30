@@ -8,6 +8,7 @@ import { atmosphereLive, orbit, useSceneStore } from '../state/sceneStore';
 import { PATH_RADIUS, rad } from '../config/zones';
 import { makeRadialGradientData, makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { mergeColoredParts } from './builders/mergeColoredParts';
+import { makeToonMaterial } from './materials/toonMaterial';
 import { makeRng } from './prng';
 import { eggManager, eggMotion } from './easterEggs';
 
@@ -29,18 +30,20 @@ const STAR_COUNT = 3;
 const STAR_COLOR = new Color('#fff6d6');
 
 // Live feedback: replaces the old weather-driven ambient cloud system
-// entirely with 3 fixed, always-present, individually tappable clouds.
-// Each is the SAME hand-built 3-sphere shape (medium, then large, then
-// small, left to right, each overlapping the next by 15%) rather than a
-// randomly-jittered puff cluster. All 3 orbit together, clustered within
+// entirely with 4 fixed, always-present, individually tappable clouds (was
+// 3 -- "add one more cloud"). Each is the SAME hand-built 3-sphere shape
+// (medium, then large, then small, left to right, each overlapping the next
+// by 30% -- was 15%, "have the spheres overlap by 15% more") rather than a
+// randomly-jittered puff cluster. All orbit together, clustered within
 // roughly a third of the full circle, at a radius near Kolobok's own path
-// (+/-15%) and a height 15% lower than this scene's previous cloud height
-// (was 6-8, so ~5.1-6.8 now). Tap one -> it darkens and rains for
-// RAIN_DURATION_MS (not tappable meanwhile), then brightens back to white.
-const CLOUD_COUNT = 3;
+// (+/-15%) and a height 10% lower again than the previous pass (was
+// 5.1-6.8, "move the clouds 10% closer to the scene's surface" ->
+// ~4.59-6.12 now). Tap one -> it darkens and rains for RAIN_DURATION_MS
+// (not tappable meanwhile), then brightens back to white.
+const CLOUD_COUNT = 4;
 const CLOUD_ARC_DEG = 100; // "scattered across one-third of the scene"
-const CLOUD_HEIGHT_MIN = 5.1;
-const CLOUD_HEIGHT_MAX = 6.8;
+const CLOUD_HEIGHT_MIN = 5.1 * 0.9;
+const CLOUD_HEIGHT_MAX = 6.8 * 0.9;
 const CLOUD_RADIUS_MIN = PATH_RADIUS * 0.85;
 const CLOUD_RADIUS_MAX = PATH_RADIUS * 1.15;
 const CLOUD_ORBIT_SPEED = 0.006;
@@ -49,25 +52,39 @@ const RAIN_DURATION_MS = 15000;
 const RAIN_COUNT_PER_CLOUD = 10;
 const RAIN_POOL_SIZE = CLOUD_COUNT * RAIN_COUNT_PER_CLOUD;
 const RAIN_FALL_S = 2; // seconds for one drop to cycle top->bottom
-const CLOUD_WHITE = new Color('#ffffff');
-const CLOUD_RAIN_TINT = new Color('#9aa4b2');
+// Live feedback: "add 10 percent gray to both the cloud and cloud mass
+// [raining] states" -- both base colors nudged 10% toward mid-gray before
+// anything else (per-sphere shade variance and the per-instance rain lerp
+// below both still apply on top of these).
+const CLOUD_WHITE = new Color('#ffffff').lerp(new Color('#808080'), 0.1);
+const CLOUD_RAIN_TINT = new Color('#9aa4b2').lerp(new Color('#808080'), 0.1);
+
+// Live feedback: the small sphere's radius, exported so ZoneAmbience.jsx's
+// chimney-smoke special puffs can be sized to match exactly ("the dense
+// smoke sphere should be the same size as the small sphere used in the
+// cloud").
+export const CLOUD_SMALL_SPHERE_R = 0.38;
 
 /** The cloud's fixed silhouette: medium sphere, then large, then small,
- *  left to right, each overlapping the previous by 15% (gap between
- *  centers = 85% of the two radii summed). Shared by all CLOUD_COUNT
- *  instances via one instancedMesh -- only position/scale/color differ
- *  per-instance, so this is built once, not per-cloud. */
+ *  left to right, each overlapping the previous by 30% (gap between
+ *  centers = 70% of the two radii summed). Shared by all CLOUD_COUNT
+ *  instances via one instancedMesh -- only position/instance-color differ
+ *  per-instance, so this is built once, not per-cloud. Each of the 3 sub-
+ *  spheres gets a SLIGHTLY different baked shade ("make each sphere
+ *  slightly different") -- vertexColors is on for the cloud material now
+ *  (needed for the toon/rim lighting swap below too), so these bake in
+ *  underneath whatever per-instance white/rain tint gets multiplied on top. */
 function makeCloudGeometry() {
   const rMed = 0.5;
   const rLarge = 0.65;
   const rSmall = 0.38;
   const xMed = 0;
-  const xLarge = xMed + (rMed + rLarge) * 0.85;
-  const xSmall = xLarge + (rLarge + rSmall) * 0.85;
+  const xLarge = xMed + (rMed + rLarge) * 0.7;
+  const xSmall = xLarge + (rLarge + rSmall) * 0.7;
   return mergeColoredParts([
     { geometry: new SphereGeometry(rMed, 10, 8), color: '#ffffff', position: [xMed, 0, 0] },
-    { geometry: new SphereGeometry(rLarge, 10, 8), color: '#ffffff', position: [xLarge, 0.04, 0.02] },
-    { geometry: new SphereGeometry(rSmall, 8, 6), color: '#ffffff', position: [xSmall, -0.03, -0.02] },
+    { geometry: new SphereGeometry(rLarge, 10, 8), color: '#f2f2f4', position: [xLarge, 0.04, 0.02] },
+    { geometry: new SphereGeometry(rSmall, 8, 6), color: '#e9eaec', position: [xSmall, -0.03, -0.02] },
   ]);
 }
 
@@ -131,6 +148,21 @@ export function Sky() {
   const eggUi = useRef({ moonWinkSeen: eggMotion.moonWinkBurst, moonWinkMs: -1 });
 
   const cloudGeometry = useMemo(() => makeCloudGeometry(), []);
+  // Live feedback: "apply the same lighting effect to the clouds as on the
+  // characters" -- was a bare unlit meshBasicMaterial; characters all go
+  // through makeToonMaterial (toon ramp + fresnel rim, VISUAL_QUALITY_SPEC
+  // §1/§2), rimStrength 0.35 same as every other character surface.
+  // vertexColors on so the per-sub-sphere shade baked into the geometry
+  // above actually renders (multiplied by the per-instance white/rain tint
+  // set via setColorAt below); transparent/opacity aren't constructor params
+  // on makeToonMaterial, set directly on the returned material instead.
+  const cloudMaterial = useMemo(() => {
+    const m = makeToonMaterial({ vertexColors: true, color: '#ffffff', rimStrength: 0.35 });
+    m.transparent = true;
+    m.opacity = 0.9;
+    m.fog = false; // sky-high, like the sun/moon/dome -- matches their own fog={false}
+    return m;
+  }, []);
   const cloudRef = useRef();
   const cloudShadowRef = useRef();
   const shadowTexture = useMemo(() => makeRadialAlphaTexture(32), []);
@@ -383,7 +415,7 @@ export function Sky() {
 
       <instancedMesh
         ref={cloudRef}
-        args={[cloudGeometry, undefined, CLOUD_COUNT]}
+        args={[cloudGeometry, cloudMaterial, CLOUD_COUNT]}
         onPointerDown={(e) => {
           const c = cloudState.current[e.instanceId];
           if (!c || c.isRaining) return;
@@ -393,9 +425,7 @@ export function Sky() {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           useSceneStore.getState().recordEggFound('cloud-drizzle');
         }}
-      >
-        <meshBasicMaterial color="#ffffff" transparent opacity={0.9} fog={false} />
-      </instancedMesh>
+      />
 
       <points ref={rainRef} geometry={rainGeometry} visible={false}>
         <pointsMaterial map={starTexture} color={CLOUD_RAIN_TINT} size={0.1} transparent depthWrite={false} sizeAttenuation fog={false} opacity={0.85} />
