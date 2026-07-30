@@ -19,9 +19,7 @@ export const eggMotion = {
 
   // owl (EASTER_EGGS.md §2 owl)
   owlTreeIdx: -1,     // which spruce (index into Vegetation's SPRUCE_PLANTS) is hosting the owl, -1 = none
-  owlPopT: 0,         // 0..1 popped-out amount (canopy -> perched)
-  owlSwivel: 0,       // radians, head yaw (±90°, the "owl-neck joke")
-  owlBlinkBurst: 0,   // increment -> Owl plays its one slow blink
+  owlPopT: 0,         // 0..1 popped-out amount (canopy -> perched); Owl.jsx flaps its wings continuously while this is ~1
 
   // hedgehog (EASTER_EGGS.md §2 hedgehog)
   hedgehogT: -1,        // -1 hidden; 0..1 progress across the S-path
@@ -103,17 +101,18 @@ function runFishing(ctx) {
  *  blink, duck back. Night-only emissive eyes / hoot pulses are the OWL
  *  COMPONENT's own concern (it can read the same day/night signal Sky.jsx
  *  uses), not modeled as extra eggMotion fields here. */
+// Live feedback: simplified to a single beat -- pop out, flap its wings
+// (Owl.jsx's own concern, driven continuously off owlPopT while it's
+// fully popped -- no separate signal needed here), duck back down and
+// disappear, ~2s total ("an animation for 1-2 seconds... and disappears
+// after"). The old swivel/blink sub-beats are gone.
 function runOwl(ctx, treeIdx) {
   eggMotion.owlTreeIdx = treeIdx;
-  const swivelDeg = 90 * (Math.PI / 180);
   return createTimeline([
     { at: 0, dur: 250, ease: 'easeOutBack', update: (t) => { eggMotion.owlPopT = t; } },
-    { at: 250, dur: 600, ease: 'easeInOutSine', update: (t) => { eggMotion.owlSwivel = Math.sin(t * Math.PI) * swivelDeg; } },
-    { at: 850, dur: 600, ease: 'easeInOutSine', update: (t) => { eggMotion.owlSwivel = -Math.sin(t * Math.PI) * swivelDeg; } },
-    { at: 1500, call: () => { eggMotion.owlSwivel = 0; eggMotion.owlBlinkBurst += 1; } },
-    { at: 2800, dur: 250, ease: 'easeOutCubic', update: (t) => { eggMotion.owlPopT = 1 - t; } },
-    { at: 3050, call: () => { eggMotion.owlPopT = 0; eggMotion.owlTreeIdx = -1; eggMotion.owlSwivel = 0; } },
-    { at: 3150, call: () => {} },
+    { at: 1700, dur: 250, ease: 'easeOutCubic', update: (t) => { eggMotion.owlPopT = 1 - t; } },
+    { at: 1950, call: () => { eggMotion.owlPopT = 0; eggMotion.owlTreeIdx = -1; } },
+    { at: 2050, call: () => {} },
   ]);
 }
 
