@@ -21,9 +21,10 @@ export const eggMotion = {
   owlTreeIdx: -1,     // which spruce (index into Vegetation's SPRUCE_PLANTS) is hosting the owl, -1 = none
   owlPopT: 0,         // 0..1 popped-out amount (canopy -> perched); Owl.jsx flaps its wings continuously while this is ~1
 
-  // hedgehog (EASTER_EGGS.md §2 hedgehog)
-  hedgehogT: -1,        // -1 hidden; 0..1 progress across the S-path
-  hedgehogMushroomIdx: -1, // which mushroom it's carrying/took, -1 = none
+  // hedgehog (live feedback #7 rework): "any number of hedgehogs" simultaneous
+  // journeys don't fit this module's single shared "one egg at a time" active
+  // slot, so it's fully self-contained in Vegetation.jsx/Hedgehog.jsx now
+  // (see Vegetation.jsx's own hedgehogPool export) -- no eggMotion fields here.
 
   // moon-wink (EASTER_EGGS.md §2 moon-wink)
   moonWinkBurst: 0, // increment -> Sky.jsx plays the crater-wink + sparkles
@@ -112,22 +113,6 @@ function runOwl(ctx, treeIdx) {
   ]);
 }
 
-// ---------------------------------------------------------------- hedgehog
-
-/** 3 distinct mushrooms within 4s (EASTER_EGGS.md §2 hedgehog). Waddles
- *  across over 6s carrying the third-tapped mushroom, which pops back out
- *  of the ground (respawns) 20s later -- that respawn is handled by
- *  whatever component owns the mushroom props (reading hedgehogMushroomIdx
- *  + a timestamp), not this timeline, since it long outlives the 6s walk. */
-function runHedgehog(ctx, mushroomIdx) {
-  eggMotion.hedgehogMushroomIdx = mushroomIdx;
-  return createTimeline([
-    { at: 0, dur: 6000, update: (t) => { eggMotion.hedgehogT = t; } },
-    { at: 6000, call: () => { eggMotion.hedgehogT = -1; } },
-    { at: 6100, call: () => {} },
-  ]);
-}
-
 // ---------------------------------------------------------------- moon-wink
 
 function runMoonWink(ctx) {
@@ -194,12 +179,6 @@ function tapSpruce(treeIdx) {
   return attemptFire(key, 10000, (ctx) => runOwl(ctx, treeIdx), 'owl');
 }
 
-/** Tap any mushroom (hedgehog) -- a single tap fires it immediately, that
- *  mushroom is the one it carries off. */
-function tapMushroom(mushroomIdx) {
-  return attemptFire('hedgehog', 45000, (ctx) => runHedgehog(ctx, mushroomIdx), 'hedgehog');
-}
-
 export const eggManager = {
   /** Report a tap on a named target. Returns true if an egg consumed it
    *  (caller should skip the normal tap reaction). */
@@ -230,14 +209,13 @@ export const eggManager = {
   /** Triple-tap-a-spruce (owl) -- see tapSpruce above. */
   tapSpruce,
 
-  /** 3-distinct-mushrooms (hedgehog) -- see tapMushroom above. */
-  tapMushroom,
-
   /** One-shot, no counting: moon-wink / smoke-rings. Cloud-rain (EASTER_EGGS
-   *  §2 cloud-drizzle's replacement) is fully self-contained in Sky.jsx now
-   *  -- 3 independent, always-tappable, long-duration (15s) rain sources
-   *  don't fit this module's single shared "one egg at a time" active slot,
-   *  so it calls recordEggFound directly instead of going through here. */
+   *  §2 cloud-drizzle's replacement) and the hedgehog/mushroom mechanic are
+   *  both fully self-contained in Sky.jsx/Vegetation.jsx now -- neither fits
+   *  this module's single shared "one egg at a time" active slot (3
+   *  always-tappable 15s rain clouds; "any number of hedgehogs"
+   *  simultaneously) -- both call recordEggFound directly instead of going
+   *  through here. */
   tapMoon() {
     return attemptFire('moon-wink', 15000, runMoonWink, 'moon-wink');
   },

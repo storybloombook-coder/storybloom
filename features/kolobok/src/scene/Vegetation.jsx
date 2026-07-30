@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
+import * as Haptics from 'expo-haptics';
 import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, Object3D, Quaternion, Vector3,
 } from 'three';
@@ -9,12 +10,12 @@ import {
 import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement';
 import { makeRng } from './prng';
 import { makeStripes, makeNoiseGrain, makeSpeckle, makeRadialAlphaTexture } from './textures/proceduralTextures';
-import { storyMotion } from '../state/sceneStore';
+import { storyMotion, useSceneStore } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { windSway, wind } from './wind';
 import { polish } from '../config/devFlags';
 import { getSharedTexture } from './BlobShadow';
-import { eggManager, eggMotion } from './easterEggs';
+import { eggManager } from './easterEggs';
 
 const dummy = new Object3D();
 const tiltAxisTmp = new Vector3();
@@ -55,6 +56,25 @@ const LEAF_FALL_BATCH = 14;
 // mid-fall at once without one tree's leaves stealing another's slots.
 const LEAF_POOL_SIZE = LEAF_FALL_BATCH * 4;
 const LEAF_CANOPY_Y = 1.7; // matches birchCanopyAM's own local Y offset below
+
+// Live feedback #7: 12 mushrooms scattered randomly across the WHOLE island
+// (no home-zone bias), never too close to each other/trees/the path/the
+// pond/landmarks -- scatterNonOverlappingTrees already enforces all of that
+// once given an occupied list. "Random size range per mushroom" clarified as
+// a per-mushroom roll between -10% and +20% of the old baseline size.
+const MUSHROOM_COUNT = 12;
+const MUSHROOM_CANOPY_R = 0.12; // small footprint -- just needs "not touching"
+// "Mushrooms respawn every 10 seconds" -- was 20000ms under the old single-
+// mushroom design.
+const MUSHROOM_POP_MS = 300;
+const MUSHROOM_HIDE_MS = 10000;
+// "There can be any number of hedgehogs" -- a pool of independent journeys
+// instead of one shared slot, generous enough that several taps in quick
+// succession all get one.
+const HEDGEHOG_POOL_SIZE = 8;
+const HEDGEHOG_APPROACH_S = 4; // center -> mushroom, along the S-path
+const HEDGEHOG_SNIFF_S = 1.6;  // "1-2 second" sniffing animation
+const HEDGEHOG_RETURN_S = 4;   // same path, reversed
 
 /** 0..1 envelope: quick linear rise to 1 over PUSH_RISE_S, then a decaying
  *  cosine clipped at 0 (never swings past center back toward Kolobok --
@@ -244,6 +264,21 @@ export const SPRUCE_OCCUPIED = SPRUCE_PLANTS.map((p) => {
   return { x, z, r: TREE_CANOPY_R.spruce * p.scale };
 });
 
+// hedgehog (live feedback #7 rework): a pool of independent journeys, not a
+// single shared slot -- "there can be any number of hedgehogs." Module-level
+// (like easterEggs.js's own eggMotion) so Hedgehog.jsx can read it directly
+// without a store round-trip; this file (spawnHedgehog, below, and its own
+// useFrame) is the only writer.
+export const hedgehogPool = new Array(HEDGEHOG_POOL_SIZE).fill(0).map(() => ({
+  active: false,
+  mushroomIdx: -1,
+  phase: 'approach', // 'approach' | 'sniff' | 'return'
+  t: 0, // 0..1 progress within the current phase
+  endX: 0,
+  endZ: 0,
+  seed: 0, // randomizes each journey's S-curve so they don't all look identical
+}));
+
 function InstancedPart({
   count, matrices, colors, children, onMesh, onPointerDown, onPointerUp, onPointerLeave,
 }) {
@@ -284,26 +319,70 @@ export function Vegetation() {
     }, TREE_CANOPY_R.birch, occupied);
   }, []);
   const spruce = SPRUCE_PLANTS;
+  // Live feedback #7: scattered randomly across the whole island (no home
+  // zone -- scatterChance:1 with homeZoneIds=[] means every candidate rolls
+  // a fully free angle), avoiding trees/path/pond/landmarks AND each other.
+  // occupied seeds from spruce's own exported footprint plus a freshly
+  // derived birch footprint (birch's own local `occupied` var is discarded
+  // once its useMemo returns, so it's rebuilt here from its final placements).
   const mushroom = useMemo(() => {
     const rng = makeRng(40);
-    return makePlants(rng, 8, ['bear'], {
-      radiusMin: ISLAND_RADIUS * 0.45, radiusMax: ISLAND_RADIUS * 0.75, scaleMin: 0.8, scaleMax: 1.3,
-    });
-  }, []);
+    const occupied = [...SPRUCE_OCCUPIED, ...birch.map((p) => {
+      const [x, , z] = pointOnCircle(p.radius, p.angle);
+      return { x, z, r: TREE_CANOPY_R.birch * p.scale };
+    })];
+    return scatterNonOverlappingTrees(rng, MUSHROOM_COUNT, [], {
+      scatterChance: 1,
+      radiusMin: ISLAND_RADIUS * 0.22,
+      radiusMax: ISLAND_RADIUS * 0.92,
+      scaleMin: 0.9,
+      scaleMax: 1.2,
+      touchFactor: 1.6, // extra spacing beyond bare-touching, so mushrooms visibly don't crowd
+    }, MUSHROOM_CANOPY_R, occupied);
+  }, [birch]);
+  const mushroomWorldXZ = useMemo(
+    () => mushroom.map((p) => { const [x, , z] = pointOnCircle(p.radius, p.angle); return [x, z]; }),
+    [mushroom],
+  );
 
-  // hedgehog (EASTER_EGGS.md §2): refs to the mushroom instancedMeshes so
-  // whichever ONE gets "taken" can have its own matrix re-driven per frame
-  // (pop out of the ground, hide, respawn) without touching the other 7,
-  // whose static matrices (mushroomStemM/mushroomCapM below) never change.
-  // Declared here (ahead of the collision useFrame below, which reads them)
-  // rather than alongside bush/flower further down, matching birch/spruce's
-  // own placement -- referencing them from useFrame before their original,
-  // later declaration point was itself flagged by the linter.
+  // hedgehog (live feedback #7 rework): refs to the mushroom instancedMeshes
+  // so ANY subset of them can have their own matrix re-driven per frame (pop
+  // out of the ground, hide, respawn) without touching the others, whose
+  // static matrices (mushroomStemM/mushroomCapM below) never change.
+  // mushroomGround tracks EVERY mushroom's own hide/respawn clock now
+  // (matching birchBend/spruceBend's own per-plant useRef(...map(...)))
+  // instead of a single shared slot, since "there can be any number of
+  // hedgehogs" means several could be taken/hiding/respawning at once.
   const mushroomStemRef = useRef();
   const mushroomCapRef = useRef();
-  const mushroomState = useRef({ hiddenIdx: -1, sinceMs: 0, was: -1 });
+  const mushroomGround = useRef(mushroom.map(() => ({ reserved: false, hiddenMs: -1 })));
   const mushroomStemM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.05, 0])), [mushroom]);
   const mushroomCapM = useMemo(() => mushroom.map((p) => matrixAt(p, [0, 0.11, 0], [1, 0.55, 1])), [mushroom]);
+
+  /** Live feedback #7: tapping a mushroom sends the next free hedgehog-pool
+   *  slot on a round trip from the center of the scene to that mushroom (see
+   *  Hedgehog.jsx for the actual S-path -- this only owns phase/t bookkeeping
+   *  and the mushroom's own hide/respawn clock, started at the sniff->return
+   *  transition in the useFrame below). Ignored if this mushroom already has
+   *  a journey in flight (or is still hidden/respawning), or if every pool
+   *  slot is already busy. */
+  const spawnHedgehog = (idx) => {
+    const g = mushroomGround.current[idx];
+    if (g.reserved) return;
+    const slot = hedgehogPool.find((h) => !h.active);
+    if (!slot) return;
+    g.reserved = true;
+    const [ex, ez] = mushroomWorldXZ[idx];
+    slot.active = true;
+    slot.mushroomIdx = idx;
+    slot.phase = 'approach';
+    slot.t = 0;
+    slot.endX = ex;
+    slot.endZ = ez;
+    slot.seed = Math.random();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    useSceneStore.getState().recordEggFound('hedgehog');
+  };
 
   // Kolobok<->tree collision bookkeeping: world XZ per tree (for distance
   // checks) and a per-tree spring state, both keyed by index into
@@ -575,32 +654,49 @@ export function Vegetation() {
       leafGeometry.computeBoundingSphere();
     }
 
-    // hedgehog (EASTER_EGGS.md Â§2): edge-detect eggMotion.hedgehogMushroomIdx
-    // landing on a fresh index -- starts THIS mushroom's own pop-out (scale
-    // 1->0), 20s hidden, then respawn (scale 0->1) clock. Every other
-    // mushroom's matrix was already set once in InstancedPart's onMesh and
-    // never needs touching again.
-    const ms = mushroomState.current;
-    if (eggMotion.hedgehogMushroomIdx >= 0 && eggMotion.hedgehogMushroomIdx !== ms.was) {
-      ms.was = eggMotion.hedgehogMushroomIdx;
-      ms.hiddenIdx = eggMotion.hedgehogMushroomIdx;
-      ms.sinceMs = 0;
-    }
-    if (ms.hiddenIdx >= 0) {
-      ms.sinceMs += dt * 1000;
-      const POP_MS = 300;
-      const HIDE_MS = 20000;
+    // hedgehog pool (live feedback #7): advance each active journey's
+    // phase/t. The actual on-screen position is computed by Hedgehog.jsx
+    // (reads this same pool + its own S-path helper) -- this only drives the
+    // state machine, and at the sniff->return transition kicks off THIS
+    // mushroom's own pop-out/hide/respawn clock (the mushroom "jumps onto
+    // his quills" the instant the sniff completes).
+    hedgehogPool.forEach((h) => {
+      if (!h.active) return;
+      if (h.phase === 'approach') {
+        h.t += dt / HEDGEHOG_APPROACH_S;
+        if (h.t >= 1) { h.t = 0; h.phase = 'sniff'; }
+      } else if (h.phase === 'sniff') {
+        h.t += dt / HEDGEHOG_SNIFF_S;
+        if (h.t >= 1) {
+          h.t = 0;
+          h.phase = 'return';
+          mushroomGround.current[h.mushroomIdx].hiddenMs = 0;
+        }
+      } else if (h.phase === 'return') {
+        h.t += dt / HEDGEHOG_RETURN_S;
+        if (h.t >= 1) {
+          h.active = false;
+          h.mushroomIdx = -1;
+        }
+      }
+    });
+
+    // Per-mushroom pop-out/hide/respawn (live feedback #7: "any number of
+    // hedgehogs" means several mushrooms could be mid-hide/respawn at once,
+    // so every mushroom tracks its OWN clock now instead of one shared slot).
+    mushroomGround.current.forEach((g, idx) => {
+      if (g.hiddenMs < 0) return;
+      g.hiddenMs += dt * 1000;
       let popScale;
-      if (ms.sinceMs < POP_MS) {
-        popScale = 1 - ms.sinceMs / POP_MS;
-      } else if (ms.sinceMs < HIDE_MS) {
+      if (g.hiddenMs < MUSHROOM_POP_MS) {
+        popScale = 1 - g.hiddenMs / MUSHROOM_POP_MS;
+      } else if (g.hiddenMs < MUSHROOM_HIDE_MS) {
         popScale = 0;
-      } else if (ms.sinceMs < HIDE_MS + POP_MS) {
-        popScale = (ms.sinceMs - HIDE_MS) / POP_MS;
+      } else if (g.hiddenMs < MUSHROOM_HIDE_MS + MUSHROOM_POP_MS) {
+        popScale = (g.hiddenMs - MUSHROOM_HIDE_MS) / MUSHROOM_POP_MS;
       } else {
         popScale = 1;
       }
-      const idx = ms.hiddenIdx;
       if (mushroomStemRef.current) {
         dummy.matrix.copy(mushroomStemM[idx]);
         dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
@@ -617,8 +713,11 @@ export function Vegetation() {
         mushroomCapRef.current.setMatrixAt(idx, dummy.matrix);
         mushroomCapRef.current.instanceMatrix.needsUpdate = true;
       }
-      if (ms.sinceMs >= HIDE_MS + POP_MS) ms.hiddenIdx = -1;
-    }
+      if (g.hiddenMs >= MUSHROOM_HIDE_MS + MUSHROOM_POP_MS) {
+        g.hiddenMs = -1;
+        g.reserved = false;
+      }
+    });
   });
 
   const bush = useMemo(() => {
@@ -910,14 +1009,15 @@ export function Vegetation() {
         <meshStandardMaterial color="#6f9b52" roughness={0.9} />
       </InstancedPart>
 
-      {/* Mushroom (bear arc): stem + speckled cap. hedgehog (EASTER_EGGS.md
-          Â§2): tappable on either part -- e.instanceId is already this
-          InstancedPart's own 0..mushroom.length-1 space, no mod needed. */}
+      {/* Mushroom (scattered across the island): stem + speckled cap.
+          hedgehog (live feedback #7): tappable on either part -- e.instanceId
+          is already this InstancedPart's own 0..mushroom.length-1 space, no
+          mod needed. */}
       <InstancedPart
         count={mushroom.length}
         matrices={mushroomStemM}
         onMesh={(m) => { mushroomStemRef.current = m; }}
-        onPointerDown={(e) => { e.stopPropagation(); eggManager.tapMushroom(e.instanceId); }}
+        onPointerDown={(e) => { e.stopPropagation(); spawnHedgehog(e.instanceId); }}
       >
         <cylinderGeometry args={[0.03, 0.03, 0.1, 6]} />
         <meshStandardMaterial color="#efeeea" roughness={0.9} />
@@ -926,7 +1026,7 @@ export function Vegetation() {
         count={mushroom.length}
         matrices={mushroomCapM}
         onMesh={(m) => { mushroomCapRef.current = m; }}
-        onPointerDown={(e) => { e.stopPropagation(); eggManager.tapMushroom(e.instanceId); }}
+        onPointerDown={(e) => { e.stopPropagation(); spawnHedgehog(e.instanceId); }}
       >
         <sphereGeometry args={[0.08, 8, 8]} />
         <meshStandardMaterial map={mushroomCapTexture} roughness={0.8} />
