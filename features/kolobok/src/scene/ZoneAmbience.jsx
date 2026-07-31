@@ -44,7 +44,7 @@ const SMOKE_SUPPRESS_S = 6;
 const SMOKE_BASE_OPACITY = 0.55;
 const SMOKE_FADE_S = 0.5;
 
-export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
+export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) {
   const smokeRef = useRef();
   const smokeMaterialRef = useRef();
   const grandmaRef = useRef();

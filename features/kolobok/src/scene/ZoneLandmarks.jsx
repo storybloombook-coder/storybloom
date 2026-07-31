@@ -29,7 +29,7 @@ const AMBIENCE = {
 // The chimney's own local position/hit radius, shared between the visual
 // pipe below and the Landmark's own onTap discrimination (see CHIMNEY_LOCAL
 // use there for why the hitbox can't live nested on this component anymore).
-const CHIMNEY_LOCAL = [0.55, 1.8, 0.15];
+const CHIMNEY_LOCAL = [0.55, 1.5, 0.15];
 const CHIMNEY_HIT_R = 0.3;
 
 // Live feedback: "build the walls of the izba out of logs... make the roof
@@ -52,42 +52,42 @@ const WALL_D = 1.3; // matches the old flat box's own depth
 // flush against the logs instead of sinking into them.
 const FRONT_BACK_LOG_LEN = WALL_W + LOG_R * 2 * 1.1; // "corners protrude" past the side walls
 const SIDE_LOG_LEN = WALL_D + LOG_R * 2 * 1.1;
+// Live feedback: "make the logs a couple of shades lighter" -- lightened
+// from ART_SPEC §4's original #b3844f (mixed ~25% toward white).
+const LOG_COLOR = '#c29d72';
 
 // Live feedback: "make the roof out of two sides that converge at the top,
 // like a traditional log cabin" -- a true gable (A-frame) roof, replacing
-// the old 4-sided cone/pyramid. The ridge runs along local X, parallel to
-// the LONGER front/back walls (WALL_W=1.7 > WALL_D=1.3), matching real log
-// cabins where the ridge follows the building's long axis and the gable
-// (triangular) ends cap the two SHORTER side walls -- which is also where
-// the wall-mounted tools already hang, well below the roof line, so there's
-// no conflict. All Y values below are absolute in this group's own local
+// the old 4-sided cone/pyramid. Live feedback (round 2): "the roof is
+// oriented incorrectly, rotate 90 degrees" -- the ridge now runs along
+// local Z (parallel to the SHORTER side walls), so the two slopes face
+// +/-X (over the side walls, where the tools hang well below the roof
+// line -- no conflict) and the gable (triangular) ends cap the door/window
+// walls instead. All Y values below are absolute in this group's own local
 // frame (not relative to a separate roof-group offset), matching how
 // door/window/chimney already place themselves directly.
 const WALL_TOP_Y = LOG_ROWS * LOG_R * 2; // exact top of the log stack (1.10)
 const ROOF_EAVE_Y = 1.15; // small soffit gap above the wall top
 const ROOF_RIDGE_Y = 1.75; // peak height
-const ROOF_HALF_SPAN_Z = WALL_D / 2 + 0.12; // eave overhang past the front/back walls
-const ROOF_RIDGE_HALF_LEN = WALL_W / 2 + 0.1; // rake overhang past the gable ends
+const ROOF_HALF_SPAN_X = WALL_W / 2 + 0.12; // eave overhang past the side walls
+const ROOF_RIDGE_HALF_LEN = WALL_D / 2 + 0.1; // rake overhang past the gable ends
 const ROOF_SLAB_THICK = 0.035;
-const ROOF_PITCH = Math.atan2(ROOF_RIDGE_Y - ROOF_EAVE_Y, ROOF_HALF_SPAN_Z);
-const ROOF_SLOPE_LEN = Math.hypot(ROOF_HALF_SPAN_Z, ROOF_RIDGE_Y - ROOF_EAVE_Y);
-const GABLE_WIDTH = WALL_D; // triangular end wall, flush with the true wall footprint
-const GABLE_X = WALL_W / 2; // flush with the side wall's own outer log face
+const ROOF_PITCH = Math.atan2(ROOF_RIDGE_Y - ROOF_EAVE_Y, ROOF_HALF_SPAN_X);
+const ROOF_SLOPE_LEN = Math.hypot(ROOF_HALF_SPAN_X, ROOF_RIDGE_Y - ROOF_EAVE_Y);
+const GABLE_WIDTH = WALL_W; // triangular end wall, flush with the front/back wall's own width
+const GABLE_Z = WALL_D / 2; // flush with the door/window wall's own outer face
 const ROOF_BASE_COLOR = '#a5602f';
 
-// "3D tile elements": rows of small overlapping tiles lying flush on each of
-// the two flat roof slabs (a plain rectangle now, not a shrinking pyramid
-// face, so tiles don't need to taper toward the ridge the way the old
-// per-face pyramid version did).
-const ROOF_TILE_ROWS = 6;
-const ROOF_TILE_MAX_T = 0.82; // stop short of the ridge so tiles don't cross into the other slope
-const ROOF_TILE_W = 0.24;
-const ROOF_TILE_H = 0.2;
+// Live feedback: "no gaps between the roof tiles... tiles should not
+// overlap each other... shouldn't extend beyond the edges of the roof" --
+// an EXACT abutting grid rather than a spaced-out shingle course: tile
+// width/height are DERIVED from the roof's own true dimensions divided by a
+// fixed tile count (see makeIzbaRoofTiles), so every tile touches its
+// neighbors with zero gap/overlap and the outermost tiles land exactly on
+// the roof's own true edges instead of past them.
+const ROOF_TILE_COLS = 6; // across the ridge-direction width
+const ROOF_TILE_ROWS = 6; // up the slope, eave to ridge
 const ROOF_TILE_THICK = 0.02;
-// approx spacing between tile centers across a slab -- ART_SPEC §4 caps the
-// whole izba at ~4k triangles; kept wide enough to stay comfortably under
-// that once walls/door/window/chimney/tools/bench are added in too.
-const ROOF_TILE_SPACING = 0.32;
 const ROOF_TILE_COLOR_A = '#a5602f';
 const ROOF_TILE_COLOR_B = '#8f4f26';
 
@@ -154,8 +154,9 @@ function IzbaLogWalls({ material }) {
  *  the X axis at y=0, apex on the Y axis at (0,height)). Both winding orders
  *  are included so the panel reads from either viewing direction without
  *  depending on the shared material's own `side` setting (mergeColoredParts
- *  has no per-part side override). Used for the gable end walls below,
- *  rotated 90deg around Y to stand in the ZY plane. */
+ *  has no per-part side override). Used for the gable end walls below;
+ *  oriented by the caller's own rotation param if its wall doesn't already
+ *  face +/-Z. */
 function makeTriangleGeometry(width, height) {
   const hw = width / 2;
   const positions = new Float32Array([
@@ -169,74 +170,68 @@ function makeTriangleGeometry(width, height) {
 }
 
 /** The gable roof's own backing structure: two flat sloped slabs (boxes,
- *  tilted around local X by +/-ROOF_PITCH) meeting at the ridge, plus a
- *  flat triangular gable-end wall filling the wall-top-to-ridge gap on each
- *  of the two ends. Kept underneath the tile overlay so no gaps between
- *  individual tiles show through to empty space. One draw call via
- *  mergeColoredParts. */
+ *  tilted around local Z by +/-ROOF_PITCH -- the ridge runs along Z here,
+ *  so a slab's own Z extent, the ridge-length direction, stays untouched by
+ *  the tilt) meeting at the ridge, plus a flat triangular gable-end wall
+ *  filling the wall-top-to-ridge gap above each of the two door/window
+ *  walls (already flat in the XY plane facing +/-Z, so no rotation needed
+ *  there). Kept underneath the tile overlay so no gaps between individual
+ *  tiles show through to empty space. One draw call via mergeColoredParts. */
 function makeIzbaRoofBase() {
   const parts = [];
   [1, -1].forEach((side) => {
     parts.push({
-      geometry: new BoxGeometry(ROOF_RIDGE_HALF_LEN * 2, ROOF_SLAB_THICK, ROOF_SLOPE_LEN),
+      geometry: new BoxGeometry(ROOF_SLOPE_LEN, ROOF_SLAB_THICK, ROOF_RIDGE_HALF_LEN * 2),
       color: ROOF_BASE_COLOR,
-      position: [0, (ROOF_RIDGE_Y + ROOF_EAVE_Y) / 2, (side * ROOF_HALF_SPAN_Z) / 2],
-      rotation: [side * ROOF_PITCH, 0, 0],
+      position: [(side * ROOF_HALF_SPAN_X) / 2, (ROOF_RIDGE_Y + ROOF_EAVE_Y) / 2, 0],
+      rotation: [0, 0, -side * ROOF_PITCH],
     });
   });
   [1, -1].forEach((side) => {
     parts.push({
       geometry: makeTriangleGeometry(GABLE_WIDTH, ROOF_RIDGE_Y - WALL_TOP_Y),
       color: ROOF_BASE_COLOR,
-      position: [side * GABLE_X, WALL_TOP_Y, 0],
-      rotation: [0, Math.PI / 2, 0],
+      position: [0, WALL_TOP_Y, side * GABLE_Z],
     });
   });
   return mergeColoredParts(parts);
 }
 
 /** "Make the roof look like it's made of 3D tile elements... tiles should
- *  lie on the sides, overlapping and aligned with the sides... shouldn't
- *  extend beyond the edges of the roof" -- rows of small flat tiles lying
- *  flush on each of the two roof slabs, each tile sharing the slab's own
- *  +/-ROOF_PITCH tilt (no yaw needed -- unlike the old 4-face pyramid, a
- *  slab's width axis IS world X untouched by the pitch rotation). Rows are
- *  inset from the true eave edge by half a tile's own slope-direction size
- *  (so the bottom row's outer edge can't overhang past the eave) and capped
- *  at ROOF_TILE_MAX_T short of the ridge (so the top row can't cross into
- *  the other slope); each tile's X position is likewise clamped inside the
- *  slab's own true width. Alternating tiles get a slightly darker shade for
- *  a less mechanically regular shingle read. Static, one draw call. */
+ *  lie on the sides, overlapping and aligned with the sides... no gaps
+ *  between tiles... tiles should not overlap each other... shouldn't extend
+ *  beyond the edges of the roof" -- an EXACT abutting grid rather than a
+ *  spaced-out shingle course: tile width/height are DERIVED from the roof's
+ *  own true dimensions divided by ROOF_TILE_COLS/ROWS, so COLS*colWidth and
+ *  ROWS*rowHeight equal the slab's true ridge-length and slope-length
+ *  exactly -- every tile touches its neighbors with zero gap/overlap, and
+ *  the outermost tiles' outer edges land exactly on the roof's own true
+ *  edges (eave, ridge, and the two rake ends) instead of past them. Each
+ *  tile shares its slab's own +/-ROOF_PITCH tilt (rotation.z, matching
+ *  makeIzbaRoofBase). Alternating tiles get a slightly darker shade for a
+ *  less mechanically regular look. Static, one draw call. */
 function makeIzbaRoofTiles() {
   const parts = [];
-  const rowInset = (ROOF_TILE_H / 2) / ROOF_SLOPE_LEN;
-  const faceWidth = ROOF_RIDGE_HALF_LEN * 2;
-  const count = Math.max(1, Math.round(faceWidth / ROOF_TILE_SPACING));
-  const step = faceWidth / count;
+  const colWidth = (ROOF_RIDGE_HALF_LEN * 2) / ROOF_TILE_COLS;
+  const rowHeight = ROOF_SLOPE_LEN / ROOF_TILE_ROWS;
   for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
-    const t = rowInset + (row / (ROOF_TILE_ROWS - 1)) * (ROOF_TILE_MAX_T - rowInset);
+    // t=0 at the eave, t=1 at the ridge -- this row's own center, exactly.
+    const t = (row + 0.5) / ROOF_TILE_ROWS;
     const y = ROOF_EAVE_Y + (ROOF_RIDGE_Y - ROOF_EAVE_Y) * t;
-    const zMag = ROOF_HALF_SPAN_Z * (1 - t); // distance from the ridge (z=0) toward the eave
-    const rowStagger = (row % 2) * (step * 0.5); // stagger alternate rows, like real shingles
+    const xMag = ROOF_HALF_SPAN_X * (1 - t); // distance from the ridge (x=0) toward the eave
     [1, -1].forEach((side) => {
       // Outward normal of this slab, used to lift tiles just proud of the
       // backing slab's own surface instead of embedding into it.
+      const liftX = side * Math.sin(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
       const liftY = Math.cos(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
-      const liftZ = side * Math.sin(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
-      const z = side * zMag + liftZ;
-      for (let i = 0; i < count; i += 1) {
-        const xRaw = -ROOF_RIDGE_HALF_LEN + (i + 0.5) * step + rowStagger;
-        // Clamp so the stagger offset can't push a tile past this slab's
-        // own true edge.
-        const x = Math.max(
-          -ROOF_RIDGE_HALF_LEN + step * 0.15,
-          Math.min(ROOF_RIDGE_HALF_LEN - step * 0.15, xRaw),
-        );
+      const x = side * xMag + liftX;
+      for (let col = 0; col < ROOF_TILE_COLS; col += 1) {
+        const z = -ROOF_RIDGE_HALF_LEN + (col + 0.5) * colWidth;
         parts.push({
-          geometry: new BoxGeometry(ROOF_TILE_W, ROOF_TILE_THICK, ROOF_TILE_H),
-          color: (row + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
+          geometry: new BoxGeometry(rowHeight, ROOF_TILE_THICK, colWidth),
+          color: (row + col) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
           position: [x, y + liftY, z],
-          rotation: [side * ROOF_PITCH, 0, 0],
+          rotation: [0, 0, -side * ROOF_PITCH],
         });
       }
     });
@@ -338,13 +333,13 @@ function makeIzbaBench() {
 
 /** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
  *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
- *  at chimneyPos ([0.55, 1.95, 0.15], its own default) but nothing was ever
- *  there to visibly emit them from. CHIMNEY_LOCAL's XZ (0.55, 0.15) sits
- *  on the gable roof's own +Z slab, close to the ridge (that slab's surface
- *  there works out to ~1.63 -- see makeIzbaRoofBase/ROOF_RIDGE_Y/EAVE_Y),
- *  so the base (1.65) reads as sitting right at the roof line rather than
- *  floating above it; top sits right at the smoke's own spawn Y (1.95) so
- *  smoke reads as coming out of the opening, not out of thin air above it.
+ *  at chimneyPos ([0.55, 1.65, 0.15], its own default) but nothing was ever
+ *  there to visibly emit them from. CHIMNEY_LOCAL's XZ (0.55, 0.15) sits on
+ *  the gable roof's own +X slab (that slab's surface there works out to
+ *  ~1.41 -- see makeIzbaRoofBase/ROOF_RIDGE_Y/EAVE_Y/HALF_SPAN_X), so the
+ *  base (1.35) reads as solidly embedded rather than floating above it;
+ *  top sits right at the smoke's own spawn Y (1.65) so smoke reads as
+ *  coming out of the opening, not out of thin air above it.
  *  Live feedback: "I don't see smoke spheres when tapped" -- root cause was
  *  a nested invisible hitbox sphere HERE that could never actually be
  *  reached: the Landmark's own generous whole-zone hitbox (radius 1.7,
@@ -438,14 +433,14 @@ function Landmark({ zone }) {
   const izbaMaterials = useMemo(() => (zone.id === 'izba' ? {
     // Live feedback: "make sure the logs show light and shadow, just like
     // the characters" -- passing white here (rather than the log's own
-    // color, ART_SPEC §4's #b3844f) fed a washed-out white into
-    // makeToonMaterial's own toon-ramp seed (it uses `color` to build the
-    // light/shadow gradient regardless of vertexColors/map), so the shadow
-    // band came out desaturated gray instead of a properly darkened brown.
+    // LOG_COLOR) fed a washed-out white into makeToonMaterial's own
+    // toon-ramp seed (it uses `color` to build the light/shadow gradient
+    // regardless of vertexColors/map), so the shadow band came out
+    // desaturated gray instead of a properly darkened brown.
     // CrossroadsStone.jsx/Hedgehog.jsx/Kolobok.jsx's own map+color materials
     // all pass their texture's matching base color the same way this now
     // does, not white.
-    logs: makeToonMaterial({ map: makeNoiseGrain('#b3844f', 0.1), color: '#b3844f', rimStrength: 0.2 }),
+    logs: makeToonMaterial({ map: makeNoiseGrain(LOG_COLOR, 0.1), color: LOG_COLOR, rimStrength: 0.2 }),
     roof: makeToonMaterial({ vertexColors: true, color: ROOF_BASE_COLOR, rimStrength: 0.2 }),
     roofTiles: makeToonMaterial({ vertexColors: true, color: '#a5602f', rimStrength: 0.2 }),
     chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
