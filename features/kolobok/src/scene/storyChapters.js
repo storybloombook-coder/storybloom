@@ -104,7 +104,7 @@ const COOKING_DELTA = 3200;
 function buildBirth(ctx) {
   const tl = createTimeline([
     { at: 0, dur: 800, update: (t) => { storyMotion.windowGlow = t; } },
-    { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; storyMotion.grandmaCooking = true; } },
+    { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; storyMotion.grandmaCooking = true; storyMotion.izbaVisit = true; } },
     { at: 400, call: () => ctx.setNarration('story.bake1') },
     { at: 2200, call: () => ctx.setNarration('story.bake1b') },
     // Kneading stops just before the dough appears on the sill.
@@ -134,7 +134,7 @@ function buildBirth(ctx) {
     { at: 6300 + COOKING_DELTA, dur: 150, update: (t) => { storyMotion.squash = 0.3 * (1 - t); } },
     // Settle: happy, one proud 360, release overrides, roll off -- easing
     // the staged angle back to the izba so road chapter 1 starts in place.
-    { at: 6600 + COOKING_DELTA, call: () => { storyMotion.expression = 'happy'; storyMotion.posOverride = null; } },
+    { at: 6600 + COOKING_DELTA, call: () => { storyMotion.expression = 'happy'; storyMotion.posOverride = null; storyMotion.izbaVisit = false; } },
     { at: 6600 + COOKING_DELTA, dur: 1000, ease: 'easeInOutSine', update: (t) => { storyMotion.spinT = t; } },
     { at: 6600 + COOKING_DELTA, dur: 1400, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = ZONE_ANGLE.izba + BIRTH_STAGE * (1 - t); } },
     { at: 7600 + COOKING_DELTA, call: () => { storyMotion.windowGlow = 0; storyMotion.smokeBoost = 1; storyMotion.spinT = 0; ctx.setNarration(null); } },
@@ -261,7 +261,15 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
     // Fade back in (RN side: 900ms), window glows, smoke puffs.
     { at: at0, call: () => { ctx.setFadeBlack(false); storyMotion.windowGlow = 1; storyMotion.smokeBoost = 2; } },
     // Rebirth pop on the sill.
-    { at: at0 + 900, call: () => { ctx.setNarration('story.rebirth'); storyMotion.posOverride = [...SILL_POS]; ctx.onRebirth?.(); } },
+    {
+      at: at0 + 900,
+      call: () => {
+        ctx.setNarration('story.rebirth');
+        storyMotion.posOverride = [...SILL_POS];
+        storyMotion.izbaVisit = true;
+        ctx.onRebirth?.();
+      },
+    },
     { at: at0 + 900, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
     // Quick hop down to the path so the next road chapter starts grounded.
     {
@@ -278,6 +286,7 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
       at: at0 + 2800,
       call: () => {
         storyMotion.posOverride = null;
+        storyMotion.izbaVisit = false;
         storyMotion.windowGlow = 0;
         storyMotion.smokeBoost = 1;
         ctx.setNarration(null);

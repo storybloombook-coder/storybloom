@@ -34,6 +34,7 @@ function resetStoryMotion() {
   storyMotion.framing = null;
   storyMotion.teleportAngle = null;
   storyMotion.grandmaCooking = false;
+  storyMotion.izbaVisit = false;
 }
 
 /** STORY_SPEC's story-mode state machine: launches the tale after 1.5s of

@@ -29,8 +29,12 @@ const AMBIENCE = {
 // The chimney's own local position/hit radius, shared between the visual
 // pipe below and the Landmark's own onTap discrimination (see CHIMNEY_LOCAL
 // use there for why the hitbox can't live nested on this component anymore).
-const CHIMNEY_LOCAL = [0.55, 1.5, 0.15];
-const CHIMNEY_HIT_R = 0.3;
+// Live feedback: "make the pipe twice as tall and twice as wide" -- Y raised
+// so the BASE stays at roughly the same embed depth into the roof (was
+// center 1.5, height 0.3 -> base 1.35; now height 0.6 -> center 1.35+0.3
+// =1.65 keeps that same base, growing upward instead of embedding deeper).
+const CHIMNEY_LOCAL = [0.55, 1.65, 0.15];
+const CHIMNEY_HIT_R = 0.35;
 
 // Live feedback: "build the walls of the izba out of logs... make the roof
 // look like it's made of 3D tile elements... small pieces of moss that look
@@ -461,13 +465,16 @@ function makeIzbaBench() {
 
 /** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
  *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
- *  at chimneyPos ([0.55, 1.65, 0.15], its own default) but nothing was ever
+ *  at chimneyPos ([0.55, 1.95, 0.15], its own default) but nothing was ever
  *  there to visibly emit them from. CHIMNEY_LOCAL's XZ (0.55, 0.15) sits on
  *  the gable roof's own +X slab (that slab's surface there works out to
  *  ~1.41 -- see makeIzbaRoofBase/ROOF_RIDGE_Y/EAVE_Y/HALF_SPAN_X), so the
  *  base (1.35) reads as solidly embedded rather than floating above it;
- *  top sits right at the smoke's own spawn Y (1.65) so smoke reads as
- *  coming out of the opening, not out of thin air above it.
+ *  top sits right at the smoke's own spawn Y (1.95) so smoke reads as
+ *  coming out of the opening, not out of thin air above it. Live feedback
+ *  (round 2): "make the pipe twice as tall and twice as wide" -- both radii
+ *  and the height doubled (see CHIMNEY_LOCAL's own comment for how its Y
+ *  keeps the base at the same embed depth while the pipe grows upward).
  *  Live feedback: "I don't see smoke spheres when tapped" -- root cause was
  *  a nested invisible hitbox sphere HERE that could never actually be
  *  reached: the Landmark's own generous whole-zone hitbox (radius 1.7,
@@ -478,12 +485,22 @@ function makeIzbaBench() {
  *  structurally unreachable no matter where you tapped. Fixed by moving the
  *  chimney-vs-zone discrimination into the Landmark's own onTap (see
  *  CHIMNEY_LOCAL/CHIMNEY_HIT_R there) instead of a more-nested hitbox trying
- *  to win a race it never could. */
+ *  to win a race it never could. Live feedback (round 3): "bubbles don't
+ *  appear when you click on it" -- the discrimination there compared
+ *  e.point (the ACTUAL raycast hit surface, which could be the nearby roof/
+ *  hay-bale/window geometry added since, not the chimney) against
+ *  CHIMNEY_HIT_R; a tap visually on the pipe could easily land on a NEARER
+ *  bit of roof a bit to the side, putting e.point meters from
+ *  chimneyWorldPos even though the tap direction itself was right on
+ *  target. Switched to e.ray.distanceToPoint (perpendicular distance from
+ *  the chimney to the tap's own ray), which only cares whether the user
+ *  AIMED at the chimney, independent of whatever surface actually
+ *  happened to be hit first. */
 function IzbaChimney({ material }) {
   return (
     <group position={CHIMNEY_LOCAL}>
       <mesh material={material}>
-        <cylinderGeometry args={[0.055, 0.065, 0.3, 8]} />
+        <cylinderGeometry args={[0.11, 0.13, 0.6, 8]} />
       </mesh>
     </group>
   );
@@ -598,8 +615,8 @@ const WINDOW_TRIM_COLOR = '#5a4530';
 const SHUTTER_W = WINDOW_W / 2; // "half the width of the window"
 const SHUTTER_H = WINDOW_H;
 const SHUTTER_THICK = 0.03;
-const SHUTTER_LEFT_OPEN_DEG = 20;
-const SHUTTER_RIGHT_OPEN_DEG = 25;
+const SHUTTER_LEFT_OPEN_DEG = 30;
+const SHUTTER_RIGHT_OPEN_DEG = 35;
 
 /** The frame (4 trim pieces along the log-wall opening's true perimeter)
  *  plus the two open shutters. Each shutter's geometry is built HINGE-
@@ -715,7 +732,7 @@ function Landmark({ zone }) {
   // the hold actually began there.
   const chimneyHeldRef = useRef(false);
   const onZonePointerDown = (e) => {
-    if (!chimneyWorldPos || e.point.distanceTo(chimneyWorldPos) >= CHIMNEY_HIT_R) return;
+    if (!chimneyWorldPos || e.ray.distanceToPoint(chimneyWorldPos) >= CHIMNEY_HIT_R) return;
     e.stopPropagation();
     chimneyHeldRef.current = true;
     eggMotion.chimneyHeld = true;
@@ -732,7 +749,7 @@ function Landmark({ zone }) {
     // A plain tap landing on the chimney is a no-op now (its own
     // interaction is press-and-hold, above) -- just don't let it fall
     // through to starting the izba "encounter".
-    if (chimneyWorldPos && e.point.distanceTo(chimneyWorldPos) < CHIMNEY_HIT_R) return;
+    if (chimneyWorldPos && e.ray.distanceToPoint(chimneyWorldPos) < CHIMNEY_HIT_R) return;
     // The egg registry sees the tap first (fox 5-tap catch); if an egg
     // consumed it, the normal encounter is skipped (EASTER_EGGS.md §1).
     if (eggManager.tap(zone.id)) return;

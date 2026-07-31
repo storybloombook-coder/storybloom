@@ -28,7 +28,9 @@ const SMOKE_COUNT = 24;
 // just below), individually varied +/-20% in size, staggered by a small gap
 // so they emerge as a visible sequence rather than one clump.
 const PUFF_COUNT = 3;
-const CHIMNEY_PIPE_TOP_R = 0.055;
+// Live feedback: "make the pipe twice as tall and twice as wide" -- doubled
+// to match ZoneLandmarks.jsx's own IzbaChimney cylinder top radius.
+const CHIMNEY_PIPE_TOP_R = 0.11;
 const PUFF_BASE_R = CHIMNEY_PIPE_TOP_R * 2; // sphere diameter = 2x pipe diameter -> sphere radius = pipe diameter
 const PUFF_SIZE_VARIANCE = 0.2;
 const PUFF_GAP_S = 0.3;
@@ -37,9 +39,10 @@ const PUFF_RISE_S = 3;
 // light effects as cloud spheres" -- PUFF_SHADOW_Y is a fixed height near
 // the roof surface below the chimney (ZoneLandmarks.jsx's CHIMNEY_LOCAL/
 // makeIzbaRoofBase put the surface there at ~1.41; chimneyPos[1] below is
-// the pipe's own TOP at 1.65), tracking each puff's own sway/wind but
-// pinned to that one height rather than following the puff's own rise.
-const PUFF_SHADOW_Y_OFFSET = -0.24;
+// the pipe's own TOP, now 1.95 after the pipe doubled in height), tracking
+// each puff's own sway/wind but pinned to that one height rather than
+// following the puff's own rise.
+const PUFF_SHADOW_Y_OFFSET = -0.54;
 // Live feedback: "the default smoke disappears and bubbles rise; after 6
 // seconds, the smoke continues to billow" -- the normal ambient puffs pause
 // (hidden, not reset -- its own simulation keeps advancing underneath so it
@@ -60,15 +63,17 @@ const SMOKE_FADE_S = 0.5;
 // isActiveZone anyway, so most of the time Kolobok was actually visiting,
 // she simply wasn't there. Replaced with an always-visible seated pose
 // (gated the same way, isActiveZone) instead of a rare random walk-by.
-// STOOL_Z/STOOL_X are a reasonable "by the window, just inside" spot --
-// this file already duplicates ZoneLandmarks.jsx's own geometry knowledge
-// elsewhere (see CHIMNEY_PIPE_TOP_R/chimneyPos above), not an exact import.
-const STOOL_X = -0.15;
-const STOOL_Z = 0.42;
+// Live feedback (round 2): the window sits on the wall the default camera
+// angle never actually shows (it faces the door side instead), so a spot
+// "by the window" was never visible from a normal visit -- "just position
+// her in the middle of the house" instead, dead center of the wall
+// footprint, camera-angle-agnostic.
+const STOOL_X = 0;
+const STOOL_Z = 0;
 const STOOL_SEAT_H = 0.16;
 const STOOL_COLOR = '#5a4530';
 
-export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) {
+export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
   const smokeRef = useRef();
   const smokeMaterialRef = useRef();
   const grandmaRef = useRef();
@@ -304,11 +309,21 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
     // --- Live feedback: "make sure grandma doesn't disappear when Kolobok
     // shows up, but instead sits down on the stool by the window and
     // knits" -- always visible (not a rare timed event) whenever Kolobok is
-    // actually at the izba. A gentle rocking sway (slower/calmer than the
-    // kneading above) reads as repetitive needle-work. ---
+    // actually at the izba. Checks storyMotion.izbaVisit TOO, not just
+    // isActiveZone -- live feedback (round 2): "I don't see Grandma
+    // knitting" during the birth/rebirth beats turned out to be because
+    // CameraRig's idle auto-follow eases the camera toward kolobokAngle
+    // MINUS its look-ahead lead, and BIRTH_STAGE pins kolobokAngle +30deg
+    // for framing while Kolobok sits on the sill -- the lead-adjusted
+    // angle lands past the izba/hare midpoint, so activeZone misreports
+    // 'hare' for nearly the whole chapter even though Kolobok is plainly
+    // still at the izba (see storyMotion.izbaVisit's own comment). A
+    // gentle rocking sway (slower/calmer than the kneading above) reads as
+    // repetitive needle-work. ---
+    const grandmaShouldShow = isActiveZone || storyMotion.izbaVisit;
     if (grandmaRef.current) {
-      grandmaRef.current.visible = isActiveZone;
-      if (isActiveZone) {
+      grandmaRef.current.visible = grandmaShouldShow;
+      if (grandmaShouldShow) {
         grandmaRef.current.position.x = STOOL_X;
         grandmaRef.current.position.y = STOOL_SEAT_H;
         grandmaRef.current.position.z = STOOL_Z;
