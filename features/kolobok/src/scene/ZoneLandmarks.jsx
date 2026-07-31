@@ -110,6 +110,7 @@ const ROOF_TILE_ROWS = 6; // up the slope, eave to ridge
 const HAY_BALE_COLOR_A = '#d4b06a';
 const HAY_BALE_COLOR_B = '#c19a4f';
 const HAY_JITTER_MAX_DEG = 10;
+const HAY_BALE_SINK_FRAC = 0.1; // "sink them 10% into the roof"
 
 /** ART_SPEC §4's own log-wall design: 4 walls x 5 stacked cylinders, all one
  *  instancedMesh (one draw call) since every log shares the same radius --
@@ -126,28 +127,51 @@ function IzbaLogWalls({ material }) {
     // texture" -- seeded so placement stays stable across reloads (matches
     // this codebase's own convention for anything randomized).
     const rng = makeRng(777);
+    // Live feedback: "there shouldn't be any logs in the window area -- you
+    // need to be able to see inside the house" -- only the window's OWN
+    // wall (z=WALL_D/2-LOG_R, the same one IzbaWindow sits on) gets a
+    // hasWindow flag; the door's wall is unaffected.
     const walls = [
-      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: WALL_D / 2 - LOG_R },
+      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: WALL_D / 2 - LOG_R, hasWindow: true },
       { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: -(WALL_D / 2 - LOG_R) },
       { runAlong: 'z', len: SIDE_LOG_LEN, x: WALL_W / 2 - LOG_R, z: 0 },
       { runAlong: 'z', len: SIDE_LOG_LEN, x: -(WALL_W / 2 - LOG_R), z: 0 },
     ];
+    const windowMinY = WINDOW_Y - WINDOW_H / 2;
+    const windowMaxY = WINDOW_Y + WINDOW_H / 2;
+    const pushLog = (x, y, z, runAlong, len) => {
+      const lenVariance = 1 + (rng() * 2 - 1) * 0.04; // +/-4%, within the asked 3-5%
+      d.position.set(x, y, z);
+      // A cylinder's own length runs along local Y by default -- rotate
+      // 90deg around Z to lie along world X, or around X to lie along Z.
+      if (runAlong === 'x') d.rotation.set(0, 0, Math.PI / 2);
+      else d.rotation.set(Math.PI / 2, 0, 0);
+      d.scale.set(1, len * lenVariance, 1);
+      d.updateMatrix();
+      list.push(d.matrix.clone());
+      // "Slightly in texture" -- a small per-log brightness multiplier
+      // (not a hue shift) riding on top of the shared bark texture/map,
+      // reading as natural per-log tone variation.
+      tints.push(0.92 + rng() * 0.16);
+    };
     walls.forEach((w) => {
       for (let i = 0; i < LOG_ROWS; i += 1) {
         const y = LOG_R + i * LOG_R * 2;
-        const lenVariance = 1 + (rng() * 2 - 1) * 0.04; // +/-4%, within the asked 3-5%
-        d.position.set(w.x, y, w.z);
-        // A cylinder's own length runs along local Y by default -- rotate
-        // 90deg around Z to lie along world X, or around X to lie along Z.
-        if (w.runAlong === 'x') d.rotation.set(0, 0, Math.PI / 2);
-        else d.rotation.set(Math.PI / 2, 0, 0);
-        d.scale.set(1, w.len * lenVariance, 1);
-        d.updateMatrix();
-        list.push(d.matrix.clone());
-        // "Slightly in texture" -- a small per-log brightness multiplier
-        // (not a hue shift) riding on top of the shared bark texture/map,
-        // reading as natural per-log tone variation.
-        tints.push(0.92 + rng() * 0.16);
+        const rowMinY = y - LOG_R;
+        const rowMaxY = y + LOG_R;
+        if (w.hasWindow && rowMaxY > windowMinY && rowMinY < windowMaxY) {
+          // This row crosses the window -- split into a left and right
+          // segment, skipping the window's own width in the middle
+          // (WINDOW_OPENING_MIN/MAX_Y quantize this same gap vertically,
+          // to whole rows, for the frame/shutters below).
+          const halfGap = WINDOW_W / 2;
+          const segLen = w.len / 2 - halfGap;
+          [-1, 1].forEach((segSide) => {
+            pushLog(segSide * (halfGap + segLen / 2), y, w.z, w.runAlong, segLen);
+          });
+        } else {
+          pushLog(w.x, y, w.z, w.runAlong, w.len);
+        }
       }
     });
     // Live feedback: "two empty triangles... must be filled with logs of
@@ -282,11 +306,19 @@ function makeIzbaRoofBase() {
  *  instead of a flat box. A cylinder's own length runs along local Y by
  *  default; rotation.x=PI/2 pre-aligns that axis to Z (matching the ridge
  *  cap's own idiom), then rotation.z=-side*ROOF_PITCH tilts it flush with
- *  the slab, same as the tiles did. The random tilt sits in the MIDDLE
- *  Euler slot (rotation.y) -- applied between those two, it reads as a
- *  small extrinsic tip of the roll axis itself (each bale's own ends dip
- *  slightly out of true alignment), rather than a spin around the bale's
- *  own axis (invisible on a plain cylinder). Static, one draw call. */
+ *  the slab, same as the tiles did.
+ *
+ *  Live feedback (round 2): "position them so the [bale] is at a 45deg
+ *  angle counterclockwise on one half of the roof and clockwise on the
+ *  other, and sink them 10% into the roof." The rotation.y (middle Euler)
+ *  slot -- already used for the small random jitter below -- is a rotation
+ *  around the ORIGINAL fixed Y axis, which at this point in the
+ *  composition swings the bale's OWN axis (already moved onto Z by the
+ *  rotation.x pre-step) sideways WITHIN the flat, untilted ground plane --
+ *  exactly "diagonally across the slope" rather than "tipped up/down."
+ *  `side * rad(45)` gives the two slopes mirrored diagonals; the small
+ *  per-bale jitter still rides on top for a less mechanical look. Sinking
+ *  10% just shortens the outward lift by 10% of the bale's own diameter. */
 function makeIzbaRoofTiles() {
   const parts = [];
   const colWidth = (ROOF_RIDGE_HALF_LEN * 2) / ROOF_TILE_COLS;
@@ -300,8 +332,10 @@ function makeIzbaRoofTiles() {
     const xMag = ROOF_HALF_SPAN_X * (1 - t); // distance from the ridge (x=0) toward the eave
     [1, -1].forEach((side) => {
       // Outward normal of this slab, used to lift bales just proud of the
-      // backing slab's own surface instead of embedding into it.
-      const liftDist = ROOF_SLAB_THICK / 2 + baleR;
+      // backing slab's own surface -- shortened by HAY_BALE_SINK_FRAC of
+      // the bale's own diameter so it embeds 10% into the slab instead of
+      // sitting fully on top of it.
+      const liftDist = ROOF_SLAB_THICK / 2 + baleR - HAY_BALE_SINK_FRAC * (2 * baleR);
       const liftX = side * Math.sin(ROOF_PITCH) * liftDist;
       const liftY = Math.cos(ROOF_PITCH) * liftDist;
       const x = side * xMag + liftX;
@@ -312,7 +346,7 @@ function makeIzbaRoofTiles() {
           geometry: new CylinderGeometry(baleR, baleR, colWidth, 8),
           color: (row + col) % 2 === 0 ? HAY_BALE_COLOR_A : HAY_BALE_COLOR_B,
           position: [x, y + liftY, z],
-          rotation: [Math.PI / 2, jitter, -side * ROOF_PITCH],
+          rotation: [Math.PI / 2, side * rad(45) + jitter, -side * ROOF_PITCH],
         });
       }
     });
@@ -534,6 +568,70 @@ function IzbaWindow() {
   );
 }
 
+// Live feedback: "build a frame around the window opening -- no wider than
+// the logs, running along the perimeter. Create open shutters on the left
+// and right halves, half the window's width, opening 20/25 degrees from
+// the wall." The log wall can only be cut at whole row boundaries (see
+// IzbaLogWalls), so the true opening is slightly taller than the glass --
+// WINDOW_OPENING_MIN/MAX_Y quantize WINDOW_Y+/-WINDOW_H/2 outward to the
+// nearest row edge (row height = LOG_R*2) so the frame matches that real
+// opening exactly, not just the glass.
+const WINDOW_ROW_H = LOG_R * 2;
+const WINDOW_OPENING_MIN_Y = Math.floor((WINDOW_Y - WINDOW_H / 2) / WINDOW_ROW_H) * WINDOW_ROW_H;
+const WINDOW_OPENING_MAX_Y = Math.ceil((WINDOW_Y + WINDOW_H / 2) / WINDOW_ROW_H) * WINDOW_ROW_H;
+const WINDOW_FRAME_THICK = 0.15; // "no wider than the logs" (log diameter = 2*LOG_R = 0.22)
+const WINDOW_FRAME_DEPTH = 0.04;
+const WINDOW_TRIM_COLOR = '#5a4530';
+const SHUTTER_W = WINDOW_W / 2; // "half the width of the window"
+const SHUTTER_H = WINDOW_H;
+const SHUTTER_THICK = 0.03;
+const SHUTTER_LEFT_OPEN_DEG = 20;
+const SHUTTER_RIGHT_OPEN_DEG = 25;
+
+/** The frame (4 trim pieces along the log-wall opening's true perimeter)
+ *  plus the two open shutters. Each shutter's geometry is built HINGE-
+ *  RELATIVE -- BoxGeometry.translate() shifts its own vertices so local
+ *  x=0 sits at the hinge edge and the panel extends AWAY from it -- since
+ *  mergeColoredParts rotates a part around its geometry's own local origin
+ *  BEFORE translating by `position`, this makes that rotation pivot
+ *  exactly like a real hinge instead of spinning the panel around its own
+ *  center. Positive rotation.y swings the LEFT shutter's far edge toward
+ *  +Z (outward, this wall's own "outward" direction); the mirrored RIGHT
+ *  shutter needs the opposite sign to swing the same way. One draw call. */
+function makeIzbaWindowFrame() {
+  const parts = [];
+  const openingH = WINDOW_OPENING_MAX_Y - WINDOW_OPENING_MIN_Y;
+  const frameSpanW = WINDOW_W + WINDOW_FRAME_THICK * 2;
+  [WINDOW_OPENING_MAX_Y + WINDOW_FRAME_THICK / 2, WINDOW_OPENING_MIN_Y - WINDOW_FRAME_THICK / 2].forEach((y) => {
+    parts.push({
+      geometry: new BoxGeometry(frameSpanW, WINDOW_FRAME_THICK, WINDOW_FRAME_DEPTH),
+      color: WINDOW_TRIM_COLOR,
+      position: [0, y, WINDOW_Z],
+    });
+  });
+  [1, -1].forEach((side) => {
+    parts.push({
+      geometry: new BoxGeometry(WINDOW_FRAME_THICK, openingH, WINDOW_FRAME_DEPTH),
+      color: WINDOW_TRIM_COLOR,
+      position: [side * (WINDOW_W / 2 + WINDOW_FRAME_THICK / 2), (WINDOW_OPENING_MIN_Y + WINDOW_OPENING_MAX_Y) / 2, WINDOW_Z],
+    });
+  });
+  [
+    { side: -1, hingeX: -(WINDOW_W / 2 + WINDOW_FRAME_THICK), openDeg: SHUTTER_LEFT_OPEN_DEG },
+    { side: 1, hingeX: WINDOW_W / 2 + WINDOW_FRAME_THICK, openDeg: -SHUTTER_RIGHT_OPEN_DEG },
+  ].forEach(({ side, hingeX, openDeg }) => {
+    const geo = new BoxGeometry(SHUTTER_W, SHUTTER_H, SHUTTER_THICK);
+    geo.translate((side * SHUTTER_W) / 2, 0, 0);
+    parts.push({
+      geometry: geo,
+      color: WINDOW_TRIM_COLOR,
+      position: [hingeX, WINDOW_Y, WINDOW_Z],
+      rotation: [0, rad(openDeg), 0],
+    });
+  });
+  return mergeColoredParts(parts);
+}
+
 /** One zone: izba keeps its greybox house shape (ART_SPEC §4's full log-
  *  cabin model isn't in any phase's explicit scope yet); hare/wolf/bear/fox
  *  totems are replaced by their real animal (ART_SPEC §3). Every zone gets
@@ -566,12 +664,14 @@ function Landmark({ zone }) {
     chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
     tools: makeToonMaterial({ vertexColors: true, color: TOOL_HANDLE_COLOR, rimStrength: 0.2 }),
     bench: makeToonMaterial({ vertexColors: true, color: BENCH_COLOR, rimStrength: 0.2 }),
+    windowFrame: makeToonMaterial({ vertexColors: true, color: WINDOW_TRIM_COLOR, rimStrength: 0.2 }),
   } : null), [zone.id]);
 
   const roofBaseGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofBase() : null), [zone.id]);
   const roofTileGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTiles() : null), [zone.id]);
   const toolsGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaWallTools() : null), [zone.id]);
   const benchGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaBench() : null), [zone.id]);
+  const windowFrameGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaWindowFrame() : null), [zone.id]);
 
   const mode = encounter?.id === zone.id
     ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
@@ -673,6 +773,9 @@ function Landmark({ zone }) {
           )}
           <IzbaChimney material={izbaMaterials.chimney} />
           <IzbaWindow />
+          {windowFrameGeometry && (
+            <mesh geometry={windowFrameGeometry} material={izbaMaterials.windowFrame} />
+          )}
           <IzbaDoor />
           {toolsGeometry && (
             <mesh geometry={toolsGeometry} material={izbaMaterials.tools} />
