@@ -7,6 +7,8 @@ import { KolobokScene } from './scene/KolobokScene';
 import { createSinglePointerDrag } from './scene/singlePointerDrag';
 import { TactileButton } from './TactileButton';
 import { SoundLibraryMenu } from './SoundLibraryMenu';
+import { isMasterEnabled, setMasterEnabled } from './services/soundEngine';
+import { playSlot } from './services/soundLibrary';
 import GlassGlare from './GlassGlare';
 import { useDeviceTilt } from './useDeviceTilt';
 import {
@@ -98,6 +100,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   const [showEggTooltip, setShowEggTooltip] = useState(false);
   const eggTooltipTimer = useRef(null);
   const onEggCounterTap = () => {
+    playSlot('ui.eggCounterTap');
     setShowEggTooltip(true);
     if (eggTooltipTimer.current) clearTimeout(eggTooltipTimer.current);
     eggTooltipTimer.current = setTimeout(() => setShowEggTooltip(false), 2500);
@@ -185,6 +188,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   }, [dragController]);
 
   const onPlayPause = () => {
+    playSlot('ui.playPause');
     story.lastInputAt = Date.now();
     if (storyPlaying) story.pauseRequest = true;
     else story.playRequest = true;
@@ -195,6 +199,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // purely to re-render the icon/tint -- this component is the only writer.
   const [cameraFollow, setCameraFollow] = useState(orbit.cameraFollow);
   const onToggleFollow = () => {
+    playSlot('ui.eyeToggle');
     orbit.cameraFollow = !orbit.cameraFollow;
     setCameraFollow(orbit.cameraFollow);
   };
@@ -202,6 +207,21 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // Sound-library menu (SOUND_SPEC.md §2): identical 40x40 circle, stacked
   // directly above the eye toggle on the same right-side column.
   const [soundMenuOpen, setSoundMenuOpen] = useState(false);
+  const onToggleSoundMenu = () => {
+    playSlot(soundMenuOpen ? 'ui.menuClose' : 'ui.menuOpen');
+    setSoundMenuOpen((v) => !v);
+  };
+
+  // Master mute toggle: identical 40x40 circle, stacked directly above the
+  // sound-library button. Mirrors soundEngine's own module-level flag in
+  // local state purely to re-render the icon/tint, same as cameraFollow
+  // above -- this component is the only writer.
+  const [soundMuted, setSoundMuted] = useState(!isMasterEnabled());
+  const onToggleMute = () => {
+    const next = !soundMuted;
+    setMasterEnabled(!next);
+    setSoundMuted(next);
+  };
 
   // Live feedback: on the 2D->3D fade, the Canvas visibly "resized smaller
   // twice then stretched" -- expo-gl creates its GL surface at a default
@@ -256,6 +276,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
 
   const onMainMenu = () => requestNavigation('/');
   const onToggleLocale = () => {
+    playSlot('ui.langToggle');
     const next = locale === 'ru' ? 'en' : 'ru';
     setLocale(next);
     // Live feedback: "language changes throughout the entire app" -- bubble
@@ -369,13 +390,27 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
       <TactileButton
         accessibilityRole="button"
         accessibilityLabel={t('ui.soundLibrary', locale)}
-        onPress={() => setSoundMenuOpen(true)}
+        onPress={onToggleSoundMenu}
         style={[styles.storyButton, styles.soundButton]}
         innerStyle={styles.buttonVisual}
         hitSlop={8}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={[styles.storyButtonText, styles.soundButtonIcon]}>♪</Text>
+      </TactileButton>
+
+      {/* Master mute toggle: identical 40x40 circle, stacked directly
+          above the sound-library button. */}
+      <TactileButton
+        accessibilityRole="button"
+        accessibilityLabel={t(soundMuted ? 'ui.unmuteSound' : 'ui.muteSound', locale)}
+        onPress={onToggleMute}
+        style={[styles.storyButton, styles.muteButton]}
+        innerStyle={[styles.buttonVisual, soundMuted && styles.followButtonOff]}
+        hitSlop={8}
+      >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
+        <Text style={styles.storyButtonText}>{soundMuted ? '🔇' : '🔊'}</Text>
       </TactileButton>
 
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
@@ -424,7 +459,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
 
       <SoundLibraryMenu
         visible={soundMenuOpen}
-        onClose={() => setSoundMenuOpen(false)}
+        onClose={onToggleSoundMenu}
         locale={locale}
       />
     </View>
@@ -552,7 +587,18 @@ const styles = StyleSheet.create({
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
   soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)
-  soundButtonIcon: { fontSize: 39 }, // triple storyButtonText's 13px, this glyph only
+  muteButton: { bottom: 240 }, // stacked directly above soundButton (192 + 40 + 8 gap)
+  soundButtonIcon: {
+    fontSize: 39, // triple storyButtonText's 13px, this glyph only
+    // Live feedback: the glyph read off-center in its circle -- RN Text on
+    // Android pads for ascenders/descenders the ♪ glyph doesn't use, which
+    // visually pushes it up/left of the button's true center. These two
+    // (Android-only) props strip that padding and re-center it vertically;
+    // textAlign handles the horizontal half.
+    textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
   menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
   localeButton: { left: 14, right: undefined, bottom: 144 }, // stacked above menuButton
   fadeOverlay: { backgroundColor: '#000000' },

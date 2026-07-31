@@ -227,7 +227,7 @@ function getPool() {
   return oneShotPool;
 }
 
-let masterEnabled = true; // MainScreen's own opt-in toggle wiring is a later integration step
+let masterEnabled = true; // toggled by Scene3D.jsx's own mute button (stacked above the sound-library button)
 let masterVolume = 0.35;
 
 export function setMasterEnabled(enabled) { masterEnabled = enabled; }

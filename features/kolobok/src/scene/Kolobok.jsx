@@ -345,7 +345,13 @@ export function Kolobok() {
     // stop when the encounter -- not a direct tap -- is what's driving it;
     // a standalone tap-sing has encounterMotion.zoneId === null throughout
     // and keeps running its own full timer untouched.
-    if (encounterMotion.singing && !s.wasSinging) startSing(s);
+    if (encounterMotion.singing && !s.wasSinging) {
+      startSing(s);
+      // kolobok.songLine (SOUND_SPEC.md Â§4.1): Kolobok's one actual line of
+      // dialogue, played right as the bubble shows it -- separate from the
+      // wordless songNote pips below, and recordable with real spoken words.
+      playSlot('kolobok.songLine');
+    }
     if (!encounterMotion.singing && s.wasSinging && encounterMotion.zoneId) s.singing = false;
     s.wasSinging = encounterMotion.singing;
 

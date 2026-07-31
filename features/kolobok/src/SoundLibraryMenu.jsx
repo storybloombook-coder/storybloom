@@ -65,11 +65,11 @@ function SlotRow({
           accessibilityRole="button"
           accessibilityLabel={`${t('sound.action.record', locale)}: ${label}`}
           hitSlop={8}
-          style={styles.actionBtn}
+          style={[styles.actionBtn, styles.recordBtn]}
           disabled={busy}
           onPress={() => onRecord(slotId)}
         >
-          <Text style={styles.actionIcon}>●</Text>
+          <Text style={[styles.actionIcon, styles.recordIcon]}>●</Text>
         </Pressable>
         {overridden && (
           <Pressable
@@ -323,6 +323,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(46,42,34,0.06)',
   },
   actionIcon: { fontSize: 14, color: '#2e2a22' },
+  recordBtn: { backgroundColor: 'rgba(192,57,43,0.14)' },
+  recordIcon: { color: '#c0392b' },
   recordOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(20,16,10,0.55)',
