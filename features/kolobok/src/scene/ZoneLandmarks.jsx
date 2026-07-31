@@ -303,27 +303,38 @@ function makeIzbaRoofBase() {
  *  dimensional, orientation slightly random (0-10deg)" -- same exact grid
  *  the tiles used (COLS*ROWS*2, positions/cell-size derived from the roof's
  *  own true dimensions), but each cell now gets a round hay-bale cylinder
- *  instead of a flat box. A cylinder's own length runs along local Y by
- *  default; rotation.x=PI/2 pre-aligns that axis to Z (matching the ridge
- *  cap's own idiom), then rotation.z=-side*ROOF_PITCH tilts it flush with
- *  the slab, same as the tiles did.
+ *  instead of a flat box.
+ *
+ *  Live feedback (round 3): "the hay bales are facing the wrong way -- lying
+ *  crosswise, should be lengthwise" -- length now runs UP THE SLOPE
+ *  (rowHeight) instead of parallel to the ridge (colWidth), with the radius
+ *  fit to the ridge-direction cell (colWidth/2) instead. A cylinder's own
+ *  length runs along local Y by default; geometry.rotateZ(-PI/2) BAKES the
+ *  pre-alignment onto the geometry itself (Y -> X, the up-slope direction)
+ *  instead of using the rotation.x Euler slot the ridge cap uses for its own
+ *  Y->Z pre-align -- because THIS bale still needs its remaining 2 Euler
+ *  slots (y, z) for the diagonal-tilt + slope-tilt below, and baking the
+ *  pre-align into the geometry avoids a 3rd rotation fighting Three's fixed
+ *  x-then-y-then-z composition order (rotation.x=PI/2 would apply LAST in
+ *  that order applied to what's already been diagonal+slope-tilted --
+ *  wrong -- rather than first, which only the geometry-level bake
+ *  guarantees).
  *
  *  Live feedback (round 2): "position them so the [bale] is at a 45deg
  *  angle counterclockwise on one half of the roof and clockwise on the
  *  other, and sink them 10% into the roof." The rotation.y (middle Euler)
- *  slot -- already used for the small random jitter below -- is a rotation
- *  around the ORIGINAL fixed Y axis, which at this point in the
- *  composition swings the bale's OWN axis (already moved onto Z by the
- *  rotation.x pre-step) sideways WITHIN the flat, untilted ground plane --
- *  exactly "diagonally across the slope" rather than "tipped up/down."
- *  `side * rad(45)` gives the two slopes mirrored diagonals; the small
- *  per-bale jitter still rides on top for a less mechanical look. Sinking
- *  10% just shortens the outward lift by 10% of the bale's own diameter. */
+ *  slot is a rotation around the ORIGINAL fixed Y axis, which swings the
+ *  bale's OWN axis sideways WITHIN the flat, untilted ground plane --
+ *  exactly "diagonally across the slope" rather than "tipped up/down,"
+ *  regardless of whether that axis starts at X or Z. `side * rad(45)` gives
+ *  the two slopes mirrored diagonals; the small per-bale jitter still rides
+ *  on top for a less mechanical look. Sinking 10% just shortens the outward
+ *  lift by 10% of the bale's own diameter. */
 function makeIzbaRoofTiles() {
   const parts = [];
   const colWidth = (ROOF_RIDGE_HALF_LEN * 2) / ROOF_TILE_COLS;
   const rowHeight = ROOF_SLOPE_LEN / ROOF_TILE_ROWS;
-  const baleR = rowHeight / 2;
+  const baleR = colWidth / 2;
   const rng = makeRng(913);
   for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
     // t=0 at the eave, t=1 at the ridge -- this row's own center, exactly.
@@ -342,11 +353,13 @@ function makeIzbaRoofTiles() {
       for (let col = 0; col < ROOF_TILE_COLS; col += 1) {
         const z = -ROOF_RIDGE_HALF_LEN + (col + 0.5) * colWidth;
         const jitter = (rng() * 2 - 1) * rad(HAY_JITTER_MAX_DEG);
+        const geo = new CylinderGeometry(baleR, baleR, rowHeight, 8);
+        geo.rotateZ(-Math.PI / 2);
         parts.push({
-          geometry: new CylinderGeometry(baleR, baleR, colWidth, 8),
+          geometry: geo,
           color: (row + col) % 2 === 0 ? HAY_BALE_COLOR_A : HAY_BALE_COLOR_B,
           position: [x, y + liftY, z],
-          rotation: [Math.PI / 2, side * rad(45) + jitter, -side * ROOF_PITCH],
+          rotation: [0, side * rad(45) + jitter, -side * ROOF_PITCH],
         });
       }
     });

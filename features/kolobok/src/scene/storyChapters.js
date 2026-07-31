@@ -20,16 +20,23 @@ const PATH_Y = KOLOBOK_RADIUS + 0.3; // Kolobok's resting height on the path
 
 export const ZONE_ANGLE = Object.fromEntries(ZONES.map((z) => [z.id, rad(z.angleDeg)]));
 
-// Birth/rebirth staging points at the izba (angle 0). The sill sits just
-// proud of the izba's CENTER-facing wall (box spans radius 5.55..6.85).
-// On-device review showed the roof cone occludes a wall-hugging sill from
-// the default camera azimuth, so: the sill floats 0.35 off the wall, and
-// birth/rebirth pin Kolobok's angle at izba + BIRTH_STAGE so the camera
-// (which sits a further KOLOBOK_LEAD around) views the sill face from
-// ~44 deg aside -- clear of the roofline -- easing back to the izba angle
-// before the next road chapter so the roll-off never backtracks.
+// Birth/rebirth staging points at the izba (angle 0). Live feedback:
+// "re-attach Kolobok to the current position of the windowsill" -- SILL_POS
+// now matches ZoneLandmarks.jsx's own actual windowsill mesh exactly: its
+// local (x=0, y=WINDOW_Y-WINDOW_H/2-WINDOW_SILL_THICK/2+KOLOBOK_RADIUS ->
+// resting on the sill's own top surface, z=WINDOW_Z+WINDOW_SILL_DEPTH/2 ->
+// the sill's own outer/forward face), transformed through the izba group's
+// own position/yaw (pos=[0,0,ZONE_RADIUS], rotation.y=PI, so local (x,z) ->
+// world (-x, ZONE_RADIUS-z)) -- replacing the old approximate "float 0.35
+// off the wall" placement, which predated both the windowsill's existence
+// and the window's current size/position (it was calibrated to the old,
+// since-rebuilt cone roof occluding a wall-hugging sill). Birth/rebirth
+// still pin Kolobok's angle at izba + BIRTH_STAGE so the camera (which sits
+// a further KOLOBOK_LEAD around) views the sill from an angle rather than
+// dead-on, easing back to the izba angle before the next road chapter so
+// the roll-off never backtracks.
 const BIRTH_STAGE = rad(30);
-const SILL_POS = [0, 1.05, 5.2];
+const SILL_POS = [0, 0.67, 5.42];
 // BACKLOG.md #4 fix: this was hardcoded to angle 0 while EVERYTHING else in
 // the birth/rebirth sequence (startAngle, the teleport before rebirth, the
 // final "ease back to izba" step) consistently treats Kolobok as being at

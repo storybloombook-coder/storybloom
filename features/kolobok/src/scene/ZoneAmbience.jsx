@@ -54,6 +54,20 @@ const SMOKE_SUPPRESS_S = 6;
 const SMOKE_BASE_OPACITY = 0.55;
 const SMOKE_FADE_S = 0.5;
 
+// Live feedback: "make sure grandma doesn't disappear when Kolobok shows
+// up, but instead sits down on the stool by the window and knits" -- the
+// old "crosses the window every 20-35s" idle only ever ran while
+// isActiveZone anyway, so most of the time Kolobok was actually visiting,
+// she simply wasn't there. Replaced with an always-visible seated pose
+// (gated the same way, isActiveZone) instead of a rare random walk-by.
+// STOOL_Z/STOOL_X are a reasonable "by the window, just inside" spot --
+// this file already duplicates ZoneLandmarks.jsx's own geometry knowledge
+// elsewhere (see CHIMNEY_PIPE_TOP_R/chimneyPos above), not an exact import.
+const STOOL_X = -0.15;
+const STOOL_Z = 0.42;
+const STOOL_SEAT_H = 0.16;
+const STOOL_COLOR = '#5a4530';
+
 export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) {
   const smokeRef = useRef();
   const smokeMaterialRef = useRef();
@@ -106,6 +120,28 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
     { geometry: new ConeGeometry(0.1, 0.14, 6), color: '#3a3229', position: [0, 0.66, 0.03], rotation: [0.3, 0, 0] },
   ]), []);
 
+  // Live feedback: "sits down on the stool by the window and knits" -- a
+  // small static stool (seat + 4 legs) under her, plus a pair of tiny
+  // knitting needles nested as a CHILD of the grandmaRef mesh below (so
+  // they inherit her own sway/rotation automatically instead of needing
+  // their own per-frame code).
+  const stoolGeometry = useMemo(() => {
+    const legLen = STOOL_SEAT_H - 0.01;
+    const legOffsets = [[0.07, 0.07], [-0.07, 0.07], [0.07, -0.07], [-0.07, -0.07]];
+    return mergeColoredParts([
+      { geometry: new CylinderGeometry(0.1, 0.1, 0.02, 8), color: STOOL_COLOR, position: [0, STOOL_SEAT_H, 0] },
+      ...legOffsets.map(([lx, lz]) => ({
+        geometry: new CylinderGeometry(0.012, 0.012, legLen, 6),
+        color: STOOL_COLOR,
+        position: [lx, legLen / 2, lz],
+      })),
+    ]);
+  }, []);
+  const needlesGeometry = useMemo(() => mergeColoredParts([
+    { geometry: new CylinderGeometry(0.004, 0.004, 0.14, 4), color: '#8a8478', position: [-0.03, 0.34, 0.08], rotation: [rad(70), 0, rad(-15)] },
+    { geometry: new CylinderGeometry(0.004, 0.004, 0.14, 4), color: '#8a8478', position: [0.03, 0.34, 0.08], rotation: [rad(70), 0, rad(15)] },
+  ]), []);
+
   const birdGeometry = useMemo(() => mergeColoredParts([
     { geometry: new SphereGeometry(0.05, 6, 6), color: '#5a6470', position: [0, 0, 0] },
     { geometry: new SphereGeometry(0.035, 6, 6), color: '#5a6470', position: [0, 0.04, 0.06] },
@@ -113,8 +149,6 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
   ]), []);
 
   const state = useRef({
-    grandmaNextIn: 20 + Math.random() * 15,
-    grandmaT: -1, // -1 idle, 0..1 crossing
     birdNextIn: 10 + Math.random() * 8,
     birdT: -1,
     birdPhase: 'land', // land -> peck -> fly
@@ -249,36 +283,36 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
     }
 
     // --- Birth chapter: kneading/shaping motion takes over the same
-    // silhouette instead of the ambient crossing below (STORY_SPEC's birth
+    // silhouette instead of the seated idle below (STORY_SPEC's birth
     // chapter toggles this while Kolobok is still dough on the sill). ---
     if (storyMotion.grandmaCooking) {
       if (grandmaRef.current) {
         grandmaRef.current.visible = true;
         // Side-to-side kneading sway + a small bob, faster/tighter than the
-        // slow window-crossing walk so it reads as "working," not "passing by".
+        // knitting idle so it reads as "working," not "sitting."
         grandmaRef.current.position.x = Math.sin(now / 260) * 0.1;
         grandmaRef.current.position.y = Math.abs(Math.sin(now / 260)) * 0.03;
+        // z is untouched by the knitting idle below too, but set explicitly
+        // here so this phase never depends on whatever the OTHER phase last
+        // left it at.
+        grandmaRef.current.position.z = 0;
         grandmaRef.current.rotation.z = Math.sin(now / 260) * rad(6);
       }
       return;
     }
 
-    // --- Active-only: grandma silhouette crosses the window every 20-35s ---
-    if (isActiveZone) {
-      if (s.grandmaT < 0) {
-        s.grandmaNextIn -= dt;
-        if (s.grandmaNextIn <= 0) { s.grandmaT = 0; s.grandmaNextIn = 20 + Math.random() * 15; }
-      } else {
-        s.grandmaT += dt / 1.8;
-        if (s.grandmaT >= 1) s.grandmaT = -1;
-      }
-    }
+    // --- Live feedback: "make sure grandma doesn't disappear when Kolobok
+    // shows up, but instead sits down on the stool by the window and
+    // knits" -- always visible (not a rare timed event) whenever Kolobok is
+    // actually at the izba. A gentle rocking sway (slower/calmer than the
+    // kneading above) reads as repetitive needle-work. ---
     if (grandmaRef.current) {
-      grandmaRef.current.visible = s.grandmaT >= 0;
-      if (s.grandmaT >= 0) {
-        grandmaRef.current.position.x = -0.15 + s.grandmaT * 0.3;
-        grandmaRef.current.position.y = 0;
-        grandmaRef.current.rotation.z = 0;
+      grandmaRef.current.visible = isActiveZone;
+      if (isActiveZone) {
+        grandmaRef.current.position.x = STOOL_X;
+        grandmaRef.current.position.y = STOOL_SEAT_H;
+        grandmaRef.current.position.z = STOOL_Z;
+        grandmaRef.current.rotation.z = Math.sin(now / 500) * rad(3);
       }
     }
 
@@ -332,8 +366,19 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
       <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]} material={puffMaterial}>
         <sphereGeometry args={[1, 10, 8]} />
       </instancedMesh>
+      {/* Live feedback: "sits down on the stool by the window and knits" --
+          static stool (doesn't sway with her) at the same spot the frame
+          loop above parks grandmaRef. */}
+      <mesh geometry={stoolGeometry} position={[STOOL_X, 0, STOOL_Z]}>
+        <meshStandardMaterial vertexColors roughness={0.8} />
+      </mesh>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />
+        {/* Nested so the needles inherit grandma's own position/rotation
+            (sway) automatically instead of needing their own per-frame code. */}
+        <mesh geometry={needlesGeometry}>
+          <meshStandardMaterial vertexColors roughness={0.6} />
+        </mesh>
       </mesh>
       <mesh ref={birdRef} geometry={birdGeometry} position={[0, 1.85, -0.05]} visible={false}>
         <meshStandardMaterial vertexColors roughness={0.8} />
