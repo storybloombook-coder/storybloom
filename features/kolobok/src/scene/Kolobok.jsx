@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { AdditiveBlending, TorusGeometry } from 'three';
 import {
@@ -8,6 +8,9 @@ import {
   orbit, encounterMotion, storyMotion, useSceneStore,
 } from '../state/sceneStore';
 import { createTimeline } from './timeline';
+import {
+  playSlot, startSlotLoop, stopSlotLoop, updateSlotLoopVolume,
+} from '../services/soundLibrary';
 import { makeDoughTexture, makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { getSharedTexture } from './BlobShadow';
@@ -138,6 +141,14 @@ const SING_DURATION_SEC = 2.2;
 const SING_BOB_HZ = 2.2;
 const SING_BOB_AMPLITUDE = 0.05;
 
+// SOUND_SPEC.md Â§4.1 kolobok.songNote: the 5-note pentatonic, cycled while
+// singing at the SAME 0.35s cadence KolobokParticles.jsx's own note-drip
+// uses for the rising note particles (kept as a separate constant there --
+// this file doesn't own that particle system -- but intentionally the same
+// value so the audio and the visual notes read as one beat).
+const SONG_NOTES = ['kolobok.songNote1', 'kolobok.songNote2', 'kolobok.songNote3', 'kolobok.songNote4', 'kolobok.songNote5'];
+const SONG_NOTE_INTERVAL_SEC = 0.35;
+
 // BACKLOG.md #15 companion: Kolobok's own ground shadow. Pinned to world Y
 // ~0.02 (ground level) every frame rather than being a static child of
 // `root`, since root's own Y carries the idle bob/hop/roll bounce/sing bob --
@@ -232,6 +243,23 @@ export function Kolobok() {
     // Story-mode request channels (STORY_SPEC Â§3), edge-detected.
     blinkBurstWas: 0,
     storyExpressionWas: null,
+
+    // Sound triggers (SOUND_SPEC.md Â§4.1) -- edge trackers for story
+    // counters this component doesn't otherwise keep local state for. Reuses
+    // the SAME storyMotion counters KolobokParticles.jsx watches for its own
+    // VFX (dustBurstId/catchBurstId/noteBurstId), so audio and visuals fire
+    // off the exact same authoritative moment rather than a second guess at
+    // timing. Each *Was seeds from the counter's CURRENT value (not 0) for
+    // the same reason KolobokParticles.jsx does -- a fresh mount shouldn't
+    // replay a burst that already happened in a prior session.
+    rollLoopOn: false,
+    songNoteIdx: 0,
+    nextSongNoteIn: 0,
+    noteBurstWas: storyMotion.noteBurstId,
+    dustBurstWas: storyMotion.dustBurstId,
+    catchBurstWas: storyMotion.catchBurstId,
+    spinWas: false,
+    prevScale: storyMotion.scale,
   });
 
   function startBlink(s, isDouble = false) {
@@ -260,6 +288,7 @@ export function Kolobok() {
   }
 
   function startHop(s) {
+    playSlot('kolobok.hop');
     s.hopTimeline = createTimeline([
       { at: 0, dur: HOP_UP_MS, ease: 'easeOutCubic', update: (t) => { s.hopY = t * HOP_HEIGHT; } },
       // Gravity-like fall: accelerating (slow start, fast finish) rather
@@ -272,6 +301,9 @@ export function Kolobok() {
         ease: 'easeOutCubic',
         update: (t) => { s.landSquash = 1 - t; },
       },
+      // kolobok.landingSquash + kolobok.dustPuff (SOUND_SPEC.md Â§4.1: "any
+      // squash landing") -- fires once, right as the squash phase begins.
+      { at: HOP_UP_MS + HOP_DOWN_MS, call: () => { playSlot('kolobok.landingSquash'); playSlot('kolobok.dustPuff'); } },
       {
         at: HOP_UP_MS + HOP_DOWN_MS + HOP_LAND_SQUASH_MS,
         call: () => { s.hopTimeline = null; s.hopY = 0; s.landSquash = 0; },
@@ -283,6 +315,7 @@ export function Kolobok() {
     s.singing = true;
     s.singT = 0;
     s.expressionTarget = EXPRESSIONS.happy;
+    playSlot('kolobok.giggle');
   }
 
   useFrame((_, delta) => {
@@ -297,6 +330,9 @@ export function Kolobok() {
     if (encounterMotion.zoneId !== s.encounterZoneWas) {
       if (encounterMotion.zoneId) {
         s.expressionTarget = encounterMotion.zoneId === 'fox' ? EXPRESSIONS.sly : EXPRESSIONS.startled;
+        // kolobok.startled (SOUND_SPEC.md Â§4.1): only the genuine startled
+        // reaction, not the fox's sly look (different expression entirely).
+        if (encounterMotion.zoneId !== 'fox') playSlot('kolobok.startled');
       } else if (!s.singing) {
         s.expressionTarget = EXPRESSIONS.neutral;
       }
@@ -330,6 +366,40 @@ export function Kolobok() {
       if (storyMotion.expression) s.expressionTarget = EXPRESSIONS[storyMotion.expression] ?? EXPRESSIONS.neutral;
     }
 
+    // --- Story-driven sound triggers (SOUND_SPEC.md Â§4.1) ---
+    // kolobok.birthPop: storyMotion.scale only ever rises from ~0 twice in
+    // the whole app (the birth chapter's pop-in and the rebirth after the
+    // fox's gulp) -- edge-detecting the rise here needs no new storyMotion
+    // counter, just last frame's value.
+    if (s.prevScale <= 0.001 && storyMotion.scale > 0.001) playSlot('kolobok.birthPop');
+    s.prevScale = storyMotion.scale;
+    // kolobok.gulp: catchBurstId is bumped once, right at the fox-catch
+    // moment, by the SAME foxCatchGulpSteps() shared between the story
+    // finale and the fox-catch easter egg (storyChapters.js) --
+    // KolobokParticles.jsx watches this identical counter for its own
+    // light-ray/smoke VFX.
+    if (storyMotion.catchBurstId !== s.catchBurstWas) {
+      s.catchBurstWas = storyMotion.catchBurstId;
+      playSlot('kolobok.gulp');
+    }
+    // kolobok.hum: noteBurstId is bumped 3x per road chapter (~every 2s) --
+    // a single random-pitched hum per bump, via playback rate rather than
+    // cycling slot ids (kolobok.hum is one slot; SOUND_SPEC.md's "rate
+    // varied" note is exactly this).
+    if (storyMotion.noteBurstId !== s.noteBurstWas) {
+      s.noteBurstWas = storyMotion.noteBurstId;
+      playSlot('kolobok.hum', { rate: 0.85 + Math.random() * 0.3, volume: 0.7 });
+    }
+    // kolobok.landingSquash + kolobok.dustPuff, story-beat variant (the
+    // interactive tap-hop's own instance lives in startHop's timeline
+    // above) -- storyChapters.js bumps this at the exact same moment it
+    // sets storyMotion.squash for a story-driven landing.
+    if (storyMotion.dustBurstId !== s.dustBurstWas) {
+      s.dustBurstWas = storyMotion.dustBurstId;
+      playSlot('kolobok.landingSquash');
+      playSlot('kolobok.dustPuff');
+    }
+
     // Chase target: in story mode the director's scripted angle IS the
     // target (STORY_SPEC Â§1 control inversion -- camera follows him
     // instead); in free mode, the point slightly ahead of the camera. Both
@@ -357,6 +427,9 @@ export function Kolobok() {
       ? encounterMotion.spinT
       : (storyMotion.spinT > 0 && storyMotion.spinT < 1 ? storyMotion.spinT : 0);
     s.spinAngle = spinT * Math.PI * 2;
+    // kolobok.spin (SOUND_SPEC.md Â§4.1): rising edge of the spin window.
+    if (spinT > 0 && !s.spinWas) playSlot('kolobok.spin');
+    s.spinWas = spinT > 0;
 
     // Rolling: arc length travelled / ball radius = spin delta
     const arc = step * PATH_RADIUS;
@@ -367,6 +440,18 @@ export function Kolobok() {
     // periodic lift so it reads as bouncing rather than gliding.
     const speed = Math.min(Math.abs(step) * 40, 1);
     const rollBounce = speed > 0.15 ? Math.abs(Math.sin(s.spin * 2)) * 0.02 : 0;
+
+    // kolobok.roll ambient loop (SOUND_SPEC.md Â§4.1): same speed threshold
+    // as the visual roll-bounce above, volume tracks speed.
+    const rolling = speed > 0.15;
+    if (rolling && !s.rollLoopOn) {
+      startSlotLoop('kolobok.roll');
+      s.rollLoopOn = true;
+    } else if (!rolling && s.rollLoopOn) {
+      stopSlotLoop('kolobok.roll');
+      s.rollLoopOn = false;
+    }
+    if (rolling) updateSlotLoopVolume('kolobok.roll', speed);
 
     // --- Blink state machine ---
     if (s.blinkTimeline) {
@@ -386,6 +471,14 @@ export function Kolobok() {
     if (s.singing) {
       s.singT += dt;
       singBob = Math.sin(s.singT * SING_BOB_HZ * Math.PI * 2) * SING_BOB_AMPLITUDE;
+      // kolobok.songNote (SOUND_SPEC.md Â§4.1): cycle the 5-note pentatonic
+      // in time with the note-drip cadence above.
+      s.nextSongNoteIn -= dt;
+      if (s.nextSongNoteIn <= 0) {
+        playSlot(SONG_NOTES[s.songNoteIdx % SONG_NOTES.length]);
+        s.songNoteIdx += 1;
+        s.nextSongNoteIn = SONG_NOTE_INTERVAL_SEC;
+      }
       if (s.singT >= SING_DURATION_SEC) {
         s.singing = false;
         s.expressionTarget = EXPRESSIONS.neutral;
@@ -530,6 +623,11 @@ export function Kolobok() {
       openMouthMesh.current.visible = s.singing;
     }
   });
+
+  // Kolobok never conditionally unmounts in practice (he's the one
+  // permanent character in the scene), but stop his roll loop on unmount
+  // anyway rather than leaving it playing forever if that ever changes.
+  useEffect(() => () => stopSlotLoop('kolobok.roll'), []);
 
   const onTap = (e) => {
     e.stopPropagation();

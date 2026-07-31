@@ -6,6 +6,7 @@ import { Canvas } from '@react-three/fiber/native';
 import { KolobokScene } from './scene/KolobokScene';
 import { createSinglePointerDrag } from './scene/singlePointerDrag';
 import { TactileButton } from './TactileButton';
+import { SoundLibraryMenu } from './SoundLibraryMenu';
 import GlassGlare from './GlassGlare';
 import { useDeviceTilt } from './useDeviceTilt';
 import {
@@ -198,6 +199,10 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
     setCameraFollow(orbit.cameraFollow);
   };
 
+  // Sound-library menu (SOUND_SPEC.md §2): identical 40x40 circle, stacked
+  // directly above the eye toggle on the same right-side column.
+  const [soundMenuOpen, setSoundMenuOpen] = useState(false);
+
   // Live feedback: on the 2D->3D fade, the Canvas visibly "resized smaller
   // twice then stretched" -- expo-gl creates its GL surface at a default
   // size the instant it mounts (mid-transition, before layout settles) then
@@ -358,6 +363,21 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         <Text style={styles.storyButtonText}>👁</Text>
       </TactileButton>
 
+      {/* Sound-library button: identical 40x40 circle, stacked directly
+          above the eye toggle. Opens the SoundLibraryMenu modal, listing
+          every fixed sound slot grouped by category (SOUND_SPEC.md §2). */}
+      <TactileButton
+        accessibilityRole="button"
+        accessibilityLabel={t('ui.soundLibrary', locale)}
+        onPress={() => setSoundMenuOpen(true)}
+        style={[styles.storyButton, styles.soundButton]}
+        innerStyle={styles.buttonVisual}
+        hitSlop={8}
+      >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
+        <Text style={styles.storyButtonText}>♪</Text>
+      </TactileButton>
+
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
           pause button on the opposite side of the screen. Labelled "2D"
           (not a hamburger glyph) so leaving the scene reads as the exact
@@ -401,6 +421,12 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
       />
 
       <Vignette />
+
+      <SoundLibraryMenu
+        visible={soundMenuOpen}
+        onClose={() => setSoundMenuOpen(false)}
+        locale={locale}
+      />
     </View>
   );
 }
@@ -525,6 +551,7 @@ const styles = StyleSheet.create({
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
+  soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)
   menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
   localeButton: { left: 14, right: undefined, bottom: 144 }, // stacked above menuButton
   fadeOverlay: { backgroundColor: '#000000' },
