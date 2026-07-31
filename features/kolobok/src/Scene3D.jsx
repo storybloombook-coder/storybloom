@@ -375,7 +375,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         hitSlop={8}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
-        <Text style={styles.storyButtonText}>♪</Text>
+        <Text style={[styles.storyButtonText, styles.soundButtonIcon]}>♪</Text>
       </TactileButton>
 
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
@@ -552,6 +552,7 @@ const styles = StyleSheet.create({
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
   soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)
+  soundButtonIcon: { fontSize: 39 }, // triple storyButtonText's 13px, this glyph only
   menuButton: { left: 14, right: undefined }, // mirrored to storyButton's right:14
   localeButton: { left: 14, right: undefined, bottom: 144 }, // stacked above menuButton
   fadeOverlay: { backgroundColor: '#000000' },

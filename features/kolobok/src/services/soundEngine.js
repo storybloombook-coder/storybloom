@@ -245,7 +245,11 @@ export function playOneShot(uri, { volume = 1, rate = 1, preview = false } = {})
   poolIndex = (poolIndex + 1) % pool.length;
   player.replace(uri);
   player.volume = (preview ? 1 : masterVolume) * volume;
-  player.playbackRate = rate;
+  // Live feedback: assigning player.playbackRate throws "Cannot assign to
+  // property 'playbackRate' which has only a getter" on Android at runtime
+  // despite the expo-audio .d.ts documenting it as a plain settable
+  // property -- setPlaybackRate() is the actual working setter.
+  player.setPlaybackRate(rate);
   player.play();
 }
 
