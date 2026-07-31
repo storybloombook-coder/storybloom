@@ -33,8 +33,15 @@ const PUFF_COUNT = 3;
 const CHIMNEY_PIPE_TOP_R = 0.11;
 const PUFF_BASE_R = CHIMNEY_PIPE_TOP_R * 2; // sphere diameter = 2x pipe diameter -> sphere radius = pipe diameter
 const PUFF_SIZE_VARIANCE = 0.2;
-const PUFF_GAP_S = 0.3;
+// Live feedback: "increase the time between when the balls appear" -- was 0.3.
+const PUFF_GAP_S = 0.6;
 const PUFF_RISE_S = 3;
+// Live feedback: "don't make them just disappear, let them completely
+// shrink" -- was an instant scale=0.001 snap the moment the rise finished.
+// Expressed as a fraction of PUFF_RISE_S so it plugs into the same
+// normalized `t` the rise already uses.
+const PUFF_SHRINK_S = 1.2;
+const PUFF_SHRINK_FRAC = PUFF_SHRINK_S / PUFF_RISE_S;
 // Live feedback: "bubbles coming from the pipe should have shadows and
 // light effects as cloud spheres" -- PUFF_SHADOW_Y is a fixed height near
 // the roof surface below the chimney (ZoneLandmarks.jsx's CHIMNEY_LOCAL/
@@ -111,6 +118,16 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     // window/gable geometry behind them ends up depth-sorted incorrectly
     // and the puffs disappear behind it instead of blending on top.
     m.depthWrite = false;
+    // Live feedback (round 2): "I can see now how they [the puffs] are
+    // hiding behind the background forest" -- BackgroundForest.jsx's own
+    // sprites use alphaTest (an opaque-queue, depth-writing cutout
+    // technique) at a large distance, and depended on winning the depth
+    // test the OLD way (puffs also writing real depth); depthWrite=false
+    // alone wasn't enough once something else nearby writes depth first.
+    // A small foreground effect like this should just never be occluded by
+    // the distant backdrop at all -- depthTest off, plus a generous
+    // renderOrder so it still draws on top of/after everything else.
+    m.depthTest = false;
     return m;
   }, []);
   // Reuses BlobShadow's own shared radial-alpha texture/tint (same "flat
@@ -198,22 +215,33 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         // disappear, but also let the motion animation end" -- a puff burst
         // still mid-rise from an earlier release kept climbing even while
         // the pipe was held closed again (only the AMBIENT smoke below was
-        // gated by chimneyHeld). Gating both the advance AND `rising` here
+        // gated by chimneyHeld). Gating both the advance AND `active` here
         // makes a fresh press instantly park/hide any puff in flight, not
         // just freeze it floating in place.
-        if (!eggMotion.chimneyHeld && p.t < 1) p.t += dt / PUFF_RISE_S;
-        const rising = !eggMotion.chimneyHeld && p.t >= 0 && p.t < 1;
+        //
+        // Live feedback (round 2): "don't make them just disappear, let
+        // them completely shrink" -- t's own range now extends past 1 into
+        // a shrink tail (1..1+PUFF_SHRINK_FRAC) instead of parking the
+        // instant the rise finishes; rise/sway-drift freeze at their t=1
+        // values (Math.min(p.t,1)) while sway itself keeps using the
+        // unclamped p.t so it keeps gently oscillating through the shrink
+        // instead of freezing solid.
+        if (!eggMotion.chimneyHeld && p.t < 1 + PUFF_SHRINK_FRAC) p.t += dt / PUFF_RISE_S;
+        const active = !eggMotion.chimneyHeld && p.t >= 0 && p.t < 1 + PUFF_SHRINK_FRAC;
+        const shrinkProgress = Math.max(0, Math.min(1, (p.t - 1) / PUFF_SHRINK_FRAC));
+        const scale = p.radius * (1 - shrinkProgress);
         let px = chimneyPos[0];
         let pz = chimneyPos[2];
-        if (rising) {
-          const rise = p.t * 1.5;
+        if (active) {
+          const riseT = Math.min(p.t, 1);
+          const rise = riseT * 1.5;
           const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
-          const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
-          const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
+          const windDriftX = wind.direction[0] * wind.strength * riseT * 0.5;
+          const windDriftZ = wind.direction[2] * wind.strength * riseT * 0.5;
           px = chimneyPos[0] + sway + windDriftX;
           pz = chimneyPos[2] + sway * 0.6 + windDriftZ;
           dummy.position.set(px, chimneyPos[1] + rise, pz);
-          dummy.scale.setScalar(p.radius);
+          dummy.scale.setScalar(scale);
         } else {
           // Still waiting its own stagger delay, or already done -- parked
           // well below the ground either way.
@@ -227,11 +255,12 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         // Live feedback: "bubbles... should have shadows... as cloud
         // spheres" -- same technique Sky.jsx's cloudShadowRef uses, tracking
         // this same puff's own sway/wind but pinned to a fixed height near
-        // the roof surface instead of following its rise.
+        // the roof surface instead of following its rise. Shrinks in sync
+        // with the puff above.
         if (puffShadowRef.current) {
-          if (rising) {
+          if (active) {
             shadowDummy.position.set(px, chimneyPos[1] + PUFF_SHADOW_Y_OFFSET, pz);
-            shadowDummy.scale.setScalar(p.radius * 2.2);
+            shadowDummy.scale.setScalar(scale * 2.2);
           } else {
             shadowDummy.position.set(chimneyPos[0], -5, chimneyPos[2]);
             shadowDummy.scale.setScalar(0.001);
@@ -380,7 +409,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
           meshes now (not Points) since each one needs its own independent
           size -- a PointsMaterial's `size` is one shared value for the
           whole pool, which can't express "vary by +/-20% each". */}
-      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]} material={puffMaterial}>
+      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]} material={puffMaterial} renderOrder={2}>
         <sphereGeometry args={[1, 10, 8]} />
       </instancedMesh>
       {/* Live feedback: "sits down on the stool by the window and knits" --
