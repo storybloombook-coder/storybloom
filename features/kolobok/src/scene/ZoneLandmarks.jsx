@@ -194,15 +194,32 @@ function IzbaLogWalls({ material }) {
  *  depending on the shared material's own `side` setting (mergeColoredParts
  *  has no per-part side override). Used for the gable end walls below;
  *  oriented by the caller's own rotation param if its wall doesn't already
- *  face +/-Z. */
+ *  face +/-Z.
+ *
+ *  Needs a `uv` attribute AND an index (even a trivial pass-through one)
+ *  because mergeColoredParts' mergeGeometries requires every part to share
+ *  the exact same attribute set and be either all-indexed or all
+ *  non-indexed -- BoxGeometry/CylinderGeometry (the other parts merged
+ *  alongside this one) are both, and a plain non-indexed geometry here
+ *  broke that merge at runtime (only caught on-device, since a bundle
+ *  export never actually executes the Three.js scene graph). The index is
+ *  a 1:1 identity over the 6 vertices (not a shared/deduplicated index) so
+ *  computeVertexNormals still gives each triangle its own independent
+ *  normal, exactly as the non-indexed version did. */
 function makeTriangleGeometry(width, height) {
   const hw = width / 2;
   const positions = new Float32Array([
     -hw, 0, 0, hw, 0, 0, 0, height, 0,
     -hw, 0, 0, 0, height, 0, hw, 0, 0,
   ]);
+  const uvs = new Float32Array([
+    0, 0, 1, 0, 0.5, 1,
+    0, 0, 0.5, 1, 1, 0,
+  ]);
   const geo = new BufferGeometry();
   geo.setAttribute('position', new BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new BufferAttribute(uvs, 2));
+  geo.setIndex([0, 1, 2, 3, 4, 5]);
   geo.computeVertexNormals();
   return geo;
 }
