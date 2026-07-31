@@ -77,6 +77,16 @@ const ROOF_SLOPE_LEN = Math.hypot(ROOF_HALF_SPAN_X, ROOF_RIDGE_Y - ROOF_EAVE_Y);
 const GABLE_WIDTH = WALL_W; // triangular end wall, flush with the front/back wall's own width
 const GABLE_Z = WALL_D / 2; // flush with the door/window wall's own outer face
 const ROOF_BASE_COLOR = '#a5602f';
+// Live feedback: "two empty triangles... must be filled with logs of the
+// appropriate size" -- GABLE_LOG_ROWS*2*GABLE_LOG_R exactly fills the
+// wall-top-to-ridge height, so the stacked log courses below (see
+// IzbaLogWalls) reach the apex with no leftover gap.
+const GABLE_LOG_ROWS = 4;
+const GABLE_LOG_R = (ROOF_RIDGE_Y - WALL_TOP_Y) / (GABLE_LOG_ROWS * 2);
+// Small ridge log covering the seam where the two slabs/tile courses meet.
+const ROOF_RIDGE_CAP_R = 0.08;
+const ROOF_RIDGE_CAP_LEN = ROOF_RIDGE_HALF_LEN * 2 + 0.1; // small butt-end overhang past the rake ends
+const ROOF_RIDGE_CAP_COLOR = '#8f4f26';
 
 // Live feedback: "no gaps between the roof tiles... tiles should not
 // overlap each other... shouldn't extend beyond the edges of the roof" --
@@ -130,6 +140,34 @@ function IzbaLogWalls({ material }) {
         tints.push(0.92 + rng() * 0.16);
       }
     });
+    // Live feedback: "two empty triangles... must be filled with logs of
+    // the appropriate size" -- the gable ends (above the front/back walls,
+    // see makeIzbaRoofBase) were a single flat painted panel. Stacked here
+    // with progressively shorter courses (radius picked so GABLE_LOG_ROWS
+    // exactly fills the gable's own height, see GABLE_LOG_R's own comment),
+    // continuing the same log wall upward and flush with the SAME z plane
+    // the wall logs already sit at (mirrors FRONT_BACK_LOG_LEN's own
+    // "pulled in by radius so the outer bulge reaches back out to the
+    // original flat face" convention). Reuses this instancedMesh's shared
+    // unit-radius geometry via a non-uniform scale (x/z shrink the radius,
+    // y is still the length axis) rather than a second draw call. The flat
+    // panel stays underneath as a sealed backing, same role the roof's own
+    // backing slab plays for its tile overlay.
+    [1, -1].forEach((side) => {
+      for (let i = 0; i < GABLE_LOG_ROWS; i += 1) {
+        const tCenter = (i + 0.5) / GABLE_LOG_ROWS;
+        const y = WALL_TOP_Y + i * GABLE_LOG_R * 2 + GABLE_LOG_R;
+        const rowLen = GABLE_WIDTH * (1 - tCenter);
+        const lenVariance = 1 + (rng() * 2 - 1) * 0.04;
+        const radiusScale = GABLE_LOG_R / LOG_R;
+        d.position.set(0, y, side * (GABLE_Z - GABLE_LOG_R));
+        d.rotation.set(0, 0, Math.PI / 2); // gables sit above the front/back walls, which run along X
+        d.scale.set(radiusScale, rowLen * lenVariance, radiusScale);
+        d.updateMatrix();
+        list.push(d.matrix.clone());
+        tints.push(0.92 + rng() * 0.16);
+      }
+    });
     return { matrices: list, tints };
   }, []);
 
@@ -176,7 +214,11 @@ function makeTriangleGeometry(width, height) {
  *  filling the wall-top-to-ridge gap above each of the two door/window
  *  walls (already flat in the XY plane facing +/-Z, so no rotation needed
  *  there). Kept underneath the tile overlay so no gaps between individual
- *  tiles show through to empty space. One draw call via mergeColoredParts. */
+ *  tiles show through to empty space. Also includes the ridge cap log
+ *  (live feedback: "the top joint where the roof halves meet must be
+ *  covered with a cap") -- a log straddling the peak along the SAME Z axis
+ *  the ridge itself runs along, covering the seam where the two tile
+ *  courses meet. One draw call via mergeColoredParts. */
 function makeIzbaRoofBase() {
   const parts = [];
   [1, -1].forEach((side) => {
@@ -193,6 +235,15 @@ function makeIzbaRoofBase() {
       color: ROOF_BASE_COLOR,
       position: [0, WALL_TOP_Y, side * GABLE_Z],
     });
+  });
+  parts.push({
+    // A cylinder's own length runs along local Y by default -- rotate
+    // 90deg around X to lie along Z, matching the ridge's own direction
+    // (same idiom IzbaLogWalls uses for its own runAlong='z' walls).
+    geometry: new CylinderGeometry(ROOF_RIDGE_CAP_R, ROOF_RIDGE_CAP_R, ROOF_RIDGE_CAP_LEN, 8),
+    color: ROOF_RIDGE_CAP_COLOR,
+    position: [0, ROOF_RIDGE_Y + ROOF_RIDGE_CAP_R * 0.5, 0],
+    rotation: [Math.PI / 2, 0, 0],
   });
   return mergeColoredParts(parts);
 }
