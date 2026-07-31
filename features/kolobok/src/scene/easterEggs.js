@@ -136,15 +136,6 @@ function runMoonWink(ctx) {
   ]);
 }
 
-// ---------------------------------------------------------------- smoke-rings
-
-function runSmokeRings(ctx) {
-  eggMotion.chimneySmokeBurst += 1;
-  return createTimeline([
-    { at: 0, call: () => {} },
-  ]);
-}
-
 const REGISTRY = [
   { id: 'grandpa-fishing', target: 'grandpa', count: 1, windowMs: 0, cooldownMs: 8000, run: runFishing },
 ];
@@ -233,8 +224,19 @@ export const eggManager = {
   tapMoon() {
     return attemptFire('moon-wink', 15000, runMoonWink, 'moon-wink');
   },
+  // Live feedback: "make the smoke start as soon as you lift your finger" --
+  // this used to route through attemptFire's shared 10s-per-key cooldown,
+  // which silently swallowed the burst on every release that came within
+  // 10s of the last one (exactly what a press-hold-release gesture invites,
+  // unlike a rare triple-tap). Made fully self-contained instead, matching
+  // cloud-rain/hedgehog's own "no cooldown, no shared active slot" pattern
+  // above -- every release now fires, no exceptions.
   tapChimney() {
-    return attemptFire('smoke-rings', 10000, runSmokeRings, 'smoke-rings');
+    eggMotion.chimneySmokeBurst += 1;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    useSceneStore.getState().recordEggFound('smoke-rings');
+    useSceneStore.getState().onEasterEgg?.('smoke-rings');
+    return true;
   },
 
   tick(dt) {

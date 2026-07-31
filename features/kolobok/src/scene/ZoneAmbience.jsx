@@ -36,9 +36,17 @@ const PUFF_RISE_S = 3;
 // picks back up mid-flow rather than restarting) for this whole window,
 // comfortably longer than the 3 bubbles' own ~3.6s rise+stagger.
 const SMOKE_SUPPRESS_S = 6;
+// Live feedback: "if possible, make the smoke fade in and out smoothly" --
+// both the press-triggered hide and the post-6s reappear used to be a hard
+// `visible = true/false` snap. Eased via opacity instead: SMOKE_BASE_OPACITY
+// is the pointsMaterial's normal resting opacity, and each frame nudges
+// toward 0 (suppressed) or back to base over SMOKE_FADE_S.
+const SMOKE_BASE_OPACITY = 0.55;
+const SMOKE_FADE_S = 0.5;
 
 export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) {
   const smokeRef = useRef();
+  const smokeMaterialRef = useRef();
   const grandmaRef = useRef();
   const birdRef = useRef();
 
@@ -63,6 +71,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     // -1 = normal smoke showing as usual; 0..SMOKE_SUPPRESS_S seconds =
     // counting up while normal smoke stays hidden.
     smokeSuppressS: -1,
+    smokeOpacity: SMOKE_BASE_OPACITY,
   });
 
   const grandmaGeometry = useMemo(() => mergeColoredParts([
@@ -155,7 +164,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     // --- Chimney smoke: always on, +30% spawn rate when active, and the
     // story's birth/rebirth beats double it (storyMotion.smokeBoost) ---
     if (smokeRef.current) {
-      smokeRef.current.visible = !smokeSuppressed;
+      const targetOpacity = smokeSuppressed ? 0 : SMOKE_BASE_OPACITY;
+      pu.smokeOpacity += (targetOpacity - pu.smokeOpacity) * Math.min(1, dt / SMOKE_FADE_S);
+      smokeRef.current.visible = pu.smokeOpacity > 0.01;
+      if (smokeMaterialRef.current) smokeMaterialRef.current.opacity = pu.smokeOpacity;
       const rate = (isActiveZone ? 1.3 : 1) * storyMotion.smokeBoost;
       const positions = smokeGeometry.attributes.position;
       smokeState.current.forEach((p, i) => {
@@ -246,7 +258,14 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   return (
     <group>
       <points ref={smokeRef} geometry={smokeGeometry}>
-        <pointsMaterial color="#c8c4bc" size={0.18} transparent opacity={0.55} depthWrite={false} />
+        <pointsMaterial
+          ref={smokeMaterialRef}
+          color="#c8c4bc"
+          size={0.18}
+          transparent
+          opacity={SMOKE_BASE_OPACITY}
+          depthWrite={false}
+        />
       </points>
       {/* Chimney smoke spheres (live feedback, reworked): actual sphere
           meshes now (not Points) since each one needs its own independent

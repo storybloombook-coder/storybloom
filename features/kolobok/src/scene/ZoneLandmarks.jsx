@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
-  BoxGeometry, ConeGeometry, CylinderGeometry, DoubleSide, Euler,
-  Object3D, Quaternion, SphereGeometry, Vector3,
+  BoxGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide,
+  Object3D, SphereGeometry, Vector3,
 } from 'three';
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
@@ -91,10 +91,17 @@ const HANGING_GRASS_COLOR = '#3f6b2a';
  *  instancedMesh (one draw call) since every log shares the same radius --
  *  only position/rotation/length (via Y-scale on a unit-length cylinder)
  *  differ per instance. */
+const izbaLogColorTmp = new Color();
+
 function IzbaLogWalls({ material }) {
-  const matrices = useMemo(() => {
+  const built = useMemo(() => {
     const list = [];
+    const tints = [];
     const d = new Object3D();
+    // Live feedback: "make each log vary by 3-5% in length and slightly in
+    // texture" -- seeded so placement stays stable across reloads (matches
+    // this codebase's own convention for anything randomized).
+    const rng = makeRng(777);
     const walls = [
       { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: WALL_D / 2 - LOG_R },
       { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: -(WALL_D / 2 - LOG_R) },
@@ -104,38 +111,40 @@ function IzbaLogWalls({ material }) {
     walls.forEach((w) => {
       for (let i = 0; i < LOG_ROWS; i += 1) {
         const y = LOG_R + i * LOG_R * 2;
+        const lenVariance = 1 + (rng() * 2 - 1) * 0.04; // +/-4%, within the asked 3-5%
         d.position.set(w.x, y, w.z);
         // A cylinder's own length runs along local Y by default -- rotate
         // 90deg around Z to lie along world X, or around X to lie along Z.
         if (w.runAlong === 'x') d.rotation.set(0, 0, Math.PI / 2);
         else d.rotation.set(Math.PI / 2, 0, 0);
-        d.scale.set(1, w.len, 1);
+        d.scale.set(1, w.len * lenVariance, 1);
         d.updateMatrix();
         list.push(d.matrix.clone());
+        // "Slightly in texture" -- a small per-log brightness multiplier
+        // (not a hue shift) riding on top of the shared bark texture/map,
+        // reading as natural per-log tone variation.
+        tints.push(0.92 + rng() * 0.16);
       }
     });
-    return list;
+    return { matrices: list, tints };
   }, []);
 
   return (
     <instancedMesh
-      args={[undefined, undefined, matrices.length]}
+      args={[undefined, undefined, built.matrices.length]}
       material={material}
       ref={(mesh) => {
         if (!mesh) return;
-        matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+        built.matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
         mesh.instanceMatrix.needsUpdate = true;
+        built.tints.forEach((b, i) => mesh.setColorAt(i, izbaLogColorTmp.setScalar(b)));
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }}
     >
       <cylinderGeometry args={[LOG_R, LOG_R, 1, 8]} />
     </instancedMesh>
   );
 }
-
-const roofNormalTmp = new Vector3();
-const ROOF_UP = new Vector3(0, 1, 0);
-const roofQuatTmp = new Quaternion();
-const roofEulerTmp = new Euler();
 
 /** "Make the roof look like it's made of 3D tile elements" -- small flat
  *  tiles in shrinking rings from base to apex, each oriented flush against
@@ -150,28 +159,55 @@ function makeIzbaRoofTiles() {
   const slantLen = Math.sqrt(ROOF_BASE_R ** 2 + ROOF_HEIGHT ** 2);
   const normalR = ROOF_HEIGHT / slantLen;
   const normalY = ROOF_BASE_R / slantLen;
+  // Live feedback: "the roof tiles shouldn't extend beyond the edges of the
+  // previous roof, and viewed from above the roof and tiles should all be
+  // within a single square" -- the old version placed tiles on CIRCULAR
+  // rings, but a 4-segment cone is actually a SQUARE pyramid (its own
+  // `radius` param is the CORNER distance; a face's MIDPOINT sits closer in,
+  // at radius*cos(45deg)) -- a circle at the corner radius bulges outside
+  // the flat faces everywhere except exactly at the 4 corners. Rewritten to
+  // place tiles PER FACE, linearly across that face's own true flat width
+  // (halfWidth = apothem, exactly, since tan(45deg)=1 for a square), which
+  // stays inside the square by construction. `pitch` (tilt around local X)
+  // then `faceCenterAngle` (yaw around Y) is the SAME "[tilt, yaw, 0]"
+  // composition PondAndGrandpa.jsx's willow fronds already use -- chosen
+  // over setFromUnitVectors specifically because a plain X-then-Y rotation
+  // leaves the box's OWN local X axis exactly aligned with this same
+  // "sideways across the face" direction afterward (verified algebraically),
+  // so neighboring tiles' long edges line up instead of each being
+  // arbitrarily spun around the slope's own normal.
+  const pitch = Math.atan2(normalR, normalY);
   const parts = [];
   for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
     const t = (row / (ROOF_TILE_ROWS - 1)) * ROOF_TILE_MAX_T;
-    const ringR = ROOF_BASE_R * (1 - t);
+    const apothem = ROOF_BASE_R * (1 - t) * Math.cos(Math.PI / 4);
+    const halfWidth = apothem;
     const y = -ROOF_HEIGHT / 2 + t * ROOF_HEIGHT;
-    const circumference = 2 * Math.PI * Math.max(0.05, ringR);
-    const count = Math.max(4, Math.round(circumference / ROOF_TILE_SPACING));
-    const rowOffset = (row % 2) * (Math.PI / count); // stagger alternate rows
-    for (let i = 0; i < count; i += 1) {
-      const angle = (i / count) * Math.PI * 2 + rowOffset;
-      const x = Math.sin(angle) * ringR;
-      const z = Math.cos(angle) * ringR;
-      roofNormalTmp.set(Math.sin(angle) * normalR, normalY, Math.cos(angle) * normalR).normalize();
-      roofQuatTmp.setFromUnitVectors(ROOF_UP, roofNormalTmp);
-      roofEulerTmp.setFromQuaternion(roofQuatTmp);
-      const tileScale = 0.6 + 0.4 * (1 - t); // smaller tiles near the apex
-      parts.push({
-        geometry: new BoxGeometry(ROOF_TILE_W * tileScale, ROOF_TILE_THICK, ROOF_TILE_H * tileScale),
-        color: (row + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
-        position: [x, y, z],
-        rotation: [roofEulerTmp.x, roofEulerTmp.y, roofEulerTmp.z],
-      });
+    const faceWidth = halfWidth * 2;
+    const count = Math.max(1, Math.round(faceWidth / ROOF_TILE_SPACING));
+    const step = faceWidth / count;
+    const tileScale = 0.6 + 0.4 * (1 - t); // smaller tiles near the apex
+    for (let faceIdx = 0; faceIdx < 4; faceIdx += 1) {
+      const faceCenterAngle = faceIdx * (Math.PI / 2);
+      const sinC = Math.sin(faceCenterAngle);
+      const cosC = Math.cos(faceCenterAngle);
+      const sinS = Math.sin(faceCenterAngle + Math.PI / 2);
+      const cosS = Math.cos(faceCenterAngle + Math.PI / 2);
+      const rowStagger = (row % 2) * (step * 0.5); // stagger alternate rows, like real shingles
+      for (let i = 0; i < count; i += 1) {
+        const sRaw = -halfWidth + (i + 0.5) * step + rowStagger;
+        // Clamp so the stagger offset can't push a tile past this face's
+        // own true edge (back into circle-overflow territory).
+        const s = Math.max(-halfWidth + step * 0.15, Math.min(halfWidth - step * 0.15, sRaw));
+        const x = sinC * apothem + sinS * s;
+        const z = cosC * apothem + cosS * s;
+        parts.push({
+          geometry: new BoxGeometry(ROOF_TILE_W * tileScale, ROOF_TILE_THICK, ROOF_TILE_H * tileScale),
+          color: (row + faceIdx + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
+          position: [x, y, z],
+          rotation: [pitch, faceCenterAngle, 0],
+        });
+      }
     }
   }
   return mergeColoredParts(parts);
@@ -218,6 +254,98 @@ function makeIzbaRoofTrim() {
       });
     }
   }
+  return mergeColoredParts(parts);
+}
+
+// Live feedback: "hang a rake and a shovel on the wall facing the lake" --
+// derived the same way zones.js itself lays zones out: izba sits at angle 0
+// (pos [0,0,ZONE_RADIUS]), the pond sits at POND_ANGLE_DEG (324deg) at
+// POND_RADIUS -- the world vector from izba toward the pond, rotated into
+// this group's own local frame (rotation.y = a+PI = PI here, so local =
+// (-worldX, -worldZ)), comes out dominant on LOCAL +X. That's the SIDE wall
+// (the one running along Z, logs centered at x=+/-(WALL_W/2-LOG_R)) -- its
+// outer face sits flush at x=WALL_W/2 (see IzbaLogWalls' own comment), so
+// the tools mount just proud of that.
+const TOOLS_WALL_X = WALL_W / 2 + 0.03;
+const TOOL_HANDLE_COLOR = '#8a6a42';
+const TOOL_METAL_COLOR = '#8b8f94';
+
+/** Rake + shovel, hung flat against the lake-facing wall. Static, one
+ *  draw call via mergeColoredParts. */
+function makeIzbaWallTools() {
+  const parts = [];
+  const shovelZ = -0.28;
+  const shovelHandleLen = 0.6;
+  const toolsTopY = 1.0;
+  parts.push({
+    geometry: new CylinderGeometry(0.014, 0.014, shovelHandleLen, 6),
+    color: TOOL_HANDLE_COLOR,
+    position: [TOOLS_WALL_X, toolsTopY - shovelHandleLen / 2, shovelZ],
+    rotation: [0, 0, 0.07],
+  });
+  parts.push({
+    geometry: new BoxGeometry(0.03, 0.2, 0.15),
+    color: TOOL_METAL_COLOR,
+    position: [TOOLS_WALL_X, toolsTopY - shovelHandleLen - 0.08, shovelZ],
+  });
+
+  const rakeZ = 0.28;
+  const rakeHandleLen = 0.66;
+  parts.push({
+    geometry: new CylinderGeometry(0.013, 0.013, rakeHandleLen, 6),
+    color: TOOL_HANDLE_COLOR,
+    position: [TOOLS_WALL_X, toolsTopY - rakeHandleLen / 2, rakeZ],
+    rotation: [0, 0, -0.06],
+  });
+  const rakeHeadY = toolsTopY - rakeHandleLen;
+  parts.push({
+    geometry: new BoxGeometry(0.02, 0.02, 0.26),
+    color: TOOL_METAL_COLOR,
+    position: [TOOLS_WALL_X, rakeHeadY, rakeZ],
+  });
+  const tineCount = 5;
+  for (let i = 0; i < tineCount; i += 1) {
+    const tz = rakeZ - 0.12 + (i / (tineCount - 1)) * 0.24;
+    parts.push({
+      geometry: new CylinderGeometry(0.006, 0.006, 0.09, 4),
+      color: TOOL_METAL_COLOR,
+      position: [TOOLS_WALL_X, rakeHeadY - 0.045, tz],
+    });
+  }
+  return mergeColoredParts(parts);
+}
+
+// Live feedback: "place a bench to the left of the door... a blob-shaped
+// shadow" -- the door sits at local [0,0.675,-0.66], flush against the
+// front wall's own outer face (z=-WALL_D/2=-0.65). "Left" reasoned as
+// stage-left when facing the door FROM OUTSIDE the house (looking toward
+// +z), i.e. local -X. Positioned as its own offset group in the JSX (not
+// baked into the merged geometry) specifically so a BlobShadow -- which
+// always renders at ITS OWN parent's local origin, no x/z offset prop --
+// can sit right under it.
+const BENCH_X = -0.55;
+const BENCH_Z = -0.95;
+const BENCH_SEAT_Y = 0.26;
+const BENCH_COLOR = '#8a6a42';
+
+/** Simple slab-seat-on-four-legs bench. Static, one draw call. */
+function makeIzbaBench() {
+  const parts = [];
+  parts.push({
+    geometry: new BoxGeometry(0.5, 0.04, 0.18),
+    color: BENCH_COLOR,
+    position: [0, BENCH_SEAT_Y, 0],
+  });
+  const legHeight = BENCH_SEAT_Y - 0.02;
+  [-0.21, 0.21].forEach((lx) => {
+    [-0.06, 0.06].forEach((lz) => {
+      parts.push({
+        geometry: new BoxGeometry(0.03, legHeight, 0.03),
+        color: BENCH_COLOR,
+        position: [lx, legHeight / 2, lz],
+      });
+    });
+  });
   return mergeColoredParts(parts);
 }
 
@@ -321,19 +449,28 @@ function Landmark({ zone }) {
   // Izba walls/roof are VISUAL_QUALITY_SPEC §1 hero surfaces (0.2 rim
   // strength -- "buildings/stone", not "characters").
   const izbaMaterials = useMemo(() => (zone.id === 'izba' ? {
-    // Live feedback: "build the walls out of logs" -- a real bark texture
-    // now carries the whole look (ART_SPEC §4's own #b3844f log color), so
-    // color is neutral white rather than zone.color (the old flat wall's
-    // only source of color) to avoid double-tinting the texture.
-    logs: makeToonMaterial({ map: makeNoiseGrain('#b3844f', 0.1), color: '#ffffff', rimStrength: 0.2 }),
+    // Live feedback: "make sure the logs show light and shadow, just like
+    // the characters" -- passing white here (rather than the log's own
+    // color, ART_SPEC §4's #b3844f) fed a washed-out white into
+    // makeToonMaterial's own toon-ramp seed (it uses `color` to build the
+    // light/shadow gradient regardless of vertexColors/map), so the shadow
+    // band came out desaturated gray instead of a properly darkened brown.
+    // CrossroadsStone.jsx/Hedgehog.jsx/Kolobok.jsx's own map+color materials
+    // all pass their texture's matching base color the same way this now
+    // does, not white.
+    logs: makeToonMaterial({ map: makeNoiseGrain('#b3844f', 0.1), color: '#b3844f', rimStrength: 0.2 }),
     roof: makeToonMaterial({ color: '#a5602f', rimStrength: 0.2 }),
     roofTiles: makeToonMaterial({ vertexColors: true, color: '#a5602f', rimStrength: 0.2 }),
     roofTrim: makeToonMaterial({ vertexColors: true, color: '#5a7a3e', rimStrength: 0.15 }),
     chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
+    tools: makeToonMaterial({ vertexColors: true, color: TOOL_HANDLE_COLOR, rimStrength: 0.2 }),
+    bench: makeToonMaterial({ vertexColors: true, color: BENCH_COLOR, rimStrength: 0.2 }),
   } : null), [zone.id]);
 
   const roofTileGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTiles() : null), [zone.id]);
   const roofTrimGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTrim() : null), [zone.id]);
+  const toolsGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaWallTools() : null), [zone.id]);
+  const benchGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaBench() : null), [zone.id]);
 
   const mode = encounter?.id === zone.id
     ? (encounter.phase === 'retreat' ? 'retreat' : 'encounter')
@@ -438,6 +575,15 @@ function Landmark({ zone }) {
           <IzbaChimney material={izbaMaterials.chimney} />
           <IzbaWindow />
           <IzbaDoor />
+          {toolsGeometry && (
+            <mesh geometry={toolsGeometry} material={izbaMaterials.tools} />
+          )}
+          {benchGeometry && (
+            <group position={[BENCH_X, 0, BENCH_Z]}>
+              <mesh geometry={benchGeometry} material={izbaMaterials.bench} />
+              <BlobShadow radiusX={0.3} radiusZ={0.16} />
+            </group>
+          )}
         </>
       ) : (
         <Character mode={mode} isActiveZone={isActive} />

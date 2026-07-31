@@ -206,30 +206,47 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // over-measured and split the layout in an earlier attempt) and don't
   // mount the Canvas until we can hand it that exact pixel size, so the
   // surface is born full-size and only ever fades in.
-  // Live feedback (still reported after the above): "the scene ratio is
-  // jumping when switching between menus" -- nested flex:1 containers
-  // (this root -> MainScreen's own root -> the host route) can settle their
-  // OWN layout across a couple of passes during a navigation/mode-switch
-  // transition, each with a slightly different measured size; the guard
-  // above only skipped an update when the size was byte-for-byte IDENTICAL
-  // to the previous one, so a multi-step settle still drove the Canvas
-  // through several visible resizes. The FIRST measurement (canvasSize
-  // still null) is still applied immediately -- only later, already-
-  // mounted re-measurements get debounced, so a settling reflow commits
-  // once after things stop moving instead of on every intermediate step.
+  // Live feedback (still reported, worse than described): "switch between 2d
+  // and 3d is not done fully" -- a screenshot showed the Canvas PERMANENTLY
+  // stuck at a too-narrow width (not a transient jump that settles). Root
+  // cause: onLayout can fire mid-transition with a stale/transient
+  // measurement, and since nothing else about this View's own layout
+  // changes afterward, onLayout simply never fires again to correct it --
+  // the debounce below only helps when a SECOND onLayout event actually
+  // arrives, which isn't guaranteed. Fix: independently re-verify the real
+  // current size a few times over the following ~1.5s via the root View's
+  // own measureInWindow (an imperative, on-demand measurement, NOT another
+  // onLayout-driven callback) and correct if it disagrees with what's
+  // currently applied -- a "trust but verify" safety net on top of the
+  // existing onLayout path rather than a replacement for it.
   const [canvasSize, setCanvasSize] = useState(null);
   const canvasSizeTimer = useRef(null);
+  const rootViewRef = useRef(null);
+  const recheckTimers = useRef([]);
   useEffect(() => () => {
     if (canvasSizeTimer.current) clearTimeout(canvasSizeTimer.current);
+    recheckTimers.current.forEach(clearTimeout);
   }, []);
+  const applyCanvasSize = (width, height) => {
+    setCanvasSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+  };
+  const scheduleRecheck = () => {
+    recheckTimers.current.forEach(clearTimeout);
+    recheckTimers.current = [150, 500, 1200].map((delay) => setTimeout(() => {
+      rootViewRef.current?.measureInWindow((_x, _y, w, h) => {
+        if (w > 0 && h > 0) applyCanvasSize(w, h);
+      });
+    }, delay));
+  };
   const onRootLayout = (e) => {
     const { width, height } = e.nativeEvent.layout;
-    const commit = () => {
-      setCanvasSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
-    };
     if (canvasSizeTimer.current) clearTimeout(canvasSizeTimer.current);
-    if (canvasSize === null) commit();
-    else canvasSizeTimer.current = setTimeout(commit, 120);
+    if (canvasSize === null) {
+      applyCanvasSize(width, height);
+      scheduleRecheck();
+    } else {
+      canvasSizeTimer.current = setTimeout(() => applyCanvasSize(width, height), 120);
+    }
   };
 
   const onMainMenu = () => requestNavigation('/');
@@ -247,7 +264,7 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   const bubbleText = narration ?? encounter?.line;
 
   return (
-    <View style={styles.root} onLayout={onRootLayout}>
+    <View ref={rootViewRef} style={styles.root} onLayout={onRootLayout}>
       <View style={StyleSheet.absoluteFill} collapsable={false}>
         {canvasSize ? (
           <Canvas
