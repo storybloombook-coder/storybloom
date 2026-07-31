@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import {
-  BoxGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide,
-  Object3D, SphereGeometry, Vector3,
+  BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide,
+  Object3D, Vector3,
 } from 'three';
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
@@ -53,39 +53,43 @@ const WALL_D = 1.3; // matches the old flat box's own depth
 const FRONT_BACK_LOG_LEN = WALL_W + LOG_R * 2 * 1.1; // "corners protrude" past the side walls
 const SIDE_LOG_LEN = WALL_D + LOG_R * 2 * 1.1;
 
-const ROOF_BASE_R = 1.35; // matches the existing backing cone
-const ROOF_HEIGHT = 0.9;
-const ROOF_Y = 1.75;
-// "3D tile elements": rings of small overlapping tile pieces hugging the
-// backing cone's own sloped surface (kept underneath, unlit gaps between
-// tiles would otherwise show through to empty space) rather than one smooth
-// face. Ring-based (not matched to the cone's exact 4 flat faces) -- much
-// simpler than deriving each face's own plane, and at this size/distance
-// reads the same either way.
+// Live feedback: "make the roof out of two sides that converge at the top,
+// like a traditional log cabin" -- a true gable (A-frame) roof, replacing
+// the old 4-sided cone/pyramid. The ridge runs along local X, parallel to
+// the LONGER front/back walls (WALL_W=1.7 > WALL_D=1.3), matching real log
+// cabins where the ridge follows the building's long axis and the gable
+// (triangular) ends cap the two SHORTER side walls -- which is also where
+// the wall-mounted tools already hang, well below the roof line, so there's
+// no conflict. All Y values below are absolute in this group's own local
+// frame (not relative to a separate roof-group offset), matching how
+// door/window/chimney already place themselves directly.
+const WALL_TOP_Y = LOG_ROWS * LOG_R * 2; // exact top of the log stack (1.10)
+const ROOF_EAVE_Y = 1.15; // small soffit gap above the wall top
+const ROOF_RIDGE_Y = 1.75; // peak height
+const ROOF_HALF_SPAN_Z = WALL_D / 2 + 0.12; // eave overhang past the front/back walls
+const ROOF_RIDGE_HALF_LEN = WALL_W / 2 + 0.1; // rake overhang past the gable ends
+const ROOF_SLAB_THICK = 0.035;
+const ROOF_PITCH = Math.atan2(ROOF_RIDGE_Y - ROOF_EAVE_Y, ROOF_HALF_SPAN_Z);
+const ROOF_SLOPE_LEN = Math.hypot(ROOF_HALF_SPAN_Z, ROOF_RIDGE_Y - ROOF_EAVE_Y);
+const GABLE_WIDTH = WALL_D; // triangular end wall, flush with the true wall footprint
+const GABLE_X = WALL_W / 2; // flush with the side wall's own outer log face
+const ROOF_BASE_COLOR = '#a5602f';
+
+// "3D tile elements": rows of small overlapping tiles lying flush on each of
+// the two flat roof slabs (a plain rectangle now, not a shrinking pyramid
+// face, so tiles don't need to taper toward the ridge the way the old
+// per-face pyramid version did).
 const ROOF_TILE_ROWS = 6;
-const ROOF_TILE_MAX_T = 0.82; // stop short of the apex so tiles don't shrink to nothing
+const ROOF_TILE_MAX_T = 0.82; // stop short of the ridge so tiles don't cross into the other slope
 const ROOF_TILE_W = 0.24;
 const ROOF_TILE_H = 0.2;
 const ROOF_TILE_THICK = 0.02;
-// approx arc-length between tile centers in a ring -- ART_SPEC §4 caps the
-// whole izba at ~4k triangles; 0.22 (~137 tiles, 1.6k+ tris on its own)
-// pushed the WHOLE building close to that ceiling once walls/trim/door/
-// window/chimney are added in too, so widened to keep the total comfortable.
+// approx spacing between tile centers across a slab -- ART_SPEC §4 caps the
+// whole izba at ~4k triangles; kept wide enough to stay comfortably under
+// that once walls/door/window/chimney/tools/bench are added in too.
 const ROOF_TILE_SPACING = 0.32;
 const ROOF_TILE_COLOR_A = '#a5602f';
 const ROOF_TILE_COLOR_B = '#8f4f26';
-
-// Moss-mushroom clusters + hanging grass blades along the roof's eave
-// (the backing cone's own base circle, in the SAME local frame as the roof
-// group -- Y=-ROOF_HEIGHT/2 is the cone's base since a Three.js cone is
-// centered on its own local origin).
-const MOSS_COUNT = 9;
-const MOSS_RADIUS = ROOF_BASE_R * 0.98;
-const MOSS_Y_LOCAL = -ROOF_HEIGHT / 2;
-const MOSS_CAP_R = 0.055;
-const MOSS_CAP_COLOR = '#5a7a3e';
-const MOSS_STEM_COLOR = '#3f5a2c';
-const HANGING_GRASS_COLOR = '#3f6b2a';
 
 /** ART_SPEC §4's own log-wall design: 4 walls x 5 stacked cylinders, all one
  *  instancedMesh (one draw call) since every log shares the same radius --
@@ -146,113 +150,96 @@ function IzbaLogWalls({ material }) {
   );
 }
 
-/** "Make the roof look like it's made of 3D tile elements" -- small flat
- *  tiles in shrinking rings from base to apex, each oriented flush against
- *  the roof's own slope via setFromUnitVectors (guarantees correct flush
- *  alignment regardless of the exact pyramid angle, same technique
- *  KolobokParticles.jsx's own ray-direction orientation uses) rather than
- *  hand-derived Euler signs. Alternating rows are angle-offset and
- *  alternating tiles get a slightly darker shade, both just for a less
- *  mechanically regular shingle read. Static -- built once, merged into one
- *  draw call via mergeColoredParts. */
-function makeIzbaRoofTiles() {
-  const slantLen = Math.sqrt(ROOF_BASE_R ** 2 + ROOF_HEIGHT ** 2);
-  const normalR = ROOF_HEIGHT / slantLen;
-  const normalY = ROOF_BASE_R / slantLen;
-  // Live feedback: "the roof tiles shouldn't extend beyond the edges of the
-  // previous roof, and viewed from above the roof and tiles should all be
-  // within a single square" -- the old version placed tiles on CIRCULAR
-  // rings, but a 4-segment cone is actually a SQUARE pyramid (its own
-  // `radius` param is the CORNER distance; a face's MIDPOINT sits closer in,
-  // at radius*cos(45deg)) -- a circle at the corner radius bulges outside
-  // the flat faces everywhere except exactly at the 4 corners. Rewritten to
-  // place tiles PER FACE, linearly across that face's own true flat width
-  // (halfWidth = apothem, exactly, since tan(45deg)=1 for a square), which
-  // stays inside the square by construction. `pitch` (tilt around local X)
-  // then `faceCenterAngle` (yaw around Y) is the SAME "[tilt, yaw, 0]"
-  // composition PondAndGrandpa.jsx's willow fronds already use -- chosen
-  // over setFromUnitVectors specifically because a plain X-then-Y rotation
-  // leaves the box's OWN local X axis exactly aligned with this same
-  // "sideways across the face" direction afterward (verified algebraically),
-  // so neighboring tiles' long edges line up instead of each being
-  // arbitrarily spun around the slope's own normal.
-  const pitch = Math.atan2(normalR, normalY);
+/** A flat isoceles-triangle panel in the local XY plane (base centered on
+ *  the X axis at y=0, apex on the Y axis at (0,height)). Both winding orders
+ *  are included so the panel reads from either viewing direction without
+ *  depending on the shared material's own `side` setting (mergeColoredParts
+ *  has no per-part side override). Used for the gable end walls below,
+ *  rotated 90deg around Y to stand in the ZY plane. */
+function makeTriangleGeometry(width, height) {
+  const hw = width / 2;
+  const positions = new Float32Array([
+    -hw, 0, 0, hw, 0, 0, 0, height, 0,
+    -hw, 0, 0, 0, height, 0, hw, 0, 0,
+  ]);
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** The gable roof's own backing structure: two flat sloped slabs (boxes,
+ *  tilted around local X by +/-ROOF_PITCH) meeting at the ridge, plus a
+ *  flat triangular gable-end wall filling the wall-top-to-ridge gap on each
+ *  of the two ends. Kept underneath the tile overlay so no gaps between
+ *  individual tiles show through to empty space. One draw call via
+ *  mergeColoredParts. */
+function makeIzbaRoofBase() {
   const parts = [];
-  for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
-    const t = (row / (ROOF_TILE_ROWS - 1)) * ROOF_TILE_MAX_T;
-    const apothem = ROOF_BASE_R * (1 - t) * Math.cos(Math.PI / 4);
-    const halfWidth = apothem;
-    const y = -ROOF_HEIGHT / 2 + t * ROOF_HEIGHT;
-    const faceWidth = halfWidth * 2;
-    const count = Math.max(1, Math.round(faceWidth / ROOF_TILE_SPACING));
-    const step = faceWidth / count;
-    const tileScale = 0.6 + 0.4 * (1 - t); // smaller tiles near the apex
-    for (let faceIdx = 0; faceIdx < 4; faceIdx += 1) {
-      const faceCenterAngle = faceIdx * (Math.PI / 2);
-      const sinC = Math.sin(faceCenterAngle);
-      const cosC = Math.cos(faceCenterAngle);
-      const sinS = Math.sin(faceCenterAngle + Math.PI / 2);
-      const cosS = Math.cos(faceCenterAngle + Math.PI / 2);
-      const rowStagger = (row % 2) * (step * 0.5); // stagger alternate rows, like real shingles
-      for (let i = 0; i < count; i += 1) {
-        const sRaw = -halfWidth + (i + 0.5) * step + rowStagger;
-        // Clamp so the stagger offset can't push a tile past this face's
-        // own true edge (back into circle-overflow territory).
-        const s = Math.max(-halfWidth + step * 0.15, Math.min(halfWidth - step * 0.15, sRaw));
-        const x = sinC * apothem + sinS * s;
-        const z = cosC * apothem + cosS * s;
-        parts.push({
-          geometry: new BoxGeometry(ROOF_TILE_W * tileScale, ROOF_TILE_THICK, ROOF_TILE_H * tileScale),
-          color: (row + faceIdx + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
-          position: [x, y, z],
-          rotation: [pitch, faceCenterAngle, 0],
-        });
-      }
-    }
-  }
+  [1, -1].forEach((side) => {
+    parts.push({
+      geometry: new BoxGeometry(ROOF_RIDGE_HALF_LEN * 2, ROOF_SLAB_THICK, ROOF_SLOPE_LEN),
+      color: ROOF_BASE_COLOR,
+      position: [0, (ROOF_RIDGE_Y + ROOF_EAVE_Y) / 2, (side * ROOF_HALF_SPAN_Z) / 2],
+      rotation: [side * ROOF_PITCH, 0, 0],
+    });
+  });
+  [1, -1].forEach((side) => {
+    parts.push({
+      geometry: makeTriangleGeometry(GABLE_WIDTH, ROOF_RIDGE_Y - WALL_TOP_Y),
+      color: ROOF_BASE_COLOR,
+      position: [side * GABLE_X, WALL_TOP_Y, 0],
+      rotation: [0, Math.PI / 2, 0],
+    });
+  });
   return mergeColoredParts(parts);
 }
 
-/** "Small pieces of moss that look like tiny mushrooms, with grass hanging
- *  down from them, along the perimeter of the roof" -- a ring of tiny
- *  mushroom-shaped moss clumps (short stem + squashed cap) hugging the
- *  backing cone's own base/eave, each with a couple of thin blades drooping
- *  down (a Y-flipped cone, apex pointing down, reads as a tapering hanging
- *  blade). Static, merged into one draw call. */
-function makeIzbaRoofTrim() {
-  const rng = makeRng(501);
+/** "Make the roof look like it's made of 3D tile elements... tiles should
+ *  lie on the sides, overlapping and aligned with the sides... shouldn't
+ *  extend beyond the edges of the roof" -- rows of small flat tiles lying
+ *  flush on each of the two roof slabs, each tile sharing the slab's own
+ *  +/-ROOF_PITCH tilt (no yaw needed -- unlike the old 4-face pyramid, a
+ *  slab's width axis IS world X untouched by the pitch rotation). Rows are
+ *  inset from the true eave edge by half a tile's own slope-direction size
+ *  (so the bottom row's outer edge can't overhang past the eave) and capped
+ *  at ROOF_TILE_MAX_T short of the ridge (so the top row can't cross into
+ *  the other slope); each tile's X position is likewise clamped inside the
+ *  slab's own true width. Alternating tiles get a slightly darker shade for
+ *  a less mechanically regular shingle read. Static, one draw call. */
+function makeIzbaRoofTiles() {
   const parts = [];
-  for (let i = 0; i < MOSS_COUNT; i += 1) {
-    const angle = (i / MOSS_COUNT) * Math.PI * 2 + (rng() - 0.5) * 0.3;
-    const x = Math.sin(angle) * MOSS_RADIUS;
-    const z = Math.cos(angle) * MOSS_RADIUS;
-    const s = 0.8 + rng() * 0.5;
-    parts.push({
-      geometry: new CylinderGeometry(0.015 * s, 0.02 * s, 0.04 * s, 5),
-      color: MOSS_STEM_COLOR,
-      position: [x, MOSS_Y_LOCAL + 0.02 * s, z],
+  const rowInset = (ROOF_TILE_H / 2) / ROOF_SLOPE_LEN;
+  const faceWidth = ROOF_RIDGE_HALF_LEN * 2;
+  const count = Math.max(1, Math.round(faceWidth / ROOF_TILE_SPACING));
+  const step = faceWidth / count;
+  for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
+    const t = rowInset + (row / (ROOF_TILE_ROWS - 1)) * (ROOF_TILE_MAX_T - rowInset);
+    const y = ROOF_EAVE_Y + (ROOF_RIDGE_Y - ROOF_EAVE_Y) * t;
+    const zMag = ROOF_HALF_SPAN_Z * (1 - t); // distance from the ridge (z=0) toward the eave
+    const rowStagger = (row % 2) * (step * 0.5); // stagger alternate rows, like real shingles
+    [1, -1].forEach((side) => {
+      // Outward normal of this slab, used to lift tiles just proud of the
+      // backing slab's own surface instead of embedding into it.
+      const liftY = Math.cos(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
+      const liftZ = side * Math.sin(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
+      const z = side * zMag + liftZ;
+      for (let i = 0; i < count; i += 1) {
+        const xRaw = -ROOF_RIDGE_HALF_LEN + (i + 0.5) * step + rowStagger;
+        // Clamp so the stagger offset can't push a tile past this slab's
+        // own true edge.
+        const x = Math.max(
+          -ROOF_RIDGE_HALF_LEN + step * 0.15,
+          Math.min(ROOF_RIDGE_HALF_LEN - step * 0.15, xRaw),
+        );
+        parts.push({
+          geometry: new BoxGeometry(ROOF_TILE_W, ROOF_TILE_THICK, ROOF_TILE_H),
+          color: (row + i) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
+          position: [x, y + liftY, z],
+          rotation: [side * ROOF_PITCH, 0, 0],
+        });
+      }
     });
-    parts.push({
-      geometry: new SphereGeometry(MOSS_CAP_R * s, 6, 5),
-      color: MOSS_CAP_COLOR,
-      scale: [1, 0.55, 1],
-      position: [x, MOSS_Y_LOCAL + 0.045 * s, z],
-    });
-    const bladeCount = 2 + Math.floor(rng() * 2);
-    for (let b = 0; b < bladeCount; b += 1) {
-      const bladeAngle = rng() * Math.PI * 2;
-      const bladeLen = 0.08 + rng() * 0.06;
-      const bx = x + Math.sin(bladeAngle) * 0.03;
-      const bz = z + Math.cos(bladeAngle) * 0.03;
-      parts.push({
-        // ConeGeometry's apex points local +Y by default -- flipping 180deg
-        // around X points the tapering tip DOWN, reading as a hanging blade.
-        geometry: new ConeGeometry(0.008, bladeLen, 4),
-        color: HANGING_GRASS_COLOR,
-        position: [bx, MOSS_Y_LOCAL - bladeLen / 2 + 0.01, bz],
-        rotation: [Math.PI, (rng() - 0.5) * 0.4, 0],
-      });
-    }
   }
   return mergeColoredParts(parts);
 }
@@ -352,12 +339,12 @@ function makeIzbaBench() {
 /** The izba's chimney pipe -- live feedback: "add a pipe so smoke can
  *  escape". ZoneAmbience.jsx's IzbaAmbience already spawns smoke particles
  *  at chimneyPos ([0.55, 1.95, 0.15], its own default) but nothing was ever
- *  there to visibly emit them from. Base embeds into the roof cone's own
- *  slope at that XZ (roof center [0,1.75,0], radius 1.35, height 0.9 ->
- *  surface height there is ~1.82; base sits a bit lower, at 1.65, so it's
- *  solidly buried rather than floating just above the surface); top sits
- *  right at the smoke's own spawn Y (1.95) so smoke reads as coming out of
- *  the opening, not out of thin air above it or from inside a solid pipe.
+ *  there to visibly emit them from. CHIMNEY_LOCAL's XZ (0.55, 0.15) sits
+ *  on the gable roof's own +Z slab, close to the ridge (that slab's surface
+ *  there works out to ~1.63 -- see makeIzbaRoofBase/ROOF_RIDGE_Y/EAVE_Y),
+ *  so the base (1.65) reads as sitting right at the roof line rather than
+ *  floating above it; top sits right at the smoke's own spawn Y (1.95) so
+ *  smoke reads as coming out of the opening, not out of thin air above it.
  *  Live feedback: "I don't see smoke spheres when tapped" -- root cause was
  *  a nested invisible hitbox sphere HERE that could never actually be
  *  reached: the Landmark's own generous whole-zone hitbox (radius 1.7,
@@ -459,16 +446,15 @@ function Landmark({ zone }) {
     // all pass their texture's matching base color the same way this now
     // does, not white.
     logs: makeToonMaterial({ map: makeNoiseGrain('#b3844f', 0.1), color: '#b3844f', rimStrength: 0.2 }),
-    roof: makeToonMaterial({ color: '#a5602f', rimStrength: 0.2 }),
+    roof: makeToonMaterial({ vertexColors: true, color: ROOF_BASE_COLOR, rimStrength: 0.2 }),
     roofTiles: makeToonMaterial({ vertexColors: true, color: '#a5602f', rimStrength: 0.2 }),
-    roofTrim: makeToonMaterial({ vertexColors: true, color: '#5a7a3e', rimStrength: 0.15 }),
     chimney: makeToonMaterial({ color: '#6b5d52', rimStrength: 0.2 }),
     tools: makeToonMaterial({ vertexColors: true, color: TOOL_HANDLE_COLOR, rimStrength: 0.2 }),
     bench: makeToonMaterial({ vertexColors: true, color: BENCH_COLOR, rimStrength: 0.2 }),
   } : null), [zone.id]);
 
+  const roofBaseGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofBase() : null), [zone.id]);
   const roofTileGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTiles() : null), [zone.id]);
-  const roofTrimGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaRoofTrim() : null), [zone.id]);
   const toolsGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaWallTools() : null), [zone.id]);
   const benchGeometry = useMemo(() => (zone.id === 'izba' ? makeIzbaBench() : null), [zone.id]);
 
@@ -561,16 +547,14 @@ function Landmark({ zone }) {
               IzbaLogWalls' own comment for how this keeps the exact same
               outer footprint the old flat box used. */}
           <IzbaLogWalls material={izbaMaterials.logs} />
-          {/* Backing cone (unchanged) stays underneath the tile overlay so
-              no gaps between individual tiles show through to empty space. */}
-          <mesh position={[0, ROOF_Y, 0]} rotation={[0, Math.PI / 4, 0]} material={izbaMaterials.roof}>
-            <coneGeometry args={[ROOF_BASE_R, ROOF_HEIGHT, 4]} />
-          </mesh>
-          {roofTileGeometry && (
-            <mesh position={[0, ROOF_Y, 0]} geometry={roofTileGeometry} material={izbaMaterials.roofTiles} />
+          {/* Gable roof backing (two sloped slabs + triangular gable ends)
+              stays underneath the tile overlay so no gaps between
+              individual tiles show through to empty space. */}
+          {roofBaseGeometry && (
+            <mesh geometry={roofBaseGeometry} material={izbaMaterials.roof} />
           )}
-          {roofTrimGeometry && (
-            <mesh position={[0, ROOF_Y, 0]} geometry={roofTrimGeometry} material={izbaMaterials.roofTrim} />
+          {roofTileGeometry && (
+            <mesh geometry={roofTileGeometry} material={izbaMaterials.roofTiles} />
           )}
           <IzbaChimney material={izbaMaterials.chimney} />
           <IzbaWindow />

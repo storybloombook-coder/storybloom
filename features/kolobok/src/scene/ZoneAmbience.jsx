@@ -117,8 +117,15 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     }
     if (puffRef.current) {
       pu.puffs.forEach((p, i) => {
-        if (p.t < 1) p.t += dt / PUFF_RISE_S;
-        const rising = p.t >= 0 && p.t < 1;
+        // Live feedback: "when the finger is on the pipe, let the smoke
+        // disappear, but also let the motion animation end" -- a puff burst
+        // still mid-rise from an earlier release kept climbing even while
+        // the pipe was held closed again (only the AMBIENT smoke below was
+        // gated by chimneyHeld). Gating both the advance AND `rising` here
+        // makes a fresh press instantly park/hide any puff in flight, not
+        // just freeze it floating in place.
+        if (!eggMotion.chimneyHeld && p.t < 1) p.t += dt / PUFF_RISE_S;
+        const rising = !eggMotion.chimneyHeld && p.t >= 0 && p.t < 1;
         if (rising) {
           const rise = p.t * 1.5;
           const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
