@@ -960,6 +960,16 @@ export function Vegetation() {
         [0, g.crossAngle].forEach((extraYaw, k) => {
           dummy.position.set(g.x, g.y, g.z);
           dummy.rotation.set(0, g.yaw + extraYaw, 0);
+          // Live feedback: "the hedgehog picks up a mushroom and carries it
+          // away -- the grass disappears" -- this shared `dummy` scratch
+          // object is ALSO used by the mushroom hide/respawn block above,
+          // which multiplies its OWN decomposed scale by popScale (0 while
+          // a mushroom is fully hidden/carried off) and never resets it
+          // afterward. Without an explicit reset here, grass's own
+          // updateMatrix() below silently inherited that stale (0,0,0)
+          // scale for as long as any mushroom was mid-hide, zeroing out
+          // every grass tuft's matrix, not just the ones near it.
+          dummy.scale.set(1, 1, 1);
           if (swayAngle) {
             tiltAxisTmp.set(wind.direction[2], 0, -wind.direction[0]).normalize();
             tiltQuatTmp.setFromAxisAngle(tiltAxisTmp, swayAngle);

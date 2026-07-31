@@ -101,6 +101,16 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     m.transparent = true;
     m.opacity = 0.55;
     m.fog = false;
+    // Live feedback: "I see the bubbles from all angles but not when I look
+    // at it behind the house" -- every OTHER transparent material in this
+    // file explicitly sets depthWrite=false (see the smoke pointsMaterial,
+    // puffShadowRef, wispsRef, etc. just below); this one lost it when it
+    // moved from a JSX <meshBasicMaterial depthWrite={false}> to this
+    // JS-constructed toon material. Without it, the puffs write real depth
+    // values, so from some viewing angles the (also transparent) roof/
+    // window/gable geometry behind them ends up depth-sorted incorrectly
+    // and the puffs disappear behind it instead of blending on top.
+    m.depthWrite = false;
     return m;
   }, []);
   // Reuses BlobShadow's own shared radial-alpha texture/tint (same "flat
