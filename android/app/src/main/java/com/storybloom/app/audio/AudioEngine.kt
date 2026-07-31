@@ -13,6 +13,12 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.min
 
+class EffectPlayback internal constructor(
+    private val stopAction: () -> Unit,
+) {
+    fun stop() = stopAction()
+}
+
 class AudioEngine(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val soundPool = SoundPool.Builder()
@@ -34,6 +40,8 @@ class AudioEngine(private val context: Context) {
     private var ambientGeneration = 0L
     private var ambientBaseVolume = 1f
     private var ambientFullVolume = 1f
+    private var ambientDucked = false
+    private var transientDuckGeneration = 0L
 
     init {
         soundPool.setOnLoadCompleteListener { pool, sampleId, status ->
@@ -100,6 +108,132 @@ class AudioEngine(private val context: Context) {
         playEffect(TrimEnvelope(soundId), onComplete)
     }
 
+    /**
+     * One-at-a-time effect channel used by the read-along experience. Plain
+     * bundled effects take the pre-warmed SoundPool fast path; custom and
+     * trimmed clips retain their exact MediaPlayer envelope.
+     */
+    fun playExclusiveEffect(envelope: TrimEnvelope): EffectPlayback {
+        val adjustedEnvelope = if (
+            envelope.soundId == "fx_animal_frog" &&
+            envelope.startMs == null &&
+            envelope.endMs == null
+        ) {
+            envelope.copy(startMs = 520L)
+        } else {
+            envelope
+        }
+        if (
+            adjustedEnvelope.soundId != "fx_animal_whale" &&
+            !adjustedEnvelope.soundId.startsWith(CUSTOM_PREFIX) &&
+            adjustedEnvelope.startMs == null &&
+            adjustedEnvelope.endMs == null
+        ) {
+            val sampleId = ensureLoaded(adjustedEnvelope.soundId)
+            if (sampleId != null && sampleId in readySamples) {
+                val volume = SoundLibrary.effectGain(adjustedEnvelope.soundId)
+                val streamId = soundPool.play(sampleId, volume, volume, 2, 0, 1f)
+                return EffectPlayback {
+                    handler.post {
+                        if (streamId > 0) soundPool.stop(streamId)
+                    }
+                }
+            }
+        }
+        return playEffectControlled(adjustedEnvelope)
+    }
+
+    /**
+     * Preview path used by waveform editors and recording rows. Unlike a
+     * fire-and-forget effect, this returns an explicit stop handle and reports
+     * a normalized playhead so the visible control remains mechanically tied
+     * to the sound.
+     */
+    fun playEffectControlled(
+        envelope: TrimEnvelope,
+        onProgress: (Float) -> Unit = {},
+        onComplete: () -> Unit = {},
+    ): EffectPlayback {
+        var player: MediaPlayer? = null
+        var stopped = false
+        var finished = false
+
+        fun close(completed: Boolean) {
+            if (finished) return
+            finished = true
+            val active = player
+            if (active != null) {
+                customPlayers -= active
+                runCatching { active.stop() }
+                active.release()
+            }
+            player = null
+            if (completed) onComplete()
+        }
+
+        val playback = EffectPlayback {
+            handler.post {
+                stopped = true
+                close(completed = false)
+            }
+        }
+
+        runCatching {
+            val active = buildMediaPlayer(envelope.soundId)
+            player = active
+            customPlayers += active
+            active.setOnPreparedListener {
+                if (stopped) {
+                    close(completed = false)
+                    return@setOnPreparedListener
+                }
+                val playbackGain = if (envelope.soundId.startsWith(CUSTOM_PREFIX)) {
+                    1f
+                } else {
+                    SoundLibrary.effectGain(envelope.soundId)
+                }
+                val start = (envelope.startMs ?: 0L).coerceAtLeast(0L)
+                val end = (envelope.endMs ?: it.duration.toLong()).coerceAtLeast(start + 1L)
+                it.seekTo(start.toInt())
+                val fadeIn = envelope.fadeInMs ?: 30L
+                if (fadeIn > 0L) it.setVolume(0f, 0f)
+                it.start()
+                fadePlayer(it, 0f, playbackGain, fadeIn)
+                onProgress(0f)
+
+                fun tick() {
+                    if (finished || stopped || it !in customPlayers) return
+                    val position = it.currentPosition.toLong()
+                    val progress = ((position - start).toFloat() / (end - start))
+                        .coerceIn(0f, 1f)
+                    onProgress(progress)
+                    val remaining = end - position
+                    val fadeOut = envelope.fadeOutMs ?: 120L
+                    if (remaining <= 0L) {
+                        onProgress(1f)
+                        close(completed = true)
+                    } else {
+                        if (fadeOut > 0L && remaining <= fadeOut) {
+                            val volume = playbackGain *
+                                (remaining.toFloat() / fadeOut).coerceIn(0f, 1f)
+                            runCatching { it.setVolume(volume, volume) }
+                        }
+                        handler.postDelayed(::tick, 33L)
+                    }
+                }
+                tick()
+            }
+            active.setOnCompletionListener {
+                onProgress(1f)
+                close(completed = true)
+            }
+            active.prepareAsync()
+        }.onFailure {
+            close(completed = true)
+        }
+        return playback
+    }
+
     fun playAmbient(
         envelope: TrimEnvelope?,
         gainOverride: Float? = null,
@@ -122,7 +256,11 @@ class AudioEngine(private val context: Context) {
                 }
                 envelope.startMs?.let { start -> it.seekTo(start.toInt()) }
                 it.start()
-                fadeAmbientTo(ambientFullVolume, envelope.fadeInMs ?: 600L, generation)
+                fadeAmbientTo(
+                    ambientTargetVolume(),
+                    envelope.fadeInMs ?: 600L,
+                    generation,
+                )
                 if (envelope.endMs != null) {
                     scheduleTrimLoop(it, envelope, generation)
                 }
@@ -133,15 +271,31 @@ class AudioEngine(private val context: Context) {
 
     fun duckAmbient(durationMs: Long = 1_400L) {
         val generation = ambientGeneration
+        val duckGeneration = ++transientDuckGeneration
         fadeAmbientTo(ambientFullVolume * .18f, 350L, generation)
         handler.postDelayed(
             {
-                if (generation == ambientGeneration) {
-                    fadeAmbientTo(ambientFullVolume, 350L, generation)
+                if (
+                    generation == ambientGeneration &&
+                    duckGeneration == transientDuckGeneration
+                ) {
+                    fadeAmbientTo(ambientTargetVolume(), 350L, generation)
                 }
             },
             durationMs,
         )
+    }
+
+    /**
+     * Reader microphone ducking is a state, not a timed sound-effect dip.
+     * Keeping it explicit prevents a cue's restore timer from raising the
+     * ambience back into the recognizer while listening is still active.
+     */
+    fun setAmbientDucked(ducked: Boolean) {
+        if (ambientDucked == ducked) return
+        ambientDucked = ducked
+        transientDuckGeneration += 1
+        fadeAmbientTo(ambientTargetVolume(), 350L, ambientGeneration)
     }
 
     fun stopAmbient(immediate: Boolean = false) {
@@ -259,6 +413,9 @@ class AudioEngine(private val context: Context) {
         }
         check()
     }
+
+    private fun ambientTargetVolume(): Float =
+        ambientFullVolume * if (ambientDucked) .18f else 1f
 
     private fun buildMediaPlayer(soundId: String): MediaPlayer {
         val player = MediaPlayer()

@@ -4,11 +4,14 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -59,11 +62,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -83,17 +87,21 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.storybloom.app.data.Book
+import com.storybloom.app.data.BookLanguage
 import com.storybloom.app.data.Cue
 import com.storybloom.app.data.CueDraft
 import com.storybloom.app.data.CueReviewState
+import com.storybloom.app.data.CueType
 import com.storybloom.app.data.Page
 import com.storybloom.app.data.PageType
+import com.storybloom.app.data.TextToken
 import com.storybloom.app.data.TrimEnvelope
 import com.storybloom.app.data.cueAtRange
 import com.storybloom.app.data.tokenizeText
@@ -104,10 +112,13 @@ import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.BloomPrimaryButton
 import com.storybloom.app.ui.components.NativeImage
+import com.storybloom.app.ui.components.NativePhotoEditorDialog
+import com.storybloom.app.ui.components.PulsingStoryDot
 import com.storybloom.app.ui.components.RecordingOrigin
 import com.storybloom.app.ui.components.SoundPickerDialog
 import com.storybloom.app.ui.components.SoundPickerMode
 import com.storybloom.app.ui.components.StoryScaffold
+import com.storybloom.app.ui.components.StoryLightSwitch
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomBlue
 import com.storybloom.app.ui.theme.BloomCoral
@@ -116,10 +127,12 @@ import com.storybloom.app.ui.theme.BloomPurple
 import com.storybloom.app.ui.theme.BloomYellow
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 private sealed interface SoundTarget {
     data object Ambient : SoundTarget
     data class CueTarget(val cue: Cue) : SoundTarget
+    data class NewCue(val draft: CueDraft) : SoundTarget
 }
 
 @Composable
@@ -139,11 +152,12 @@ fun PageEditorScreen(
     var textDraft by remember { mutableStateOf("") }
     var textDirty by remember { mutableStateOf(false) }
     var pickerTarget by remember { mutableStateOf<SoundTarget?>(null) }
-    var rescanConfirm by remember { mutableStateOf(false) }
     var rescanning by remember { mutableStateOf(false) }
     var photoEditor by remember { mutableStateOf(false) }
+    var rescanEditor by remember { mutableStateOf(false) }
     var dictateOpen by remember { mutableStateOf(false) }
-    var applyAmbientConfirm by remember { mutableStateOf(false) }
+    var ambientPreviewing by remember(pageId) { mutableStateOf(false) }
+    var ambientAppliedToAll by remember(pageId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     DisposableEffect(viewModel.audioEngine) {
@@ -164,6 +178,16 @@ fun PageEditorScreen(
 
     val currentPage = page
     val currentBook = book
+    LaunchedEffect(
+        currentPage?.ambientSoundId,
+        currentPage?.ambientStartMs,
+        currentPage?.ambientEndMs,
+        currentPage?.ambientFadeInMs,
+        currentPage?.ambientFadeOutMs,
+    ) {
+        viewModel.audioEngine.stopAmbient(immediate = true)
+        ambientPreviewing = false
+    }
     StoryScaffold(
         title = if (currentPage == null) {
             locale.text("Page", "Страница")
@@ -217,12 +241,12 @@ fun PageEditorScreen(
                                 Text(locale.text("Crop & rotate", "Кадрировать"))
                             }
                             OutlinedButton(
-                                onClick = { rescanConfirm = true },
+                                onClick = { rescanEditor = true },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(16.dp),
                             ) {
                                 Icon(Icons.Rounded.Refresh, contentDescription = null)
-                                Text(locale.text("Re-scan", "Распознать"))
+                                Text(locale.text("Re-scan area", "Распознать область"))
                             }
                         }
                     }
@@ -309,9 +333,10 @@ fun PageEditorScreen(
                                     text = currentPage.ocrText,
                                     cues = cues,
                                     onWord = { start, end, existing ->
-                                        scope.launch {
-                                            val cue = existing ?: viewModel.repository.addCue(
-                                                pageId,
+                                        pickerTarget = if (existing != null) {
+                                            SoundTarget.CueTarget(existing)
+                                        } else {
+                                            SoundTarget.NewCue(
                                                 CueDraft(
                                                     triggerText = currentPage.ocrText.substring(start, end),
                                                     contextPhrase = currentPage.ocrText.substring(
@@ -322,7 +347,6 @@ fun PageEditorScreen(
                                                     charEnd = end,
                                                 ),
                                             )
-                                            pickerTarget = SoundTarget.CueTarget(cue)
                                         }
                                     },
                                 )
@@ -335,20 +359,63 @@ fun PageEditorScreen(
                         page = currentPage,
                         locale = locale,
                         onPick = { pickerTarget = SoundTarget.Ambient },
-                        onPlay = {
-                            val sound = currentPage.ambientSoundId ?: return@AmbientCard
-                            viewModel.audioEngine.playAmbient(
-                                TrimEnvelope(
-                                    sound,
-                                    currentPage.ambientStartMs,
-                                    currentPage.ambientEndMs,
-                                    currentPage.ambientFadeInMs,
-                                    currentPage.ambientFadeOutMs,
-                                ),
+                        onLucky = {
+                            val sound = com.storybloom.app.audio.SoundLibrary.randomAmbient(
+                                currentPage.ambientSoundId,
                             )
+                            viewModel.audioEngine.stopAmbient(immediate = true)
+                            ambientPreviewing = false
+                            ambientAppliedToAll = false
+                            scope.launch {
+                                viewModel.repository.updatePageAmbient(
+                                    currentPage.id,
+                                    TrimEnvelope(sound),
+                                )
+                            }
                         },
-                        onStop = { viewModel.audioEngine.stopAmbient() },
-                        onApplyAll = { applyAmbientConfirm = true },
+                        previewing = ambientPreviewing,
+                        onTogglePreview = {
+                            if (ambientPreviewing) {
+                                viewModel.audioEngine.stopAmbient()
+                                ambientPreviewing = false
+                            } else {
+                                val sound = currentPage.ambientSoundId
+                                    ?: return@AmbientCard
+                                viewModel.audioEngine.playAmbient(
+                                    TrimEnvelope(
+                                        sound,
+                                        currentPage.ambientStartMs,
+                                        currentPage.ambientEndMs,
+                                        currentPage.ambientFadeInMs,
+                                        currentPage.ambientFadeOutMs,
+                                    ),
+                                )
+                                ambientPreviewing = true
+                            }
+                        },
+                        appliedToAll = ambientAppliedToAll,
+                        onApplyAll = {
+                            if (ambientAppliedToAll) {
+                                ambientAppliedToAll = false
+                            } else {
+                                currentPage.ambientSoundId?.let { sound ->
+                                    ambientAppliedToAll = true
+                                    val envelope = TrimEnvelope(
+                                        sound,
+                                        currentPage.ambientStartMs,
+                                        currentPage.ambientEndMs,
+                                        currentPage.ambientFadeInMs,
+                                        currentPage.ambientFadeOutMs,
+                                    )
+                                    scope.launch {
+                                        viewModel.repository.applyAmbientToBook(
+                                            currentPage.bookId,
+                                            envelope,
+                                        )
+                                    }
+                                }
+                            }
+                        },
                     )
                 }
                 item {
@@ -393,6 +460,12 @@ fun PageEditorScreen(
                                 viewModel.audioEngine.preview(id)
                                 scope.launch {
                                     viewModel.repository.updateCueSound(cue.id, TrimEnvelope(id))
+                                    if (cue.reviewState == CueReviewState.REMOVED) {
+                                        viewModel.repository.updateCueState(
+                                            cue.id,
+                                            CueReviewState.CONFIRMED,
+                                        )
+                                    }
                                 }
                             },
                             onToggleRemoved = {
@@ -400,7 +473,7 @@ fun PageEditorScreen(
                                     viewModel.repository.updateCueState(
                                         cue.id,
                                         if (cue.reviewState == CueReviewState.REMOVED) {
-                                            CueReviewState.PROPOSED
+                                            CueReviewState.CONFIRMED
                                         } else {
                                             CueReviewState.REMOVED
                                         },
@@ -420,17 +493,23 @@ fun PageEditorScreen(
         val currentId = when (target) {
             SoundTarget.Ambient -> currentPage.ambientSoundId
             is SoundTarget.CueTarget -> cues.firstOrNull { it.id == target.cue.id }?.soundId ?: target.cue.soundId
+            is SoundTarget.NewCue -> null
         }
         SoundPickerDialog(
             viewModel = viewModel,
             locale = locale,
             mode = if (target == SoundTarget.Ambient) SoundPickerMode.AMBIENT else SoundPickerMode.EFFECT,
             currentSoundId = currentId,
+            allowRemove = target == SoundTarget.Ambient,
             origin = RecordingOrigin(
                 currentBook,
                 currentPage.pageNumber,
                 if (target == SoundTarget.Ambient) "Ambient"
-                else (target as SoundTarget.CueTarget).cue.triggerText,
+                else when (target) {
+                    is SoundTarget.CueTarget -> target.cue.triggerText
+                    is SoundTarget.NewCue -> target.draft.triggerText
+                    SoundTarget.Ambient -> error("Handled above")
+                },
             ),
             onDismiss = { pickerTarget = null },
             onChoose = { envelope ->
@@ -443,47 +522,17 @@ fun PageEditorScreen(
                                 viewModel.repository.updateCueState(target.cue.id, CueReviewState.CONFIRMED)
                             }
                         }
+                        is SoundTarget.NewCue -> if (envelope != null) {
+                            val cue = viewModel.repository.addCue(
+                                pageId,
+                                target.draft.copy(soundId = envelope.soundId),
+                            )
+                            viewModel.repository.updateCueSound(cue.id, envelope)
+                            viewModel.repository.updateCueState(cue.id, CueReviewState.CONFIRMED)
+                        }
                     }
                     pickerTarget = null
                 }
-            },
-        )
-    }
-    if (rescanConfirm && currentPage != null && currentBook != null) {
-        AlertDialog(
-            onDismissRequest = { rescanConfirm = false },
-            title = { Text(locale.text("Re-scan this page?", "Распознать страницу заново?")) },
-            text = {
-                Text(
-                    locale.text(
-                        "Current text and automatically matched cues will be replaced.",
-                        "Текущий текст и автоматически подобранные звуки будут заменены.",
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !rescanning,
-                    onClick = {
-                        rescanConfirm = false
-                        rescanning = true
-                        scope.launch {
-                            viewModel.runOperation {
-                                val bitmap = requireNotNull(viewModel.imageStore.load(currentPage.imagePath))
-                                val analysis = try {
-                                    viewModel.preparationEngine.recognize(bitmap, currentBook.language)
-                                } finally {
-                                    bitmap.recycle()
-                                }
-                                viewModel.repository.replacePageAnalysis(pageId, analysis)
-                            }
-                            rescanning = false
-                        }
-                    },
-                ) { Text(locale.text("Re-scan", "Распознать")) }
-            },
-            dismissButton = {
-                TextButton(onClick = { rescanConfirm = false }) { Text(locale.text("Cancel", "Отмена")) }
             },
         )
     }
@@ -501,23 +550,58 @@ fun PageEditorScreen(
         )
     }
     if (photoEditor && currentPage != null && currentBook != null) {
-        PhotoEditorDialog(
-            viewModel = viewModel,
-            page = currentPage,
+        NativePhotoEditorDialog(
+            imageStore = viewModel.imageStore,
+            sourcePath = currentPage.imagePath,
             locale = locale,
             onDismiss = { photoEditor = false },
-            onSaved = { path, rescan ->
+            onSaved = { path, _ ->
                 photoEditor = false
                 scope.launch {
-                    viewModel.repository.updatePageImage(pageId, path)
-                    if (rescan) {
-                        val bitmap = requireNotNull(viewModel.imageStore.load(path))
-                        val analysis = try {
-                            viewModel.preparationEngine.recognize(bitmap, currentBook.language)
-                        } finally {
-                            bitmap.recycle()
+                    viewModel.runOperation {
+                        viewModel.repository.updatePageImage(pageId, path)
+                    }
+                }
+            },
+        )
+    }
+    if (rescanEditor && currentPage != null && currentBook != null) {
+        NativePhotoEditorDialog(
+            imageStore = viewModel.imageStore,
+            sourcePath = currentPage.imagePath,
+            locale = locale,
+            scanOnly = true,
+            onDismiss = { rescanEditor = false },
+            onSaved = { temporaryPath, _ ->
+                rescanEditor = false
+                rescanning = true
+                scope.launch {
+                    try {
+                        viewModel.runOperation {
+                            val bitmap = requireNotNull(
+                                viewModel.imageStore.load(temporaryPath),
+                            )
+                            val analysis = try {
+                                viewModel.preparationEngine.recognize(
+                                    bitmap,
+                                    currentBook.language,
+                                )
+                            } finally {
+                                bitmap.recycle()
+                            }
+                            // Region OCR replaces only the recognized text.
+                            // Parent-selected sounds, review states, page
+                            // type, ambience and the original photo survive.
+                            saveCorrectedText(
+                                viewModel = viewModel,
+                                page = currentPage,
+                                cues = cues,
+                                corrected = analysis.ocrText,
+                            )
                         }
-                        viewModel.repository.replacePageAnalysis(pageId, analysis)
+                    } finally {
+                        viewModel.imageStore.delete(temporaryPath)
+                        rescanning = false
                     }
                 }
             },
@@ -535,31 +619,6 @@ fun PageEditorScreen(
                 textDraft = text
                 textDirty = text != currentPage.ocrText
                 editText = true
-            },
-        )
-    }
-    if (applyAmbientConfirm && currentPage?.ambientSoundId != null) {
-        AlertDialog(
-            onDismissRequest = { applyAmbientConfirm = false },
-            title = { Text(locale.text("Use on every page?", "Применить ко всем страницам?")) },
-            text = { Text(locale.text("This replaces each page’s current ambience.", "Текущий фон на всех страницах будет заменён.")) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        applyAmbientConfirm = false
-                        val envelope = TrimEnvelope(
-                            requireNotNull(currentPage.ambientSoundId),
-                            currentPage.ambientStartMs,
-                            currentPage.ambientEndMs,
-                            currentPage.ambientFadeInMs,
-                            currentPage.ambientFadeOutMs,
-                        )
-                        scope.launch { viewModel.repository.applyAmbientToBook(currentPage.bookId, envelope) }
-                    },
-                ) { Text(locale.text("Apply to all", "Применить")) }
-            },
-            dismissButton = {
-                TextButton(onClick = { applyAmbientConfirm = false }) { Text(locale.text("Cancel", "Отмена")) }
             },
         )
     }
@@ -665,24 +724,10 @@ private fun WordCueText(
                 Text(token.text)
             } else {
                 val cue = cueAtRange(cues, token.start, token.end)
-                val active = cue?.reviewState != CueReviewState.REMOVED
-                Text(
-                    token.text,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(
-                            when {
-                                cue == null -> Color.Transparent
-                                !active -> Color.Gray.copy(alpha = .13f)
-                                cue.soundId == null -> BloomYellow.copy(alpha = .28f)
-                                else -> BloomBlue.copy(alpha = .18f)
-                            },
-                        )
-                        .clickable { onWord(token.start, token.end, cue) }
-                        .padding(horizontal = 2.dp, vertical = 1.dp),
-                    color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    textDecoration = if (!active) TextDecoration.LineThrough else TextDecoration.None,
-                    style = MaterialTheme.typography.bodyLarge,
+                CueWordToken(
+                    token = token,
+                    cue = cue,
+                    onClick = { onWord(token.start, token.end, cue) },
                 )
             }
         }
@@ -690,12 +735,68 @@ private fun WordCueText(
 }
 
 @Composable
+private fun CueWordToken(
+    token: TextToken,
+    cue: Cue?,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) .94f else 1f,
+        animationSpec = tween(if (pressed) 70 else 115),
+        label = "word token press",
+    )
+    val view = LocalView.current
+    val active = cue?.reviewState != CueReviewState.REMOVED
+    LaunchedEffect(pressed) {
+        if (pressed) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+    Text(
+        token.text,
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                when {
+                    pressed -> MaterialTheme.colorScheme.onSurface.copy(alpha = .18f)
+                    cue == null -> Color.Transparent
+                    !active -> Color.Gray.copy(alpha = .13f)
+                    cue.type == CueType.CHARACTER -> BloomPurple.copy(alpha = .38f)
+                    cue.soundId == null -> BloomYellow.copy(alpha = .28f)
+                    else -> BloomBlue.copy(alpha = .30f)
+                },
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+            ) {
+                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                onClick()
+            }
+            .padding(horizontal = 2.dp, vertical = 1.dp),
+        color = if (active) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        textDecoration = if (!active) TextDecoration.LineThrough else TextDecoration.None,
+        style = MaterialTheme.typography.bodyLarge,
+    )
+}
+
+@Composable
 private fun AmbientCard(
     page: Page,
     locale: UiLocale,
     onPick: () -> Unit,
-    onPlay: () -> Unit,
-    onStop: () -> Unit,
+    onLucky: () -> Unit,
+    previewing: Boolean,
+    onTogglePreview: () -> Unit,
+    appliedToAll: Boolean,
     onApplyAll: () -> Unit,
 ) {
     Card(
@@ -720,22 +821,75 @@ private fun AmbientCard(
                 }
             }
             if (page.ambientSoundId != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     AssistChip(
-                        onClick = onPlay,
-                        label = { Text(locale.text("Preview", "Слушать")) },
-                        leadingIcon = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) },
+                        onClick = onTogglePreview,
+                        label = {
+                            Text(
+                                if (previewing) {
+                                    locale.text("Stop", "Стоп")
+                                } else {
+                                    locale.text("Play ambience", "Слушать фон")
+                                },
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (previewing) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                            )
+                        },
                     )
                     AssistChip(
-                        onClick = onStop,
-                        label = { Text(locale.text("Stop", "Стоп")) },
-                        leadingIcon = { Icon(Icons.Rounded.Stop, contentDescription = null) },
+                        onClick = onLucky,
+                        label = { Text(locale.text("Lucky", "Случайно")) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Casino, contentDescription = null)
+                        },
                     )
+                    /*
                     AssistChip(
                         onClick = onApplyAll,
                         label = { Text(locale.text("Apply all", "На все")) },
                         leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
                     )
+                    */
+                    Row(
+                        modifier = Modifier
+                            .background(
+                                Color(0xFFE8A33D).copy(alpha = .14f),
+                                RoundedCornerShape(16.dp),
+                            )
+                            .padding(
+                                start = 10.dp,
+                                end = 7.dp,
+                                top = 5.dp,
+                                bottom = 5.dp,
+                            ),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.ContentCopy,
+                            contentDescription = null,
+                            tint = Color(0xFFE8A33D),
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            locale.text("Apply all", "На все"),
+                            color = Color(0xFFE8A33D),
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        StoryLightSwitch(
+                            on = appliedToAll,
+                            onToggle = onApplyAll,
+                            onColor = Color(0xFFE8A33D),
+                        )
+                    }
                 }
             }
         }
@@ -783,7 +937,7 @@ private fun CueCard(
                         Icon(Icons.Rounded.PlayArrow, locale.text("Play sound", "Воспроизвести звук"))
                     }
                 }
-                IconButton(onClick = onPick, enabled = !removed) {
+                IconButton(onClick = onPick) {
                     Icon(Icons.Rounded.MusicNote, locale.text("Choose sound", "Выбрать звук"))
                 }
             }
@@ -814,6 +968,7 @@ private fun CueCard(
     }
 }
 
+/*
 @Composable
 private fun PhotoEditorDialog(
     viewModel: StorybloomViewModel,
@@ -896,6 +1051,7 @@ private fun PhotoEditorDialog(
     )
 }
 
+*/
 @Composable
 private fun DictateCorrectionDialog(
     viewModel: StorybloomViewModel,
@@ -908,53 +1064,81 @@ private fun DictateCorrectionDialog(
     val context = LocalContext.current
     val activity = context as Activity
     val recognizer = remember { VoskRecognizer(viewModel.modelManager) }
+    val recognitionSession = remember { AtomicInteger(0) }
     val scope = rememberCoroutineScope()
     var text by remember(initial) { mutableStateOf(initial) }
     var partial by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
+    var language by remember(initial) {
+        mutableStateOf(
+            if (initial.any { it in '\u0400'..'\u04FF' }) {
+                BookLanguage.RUSSIAN
+            } else if (initial.isBlank()) {
+                book.language
+            } else {
+                BookLanguage.ENGLISH
+            },
+        )
+    }
 
-    fun stop() {
+    fun stop(commitPartial: Boolean = true) {
+        if (commitPartial && partial.isNotBlank()) {
+            text = listOf(text.trimEnd(), partial.trim())
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+        }
+        recognitionSession.incrementAndGet()
         listening = false
         partial = ""
         scope.launch { recognizer.stop() }
     }
 
     fun start() {
+        if (listening || loading) return
+        val session = recognitionSession.incrementAndGet()
         loading = true
         scope.launch {
             viewModel.runOperation {
                 recognizer.start(
-                    book.language,
+                    language,
                     callbacks = object : SpeechCallbacks {
                         override fun onPartial(value: String) {
-                            activity.runOnUiThread { partial = value }
+                            activity.runOnUiThread {
+                                if (session == recognitionSession.get()) partial = value
+                            }
                         }
 
                         override fun onResult(value: String, words: List<RecognizedWord>) {
                             activity.runOnUiThread {
-                                text = listOf(text.trimEnd(), value).filter(String::isNotBlank).joinToString(" ")
-                                partial = ""
+                                if (session == recognitionSession.get()) {
+                                    text = listOf(text.trimEnd(), value)
+                                        .filter(String::isNotBlank)
+                                        .joinToString(" ")
+                                    partial = ""
+                                }
                             }
                         }
 
                         override fun onError(message: String) {
                             activity.runOnUiThread {
-                                listening = false
-                                loading = false
-                                viewModel.notify(
-                                    locale.text(
-                                        "Voice input stopped. Please try again.",
-                                        "Голосовой ввод остановлен. Попробуйте ещё раз.",
-                                    ),
-                                )
+                                if (session == recognitionSession.get()) {
+                                    listening = false
+                                    loading = false
+                                    viewModel.notify(
+                                        locale.text(
+                                            "Voice input stopped. Please try again.",
+                                            "Голосовой ввод остановлен. Попробуйте ещё раз.",
+                                        ),
+                                    )
+                                }
                             }
                         }
                     },
                 )
-                listening = true
+                if (session == recognitionSession.get()) listening = true
             }
-            loading = false
+            if (session == recognitionSession.get()) loading = false
         }
     }
 
@@ -962,13 +1146,35 @@ private fun DictateCorrectionDialog(
         if (it) start() else viewModel.notify(locale.text("Microphone permission was denied.", "Нет доступа к микрофону."))
     }
     DisposableEffect(Unit) {
-        onDispose { recognizer.closeNow() }
+        onDispose {
+            recognitionSession.incrementAndGet()
+            recognizer.closeNow()
+        }
     }
     AlertDialog(
-        onDismissRequest = { stop(); onDismiss() },
+        onDismissRequest = { stop(commitPartial = false); onDismiss() },
         title = { Text(locale.text("Dictate correction", "Продиктовать исправление")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = language == BookLanguage.ENGLISH,
+                        onClick = { language = BookLanguage.ENGLISH },
+                        enabled = !listening && !loading,
+                        label = { Text(locale.text("English", "Английский")) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    FilterChip(
+                        selected = language == BookLanguage.RUSSIAN,
+                        onClick = { language = BookLanguage.RUSSIAN },
+                        enabled = !listening && !loading,
+                        label = { Text(locale.text("Russian", "Русский")) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -992,7 +1198,13 @@ private fun DictateCorrectionDialog(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !loading,
                     color = if (listening) BloomCoral else BloomBlue,
-                    leading = { Icon(if (listening) Icons.Rounded.Stop else Icons.Rounded.Mic, contentDescription = null) },
+                    leading = {
+                        if (listening) {
+                            PulsingStoryDot(color = Color.White, size = 8.dp)
+                        } else {
+                            Icon(Icons.Rounded.Mic, contentDescription = null)
+                        }
+                    },
                 )
             }
         },
@@ -1002,10 +1214,14 @@ private fun DictateCorrectionDialog(
                     stop()
                     onSave(text.trim())
                 },
-                enabled = text.isNotBlank(),
+                enabled = text.isNotBlank() || partial.isNotBlank(),
             ) { Text(locale.text("Use text", "Использовать")) }
         },
-        dismissButton = { TextButton(onClick = { stop(); onDismiss() }) { Text(locale.text("Cancel", "Отмена")) } },
+        dismissButton = {
+            TextButton(onClick = { stop(commitPartial = false); onDismiss() }) {
+                Text(locale.text("Cancel", "Отмена"))
+            }
+        },
     )
 }
 

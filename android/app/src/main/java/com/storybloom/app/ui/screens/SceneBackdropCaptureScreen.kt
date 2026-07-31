@@ -1,5 +1,6 @@
 package com.storybloom.app.ui.screens
 
+import android.util.Log
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -21,7 +22,9 @@ import com.storybloom.app.scene.StorySceneView
  * always start in the normal application.
  */
 @Composable
-fun SceneBackdropCaptureScreen() {
+fun SceneBackdropCaptureScreen(
+    idleForInspection: Boolean = false,
+) {
     var sceneView by remember { mutableStateOf<StorySceneView?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -46,7 +49,15 @@ fun SceneBackdropCaptureScreen() {
         },
         modifier = Modifier.fillMaxSize(),
         update = { view ->
-            view.setStoryPlaying(true)
+            if (idleForInspection) {
+                view.setAutoplayAllowed(false)
+                view.onSceneInteractionEvent = { event ->
+                    Log.d("StorybloomSceneInspection", event.toString())
+                }
+            } else {
+                view.requestStoryPlay()
+                view.onSceneInteractionEvent = null
+            }
             view.setSceneRotationEnabled(false)
             view.setFollowKolobok(false)
             view.setWeather(SceneWeather.CLEAR)

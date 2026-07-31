@@ -21,14 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -87,7 +84,7 @@ fun StoryScaffold(
                 },
                 navigationIcon = {
                     if (onBack != null) {
-                        IconButton(onClick = onBack) {
+                        StoryIconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -112,20 +109,14 @@ fun BloomPrimaryButton(
     color: Color = BloomBlue,
     leading: (@Composable () -> Unit)? = null,
 ) {
-    Button(
+    StoryButton(
+        text = text,
         onClick = onClick,
         modifier = modifier.height(52.dp),
         enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
-    ) {
-        if (leading != null) {
-            leading()
-            Spacer(Modifier.size(9.dp))
-        }
-        Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-    }
+        containerColor = color,
+        leading = leading,
+    )
 }
 
 @Composable

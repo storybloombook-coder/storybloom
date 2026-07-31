@@ -3,11 +3,14 @@ package com.storybloom.app.ui.components
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +23,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -58,23 +63,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.storybloom.app.audio.AudioRecorder
+import com.storybloom.app.audio.EffectPlayback
 import com.storybloom.app.audio.RecordedClip
 import com.storybloom.app.audio.SoundLibrary
 import com.storybloom.app.data.Book
@@ -82,15 +95,18 @@ import com.storybloom.app.data.Recording
 import com.storybloom.app.data.TrimEnvelope
 import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
+import com.storybloom.app.ui.mechanics.WaveformTrimMath
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomBlue
 import com.storybloom.app.ui.theme.BloomCoral
 import com.storybloom.app.ui.theme.BloomGreen
+import com.storybloom.app.vision.LocalCueAnalyzer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 enum class SoundPickerMode {
@@ -111,35 +127,90 @@ fun SoundPickerDialog(
     mode: SoundPickerMode,
     currentSoundId: String?,
     origin: RecordingOrigin,
+    allowRemove: Boolean = true,
     onDismiss: () -> Unit,
     onChoose: (TrimEnvelope?) -> Unit,
 ) {
     var search by remember { mutableStateOf("") }
-    var category by remember {
-        mutableStateOf(if (mode == SoundPickerMode.EFFECT) SoundLibrary.effectCategories.first().label else "Ambient")
-    }
+    var expandedSections by remember(mode) { mutableStateOf(setOf<String>()) }
     var recordingOpen by remember { mutableStateOf(false) }
+    var previewingId by remember { mutableStateOf<String?>(null) }
+    var previewPlayback by remember { mutableStateOf<EffectPlayback?>(null) }
     val revision by viewModel.repository.revision.collectAsState()
     var recordings by remember { mutableStateOf<List<Recording>>(emptyList()) }
     LaunchedEffect(revision) {
         recordings = viewModel.repository.listRecordings()
     }
-    val libraryIds = when (mode) {
-        SoundPickerMode.AMBIENT -> SoundLibrary.ambientIds
-        SoundPickerMode.EFFECT -> SoundLibrary.effectCategories
-            .firstOrNull { it.label == category }
-            ?.soundIds
-            .orEmpty()
-    }.filter { id ->
-        id.contains(search.trim(), ignoreCase = true) ||
-            SoundLibrary.label(id).contains(search.trim(), ignoreCase = true)
+    val allLibraryIds = if (mode == SoundPickerMode.AMBIENT) {
+        SoundLibrary.ambientIds
+    } else {
+        SoundLibrary.effectIds
     }
+    val libraryIds = allLibraryIds.filter { id ->
+        id.contains(search.trim(), ignoreCase = true) ||
+            SoundLibrary.label(id).contains(search.trim(), ignoreCase = true) ||
+            LocalCueAnalyzer.soundMatchesSearch(
+                soundId = id,
+                query = search,
+                ambient = mode == SoundPickerMode.AMBIENT,
+            )
+    }
+    val suggestedIds = LocalCueAnalyzer.relatedSoundIds(
+        query = if (mode == SoundPickerMode.EFFECT) origin.label.orEmpty() else "",
+        ambient = mode == SoundPickerMode.AMBIENT,
+        allowedIds = allLibraryIds,
+    )
+    val suggested = libraryIds.filter(suggestedIds::contains)
+    val remainingIds = libraryIds.filterNot(suggestedIds::contains)
+    val searching = search.isNotBlank()
     val visibleRecordings = recordings.filter {
-        search.isBlank() || it.name.contains(search.trim(), ignoreCase = true)
+        search.isBlank() ||
+            it.name.contains(search.trim(), ignoreCase = true) ||
+            it.originLabel?.contains(search.trim(), ignoreCase = true) == true ||
+            it.originBookTitle?.contains(search.trim(), ignoreCase = true) == true
+    }
+
+    fun toggleSection(key: String) {
+        expandedSections = if (key in expandedSections) {
+            expandedSections - key
+        } else {
+            expandedSections + key
+        }
+    }
+
+    fun stopPreview() {
+        previewPlayback?.stop()
+        previewPlayback = null
+        previewingId = null
+    }
+
+    fun togglePreview(id: String, envelope: TrimEnvelope) {
+        if (previewingId == id) {
+            stopPreview()
+            return
+        }
+        stopPreview()
+        previewingId = id
+        previewPlayback = viewModel.audioEngine.playEffectControlled(
+            envelope = envelope,
+            onComplete = {
+                if (previewingId == id) {
+                    previewPlayback = null
+                    previewingId = null
+                }
+            },
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { previewPlayback?.stop() }
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            stopPreview()
+            onDismiss()
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
@@ -169,7 +240,10 @@ fun SoundPickerDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = {
+                        stopPreview()
+                        onDismiss()
+                    }) {
                         Icon(
                             Icons.Rounded.Close,
                             contentDescription = locale.text("Close", "Закрыть"),
@@ -185,23 +259,7 @@ fun SoundPickerDialog(
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                     placeholder = { Text(locale.text("Search sounds", "Найти звук")) },
                 )
-                if (mode == SoundPickerMode.EFFECT) {
-                    LazyRow(
-                        modifier = Modifier.padding(vertical = 10.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    ) {
-                        items(SoundLibrary.effectCategories, key = { it.label }) { item ->
-                            FilterChip(
-                                selected = category == item.label,
-                                onClick = { category = item.label },
-                                label = { Text(localizedCategory(item.label, locale)) },
-                            )
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.height(10.dp))
-                }
+                Spacer(Modifier.height(10.dp))
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -230,61 +288,36 @@ fun SoundPickerDialog(
                                 leadingIcon = { Icon(Icons.Rounded.Casino, contentDescription = null) },
                             )
                             AssistChip(
-                                onClick = { recordingOpen = true },
+                                onClick = {
+                                    stopPreview()
+                                    recordingOpen = true
+                                },
                                 label = { Text(locale.text("Record", "Записать")) },
                                 leadingIcon = { Icon(Icons.Rounded.Mic, contentDescription = null) },
                             )
-                            if (currentSoundId != null) {
+                            if (currentSoundId != null && allowRemove) {
                                 AssistChip(
-                                    onClick = { onChoose(null) },
+                                    onClick = {
+                                        stopPreview()
+                                        onChoose(null)
+                                    },
                                     label = { Text(locale.text("Remove", "Убрать")) },
                                     leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
                                 )
                             }
                         }
                     }
-                    item {
-                        Text(
-                            locale.text("Built-in library", "Встроенная библиотека"),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(top = 6.dp),
-                        )
-                    }
-                    items(libraryIds, key = { it }) { id ->
-                        SoundRow(
-                            title = SoundLibrary.label(id),
-                            subtitle = if (mode == SoundPickerMode.AMBIENT) {
-                                locale.text("Included ambience", "Встроенный фон")
-                            } else {
-                                locale.text("Included sound", "Встроенный звук")
-                            },
-                            selected = currentSoundId == id,
-                            previewDescription = locale.text("Preview", "Прослушать"),
-                            onPreview = { viewModel.audioEngine.preview(id) },
-                            onChoose = { onChoose(TrimEnvelope(id)) },
-                        )
-                    }
-                    item {
-                        Text(
-                            locale.text("My recordings", "Мои записи"),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(top = 10.dp),
-                        )
-                    }
-                    if (visibleRecordings.isEmpty()) {
-                        item {
-                            Text(
-                                locale.text(
-                                    "Record your own sound and it will appear here.",
-                                    "Запишите свой звук — он появится здесь.",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 12.dp),
+                    if (visibleRecordings.isNotEmpty()) {
+                        val recordingsOpen = searching || "recordings" in expandedSections
+                        item(key = "recordings-header") {
+                            SoundSectionHeader(
+                                title = locale.text("My recordings", "Мои записи"),
+                                count = visibleRecordings.size,
+                                expanded = recordingsOpen,
+                                onClick = { toggleSection("recordings") },
                             )
                         }
-                    } else {
+                        if (recordingsOpen) {
                         items(visibleRecordings, key = { it.id }) { recording ->
                             val envelope = TrimEnvelope(
                                 soundId = "custom:${recording.fileUri}",
@@ -293,15 +326,130 @@ fun SoundPickerDialog(
                                 fadeInMs = recording.fadeInMs,
                                 fadeOutMs = recording.fadeOutMs,
                             )
+                            val originParts = listOfNotNull(
+                                recording.originBookTitle?.let { "“$it”" },
+                                recording.originPageNumber?.let {
+                                    locale.text("p. $it", "стр. $it")
+                                },
+                                recording.originLabel?.let {
+                                    if (it == "Ambient") {
+                                        locale.text("Ambient", "Фон")
+                                    } else {
+                                        "“$it”"
+                                    }
+                                },
+                            )
                             SoundRow(
                                 title = recording.name,
-                                subtitle = recording.originLabel?.let {
-                                    locale.text("Recorded for “$it”", "Записано для «$it»")
-                                } ?: locale.text("Custom recording", "Своя запись"),
+                                subtitle = originParts.joinToString(" · ")
+                                    .ifBlank {
+                                        locale.text("Custom recording", "Своя запись")
+                                    },
                                 selected = currentSoundId == envelope.soundId,
+                                previewing = previewingId == recording.id,
                                 previewDescription = locale.text("Preview", "Прослушать"),
-                                onPreview = { viewModel.audioEngine.playEffect(envelope) },
-                                onChoose = { onChoose(envelope) },
+                                onPreview = { togglePreview(recording.id, envelope) },
+                                onChoose = {
+                                    stopPreview()
+                                    onChoose(envelope)
+                                },
+                            )
+                        }
+                        }
+                    }
+                    if (suggested.isNotEmpty()) {
+                        item(key = "suggested-header") {
+                            Text(
+                                locale.text("Suggested", "Подходящие"),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                        items(suggested, key = { "suggested:$it" }) { id ->
+                            PickerLibrarySoundRow(
+                                id = id,
+                                mode = mode,
+                                locale = locale,
+                                currentSoundId = currentSoundId,
+                                previewingId = previewingId,
+                                onPreview = { togglePreview(id, TrimEnvelope(id)) },
+                                onChoose = {
+                                    stopPreview()
+                                    onChoose(TrimEnvelope(id))
+                                },
+                            )
+                        }
+                    }
+                    if (suggested.isNotEmpty() && remainingIds.isNotEmpty()) {
+                        item(key = "all-sounds-header") {
+                            Text(
+                                locale.text("All sounds", "Все звуки"),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                    }
+                    if (mode == SoundPickerMode.AMBIENT) {
+                        items(remainingIds, key = { "ambient:$it" }) { id ->
+                            PickerLibrarySoundRow(
+                                id = id,
+                                mode = mode,
+                                locale = locale,
+                                currentSoundId = currentSoundId,
+                                previewingId = previewingId,
+                                onPreview = { togglePreview(id, TrimEnvelope(id)) },
+                                onChoose = {
+                                    stopPreview()
+                                    onChoose(TrimEnvelope(id))
+                                },
+                            )
+                        }
+                    } else {
+                        SoundLibrary.effectCategories.forEach { soundCategory ->
+                            val ids = soundCategory.soundIds.filter(remainingIds::contains)
+                            if (ids.isNotEmpty()) {
+                                val key = "category:${soundCategory.label}"
+                                val expanded = searching || key in expandedSections
+                                item(key = "$key:header") {
+                                    SoundSectionHeader(
+                                        title = localizedCategory(soundCategory.label, locale),
+                                        count = ids.size,
+                                        expanded = expanded,
+                                        onClick = { toggleSection(key) },
+                                    )
+                                }
+                                if (expanded) {
+                                    items(ids, key = { "$key:$it" }) { id ->
+                                        PickerLibrarySoundRow(
+                                            id = id,
+                                            mode = mode,
+                                            locale = locale,
+                                            currentSoundId = currentSoundId,
+                                            previewingId = previewingId,
+                                            onPreview = { togglePreview(id, TrimEnvelope(id)) },
+                                            onChoose = {
+                                                stopPreview()
+                                                onChoose(TrimEnvelope(id))
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (libraryIds.isEmpty() && visibleRecordings.isEmpty()) {
+                        item(key = "no-sound-results") {
+                            Text(
+                                locale.text(
+                                    "No sounds match “$search”.",
+                                    "По запросу «$search» ничего не найдено.",
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 18.dp),
                             )
                         }
                     }
@@ -325,10 +473,70 @@ fun SoundPickerDialog(
 }
 
 @Composable
+private fun SoundSectionHeader(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (expanded) "▾" else "▸",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Black,
+        )
+        Text(
+            title,
+            modifier = Modifier.weight(1f),
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Text(
+            count.toString(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun PickerLibrarySoundRow(
+    id: String,
+    mode: SoundPickerMode,
+    locale: UiLocale,
+    currentSoundId: String?,
+    previewingId: String?,
+    onPreview: () -> Unit,
+    onChoose: () -> Unit,
+) {
+    SoundRow(
+        title = SoundLibrary.label(id),
+        subtitle = if (mode == SoundPickerMode.AMBIENT) {
+            locale.text("Included ambience", "Встроенный фон")
+        } else {
+            locale.text("Included sound", "Встроенный звук")
+        },
+        selected = currentSoundId == id,
+        previewing = previewingId == id,
+        previewDescription = locale.text("Preview", "Прослушать"),
+        onPreview = onPreview,
+        onChoose = onChoose,
+    )
+}
+
+@Composable
 private fun SoundRow(
     title: String,
     subtitle: String,
     selected: Boolean,
+    previewing: Boolean,
     previewDescription: String,
     onPreview: () -> Unit,
     onChoose: () -> Unit,
@@ -354,7 +562,11 @@ private fun SoundRow(
                 contentAlignment = Alignment.Center,
             ) {
                 IconButton(onClick = onPreview) {
-                    Icon(Icons.Rounded.PlayArrow, previewDescription, tint = BloomBlue)
+                    Icon(
+                        if (previewing) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                        previewDescription,
+                        tint = BloomBlue,
+                    )
                 }
             }
             Column(Modifier.weight(1f)) {
@@ -384,6 +596,10 @@ fun RecordSoundDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recorder = remember { AudioRecorder(context.applicationContext) }
+    // Recorder output lives in the app's persistent files directory so a
+    // saved custom cue remains valid. Until Save, however, it is staged
+    // content and must be removed on cancel/dispose or before another take.
+    val stagedClipUris = remember { mutableSetOf<String>() }
     var name by remember { mutableStateOf(existing?.name ?: origin.label.orEmpty()) }
     var recording by remember { mutableStateOf(false) }
     var startedAt by remember { mutableLongStateOf(0L) }
@@ -402,14 +618,45 @@ fun RecordSoundDialog(
     }
     var fadeIn by remember { mutableStateOf((existing?.fadeInMs ?: 30L).toFloat()) }
     var fadeOut by remember { mutableStateOf((existing?.fadeOutMs ?: 120L).toFloat()) }
+    var fadeInOn by remember(existing?.id) {
+        mutableStateOf(existing == null || (existing.fadeInMs ?: 0L) > 0L)
+    }
+    var fadeOutOn by remember(existing?.id) {
+        mutableStateOf(existing == null || (existing.fadeOutMs ?: 0L) > 0L)
+    }
+    var rawWaveform by remember { mutableStateOf<List<Float>>(emptyList()) }
+    var displayWaveform by remember(existing?.id) {
+        mutableStateOf(List(WaveformTrimMath.Bars) { .45f })
+    }
+    var previewPlayback by remember { mutableStateOf<EffectPlayback?>(null) }
+    var previewProgress by remember { mutableFloatStateOf(0f) }
+
+    fun stopPreview() {
+        previewPlayback?.stop()
+        previewPlayback = null
+        previewProgress = 0f
+    }
+
+    fun deleteStagedClip(uri: String?) {
+        if (uri == null || !stagedClipUris.remove(uri)) return
+        Uri.parse(uri).path?.let { path -> runCatching { File(path).delete() } }
+    }
 
     fun startRecording() {
+        stopPreview()
+        val previousClip = clip
+        val previousWasStaged = previousClip?.fileUri in stagedClipUris
+        deleteStagedClip(previousClip?.fileUri)
+        clip = null
         runCatching {
+            rawWaveform = emptyList()
+            displayWaveform = List(WaveformTrimMath.Bars) { .45f }
             recorder.start()
             startedAt = System.currentTimeMillis()
             elapsed = 0
             recording = true
         }.onFailure {
+            if (!previousWasStaged) clip = previousClip
             viewModel.notify(
                 locale.text(
                     "Recording could not start. Check microphone access and try again.",
@@ -423,11 +670,35 @@ fun RecordSoundDialog(
         val captured = recorder.stop()
         recording = false
         if (captured != null) {
+            deleteStagedClip(clip?.fileUri)
+            stagedClipUris += captured.fileUri
             clip = captured
+            displayWaveform = WaveformTrimMath.bucket(rawWaveform)
             trim = 0f..captured.durationMs.toFloat().coerceAtLeast(1f)
-            fadeIn = min(120f, captured.durationMs * .15f)
-            fadeOut = min(180f, captured.durationMs * .20f)
         }
+    }
+
+    fun togglePreview() {
+        if (previewPlayback != null) {
+            stopPreview()
+            return
+        }
+        val current = clip ?: return
+        previewProgress = 0f
+        previewPlayback = viewModel.audioEngine.playEffectControlled(
+            envelope = TrimEnvelope(
+                "custom:${current.fileUri}",
+                trim.start.toLong(),
+                trim.endInclusive.toLong(),
+                fadeIn.toLong(),
+                fadeOut.toLong(),
+            ),
+            onProgress = { previewProgress = it },
+            onComplete = {
+                previewPlayback = null
+                previewProgress = 0f
+            },
+        )
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -438,13 +709,22 @@ fun RecordSoundDialog(
     LaunchedEffect(recording) {
         while (recording) {
             elapsed = System.currentTimeMillis() - startedAt
+            rawWaveform = rawWaveform + recorder.amplitude()
             delay(100)
         }
     }
 
+    LaunchedEffect(trim, fadeInOn, fadeOutOn) {
+        val maximum = ((trim.endInclusive - trim.start) / 2f).coerceAtLeast(0f)
+        fadeIn = if (fadeInOn) min(1_000f, maximum) else 0f
+        fadeOut = if (fadeOutOn) min(1_000f, maximum) else 0f
+    }
+
     DisposableEffect(Unit) {
         onDispose {
+            previewPlayback?.stop()
             if (recorder.isRecording) recorder.cancel()
+            stagedClipUris.toList().forEach(::deleteStagedClip)
         }
     }
 
@@ -474,12 +754,26 @@ fun RecordSoundDialog(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (clip != null) {
-                        WaveformPreview(
-                            seed = clip!!.fileUri.hashCode(),
-                            trim = trim,
+                        TrimmableWaveform(
+                            samples = displayWaveform,
+                            value = trim,
                             duration = clip!!.durationMs.toFloat().coerceAtLeast(1f),
+                            playheadFraction = previewProgress.takeIf { previewPlayback != null },
+                            onValueChange = {
+                                stopPreview()
+                                trim = it
+                            },
                         )
                     } else {
+                        if (recording) {
+                            PulsingStoryDot(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .offset(x = 18.dp),
+                                color = BloomCoral,
+                                size = 10.dp,
+                            )
+                        }
                         Text(
                             if (recording) formatDuration(elapsed)
                             else locale.text("Ready to record", "Готово к записи"),
@@ -497,10 +791,6 @@ fun RecordSoundDialog(
                         if (recording) {
                             stopRecording()
                         } else {
-                            if (clip != null && existing == null) {
-                                Uri.parse(clip!!.fileUri).path?.let { File(it).delete() }
-                                clip = null
-                            }
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                                 PackageManager.PERMISSION_GRANTED
                             ) {
@@ -522,6 +812,7 @@ fun RecordSoundDialog(
                         locale.text("Trim", "Обрезка"),
                         fontWeight = FontWeight.Bold,
                     )
+                    /*
                     RangeSlider(
                         value = trim,
                         onValueChange = {
@@ -545,22 +836,50 @@ fun RecordSoundDialog(
                         onValueChange = { fadeOut = it },
                         valueRange = 0f..min(2_000f, (trim.endInclusive - trim.start) / 2f).coerceAtLeast(1f),
                     )
+                    */
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            formatDuration(trim.start.toLong()),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            formatDuration(trim.endInclusive.toLong()),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                    ) {
+                        FadeToggle(
+                            label = locale.text("Fade in", "Плавное начало"),
+                            checked = fadeInOn,
+                            onToggle = { fadeInOn = !fadeInOn },
+                        )
+                        FadeToggle(
+                            label = locale.text("Fade out", "Плавный конец"),
+                            checked = fadeOutOn,
+                            onToggle = { fadeOutOn = !fadeOutOn },
+                        )
+                    }
                     OutlinedButton(
-                        onClick = {
-                            viewModel.audioEngine.playEffect(
-                                TrimEnvelope(
-                                    "custom:${currentClip.fileUri}",
-                                    trim.start.toLong(),
-                                    trim.endInclusive.toLong(),
-                                    fadeIn.toLong(),
-                                    fadeOut.toLong(),
-                                ),
-                            )
-                        },
+                        onClick = ::togglePreview,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                        Text(locale.text("Preview selection", "Прослушать фрагмент"))
+                        Icon(
+                            if (previewPlayback == null) Icons.Rounded.PlayArrow else Icons.Rounded.Stop,
+                            contentDescription = null,
+                        )
+                        Text(
+                            if (previewPlayback == null) {
+                                locale.text("Preview selection", "Прослушать фрагмент")
+                            } else {
+                                locale.text("Stop preview", "Остановить")
+                            },
+                        )
                     }
                 }
             }
@@ -596,6 +915,10 @@ fun RecordSoundDialog(
                             viewModel.repository.renameRecording(existing.id, name.trim())
                             viewModel.repository.updateRecording(existing.id, envelope, savedClip.durationMs)
                         }
+                        // The repository now owns this file. Removing it
+                        // from the staged set prevents dialog disposal from
+                        // deleting a freshly saved recording.
+                        stagedClipUris.remove(savedClip.fileUri)
                         onSaved(envelope)
                     }
                 },
@@ -613,27 +936,198 @@ fun RecordSoundDialog(
 }
 
 @Composable
-private fun WaveformPreview(
-    seed: Int,
-    trim: ClosedFloatingPointRange<Float>,
+private fun TrimmableWaveform(
+    samples: List<Float>,
+    value: ClosedFloatingPointRange<Float>,
     duration: Float,
+    playheadFraction: Float?,
+    onValueChange: (ClosedFloatingPointRange<Float>) -> Unit,
 ) {
+    val density = LocalDensity.current
+    val view = LocalView.current
     val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .22f)
-    Canvas(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 14.dp)) {
-        val bars = 54
-        val barWidth = size.width / bars
-        repeat(bars) { index ->
-            val phase = seed * .00013f + index * .73f
-            val level = .18f + abs(sin(phase) * sin(phase * .37f)) * .78f
-            val x = index * barWidth + barWidth * .5f
-            val time = index.toFloat() / (bars - 1) * duration
-            val selected = time in trim
-            drawLine(
-                color = if (selected) BloomBlue else inactiveColor,
-                start = Offset(x, size.height * (.5f - level * .45f)),
-                end = Offset(x, size.height * (.5f + level * .45f)),
-                strokeWidth = barWidth * .50f,
+    var widthPx by remember { mutableStateOf(0) }
+    val currentValue by rememberUpdatedState(value)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val safeDuration = duration.coerceAtLeast(1f)
+    val startX = value.start / safeDuration * widthPx
+    val endX = value.endInclusive / safeDuration * widthPx
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { widthPx = it.width },
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(vertical = 14.dp)) {
+            val bars = samples.size.coerceAtLeast(1)
+            val barWidth = size.width / bars
+            repeat(bars) { index ->
+                val level = samples.getOrElse(index) { .45f }.coerceIn(.08f, 1f)
+                val x = index * barWidth + barWidth * .5f
+                val time = index.toFloat() / maxOf(1, bars - 1) * safeDuration
+                drawLine(
+                    color = if (time in value) BloomBlue else inactiveColor,
+                    start = Offset(x, size.height * (.5f - level * .45f)),
+                    end = Offset(x, size.height * (.5f + level * .45f)),
+                    strokeWidth = barWidth * .50f,
+                )
+            }
+            drawRect(
+                color = Color.Black.copy(alpha = .46f),
+                size = androidx.compose.ui.geometry.Size(
+                    width = (value.start / safeDuration * size.width).coerceAtLeast(0f),
+                    height = size.height,
+                ),
             )
+            val selectedEnd = value.endInclusive / safeDuration * size.width
+            drawRect(
+                color = Color.Black.copy(alpha = .46f),
+                topLeft = Offset(selectedEnd, 0f),
+                size = androidx.compose.ui.geometry.Size(
+                    width = (size.width - selectedEnd).coerceAtLeast(0f),
+                    height = size.height,
+                ),
+            )
+        }
+
+        playheadFraction?.let { fraction ->
+            val selectedPosition =
+                value.start + fraction.coerceIn(0f, 1f) * (value.endInclusive - value.start)
+            val playheadX = selectedPosition / safeDuration * widthPx
+            Box(
+                Modifier
+                    .offset { IntOffset(playheadX.roundToInt() - 1, 0) }
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .padding(vertical = 7.dp)
+                    .background(BloomCoral, RoundedCornerShape(2.dp)),
+            )
+        }
+
+        WaveformHandle(
+            xPx = startX,
+            widthPx = widthPx,
+            onMove = { deltaPx ->
+                val current = currentValue
+                val currentEndX = current.endInclusive / safeDuration * widthPx
+                val next = WaveformTrimMath.startFromPointer(
+                    pointerX = current.start / safeDuration * widthPx + deltaPx,
+                    endX = currentEndX,
+                    width = widthPx.toFloat(),
+                    duration = safeDuration,
+                )
+                currentOnValueChange(next..current.endInclusive)
+            },
+            onGrab = {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            },
+        )
+        WaveformHandle(
+            xPx = endX,
+            widthPx = widthPx,
+            onMove = { deltaPx ->
+                val current = currentValue
+                val currentStartX = current.start / safeDuration * widthPx
+                val next = WaveformTrimMath.endFromPointer(
+                    pointerX = current.endInclusive / safeDuration * widthPx + deltaPx,
+                    startX = currentStartX,
+                    width = widthPx.toFloat(),
+                    duration = safeDuration,
+                )
+                currentOnValueChange(current.start..next)
+            },
+            onGrab = {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            },
+        )
+    }
+}
+
+@Composable
+private fun WaveformHandle(
+    xPx: Float,
+    widthPx: Int,
+    onMove: (Float) -> Unit,
+    onGrab: () -> Unit,
+) {
+    if (widthPx <= 0) return
+    val density = LocalDensity.current
+    Box(
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    x = (xPx - with(density) { 20.dp.toPx() }).toInt(),
+                    y = 0,
+                )
+            }
+            .width(40.dp)
+            .fillMaxHeight()
+            .pointerInput(widthPx) {
+                detectDragGestures(
+                    onDragStart = { onGrab() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        onMove(amount.x)
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .width(12.dp)
+                .fillMaxHeight()
+                .padding(vertical = 4.dp)
+                .background(BloomBlue, RoundedCornerShape(6.dp))
+                .border(2.dp, Color.White, RoundedCornerShape(6.dp)),
+        )
+    }
+}
+
+@Composable
+private fun FadeToggle(
+    label: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+) {
+    TactileSurface(
+        onClick = onToggle,
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        borderColor = Color.Transparent,
+        liftedElevation = 0.dp,
+        modifier = Modifier.height(40.dp),
+    ) { contentColor ->
+        Row(
+            modifier = Modifier.padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(20.dp)
+                    .background(
+                        if (checked) BloomBlue else Color.Transparent,
+                        RoundedCornerShape(5.dp),
+                    )
+                    .border(
+                        1.5.dp,
+                        if (checked) BloomBlue
+                        else MaterialTheme.colorScheme.outline.copy(alpha = .65f),
+                        RoundedCornerShape(5.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (checked) {
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
+            }
+            Text(label, color = contentColor, fontWeight = FontWeight.SemiBold)
         }
     }
 }

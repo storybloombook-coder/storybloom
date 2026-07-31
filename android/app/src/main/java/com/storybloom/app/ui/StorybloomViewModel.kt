@@ -160,6 +160,15 @@ class StorybloomViewModel(application: Application) : AndroidViewModel(applicati
 
     suspend fun addPhotos(bookId: String, uris: List<Uri>) = runOperation {
         val paths = imageStore.importAll(uris)
+        addPhotoPathsInternal(bookId, paths)
+    }
+
+    suspend fun addPhotoPaths(bookId: String, paths: List<String>) = runOperation {
+        addPhotoPathsInternal(bookId, paths)
+    }
+
+    private suspend fun addPhotoPathsInternal(bookId: String, paths: List<String>) {
+        if (paths.isEmpty()) return
         val existing = repository.getPages(bookId)
         val ids = paths.mapIndexed { index, path ->
             repository.createPage(bookId, existing.size + index + 1, path).id

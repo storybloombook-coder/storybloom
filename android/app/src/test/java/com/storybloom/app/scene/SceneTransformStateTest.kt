@@ -81,6 +81,18 @@ class SceneTransformStateTest {
     }
 
     @Test
+    fun releasedVerticalLookEasesBackWithoutChangingHorizontalOrbit() {
+        val state = SceneTransformState()
+        state.orbitBy(yawDegrees = 31f, pitchDegrees = 28f)
+        val yaw = state.snapshot().cameraYaw
+
+        repeat(90) { state.settlePitch(1f / 60f) }
+
+        assertEquals(yaw, state.snapshot().cameraYaw)
+        assertEquals(24f, state.snapshot().cameraPitch, .3f)
+    }
+
+    @Test
     fun followModeMovesCloserWithoutOwningTheWorldRotation() {
         val state = SceneTransformState()
         val before = state.snapshot()
@@ -96,14 +108,17 @@ class SceneTransformStateTest {
 
         assertTrue(following.followKolobok)
         assertTrue(following.cameraDistance < before.cameraDistance)
+        assertEquals(6f, following.cameraDistance, .0001f)
         assertEquals(adjustedFollowDistance, animated.cameraDistance)
         assertTrue(animated.followKolobok)
         assertNotEquals(following.sceneRotation, animated.sceneRotation)
 
+        state.orbitBy(31f, 0f)
+        val followedYaw = state.snapshot().cameraYaw
         state.setFollowKolobok(false)
         val restored = state.snapshot()
         assertTrue(!restored.followKolobok)
-        assertEquals(before.cameraYaw, restored.cameraYaw)
+        assertEquals(followedYaw, restored.cameraYaw)
         assertEquals(before.cameraPitch, restored.cameraPitch)
         assertEquals(before.cameraDistance, restored.cameraDistance)
     }

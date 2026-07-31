@@ -47,4 +47,41 @@ class LocalCueAnalyzerTest {
         val keywords = result.cues.filter { it.type == com.storybloom.app.data.CueType.KEYWORD }
         assertEquals(5, keywords.size)
     }
+
+    @Test
+    fun ranksPickerSuggestionsFromTheTappedWord() {
+        val related = LocalCueAnalyzer.relatedSoundIds(
+            query = "barking",
+            ambient = false,
+            allowedIds = listOf("fx_animal_dog", "fx_bell", "fx_rain"),
+        )
+
+        assertTrue("fx_animal_dog" in related)
+        assertFalse("fx_bell" in related)
+    }
+
+    @Test
+    fun pickerSearchUsesVocabularyAsWellAsStableIds() {
+        assertTrue(
+            LocalCueAnalyzer.soundMatchesSearch(
+                soundId = "fx_animal_dog",
+                query = "puppy",
+                ambient = false,
+            ),
+        )
+        assertTrue(
+            LocalCueAnalyzer.soundMatchesSearch(
+                soundId = "amb_forest",
+                query = "woods",
+                ambient = true,
+            ),
+        )
+        assertFalse(
+            LocalCueAnalyzer.soundMatchesSearch(
+                soundId = "fx_bell",
+                query = "puppy",
+                ambient = false,
+            ),
+        )
+    }
 }

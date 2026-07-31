@@ -1,6 +1,7 @@
 package com.storybloom.app.ui.screens
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
@@ -52,10 +53,14 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.storybloom.app.ui.UiLocale
+import com.storybloom.app.ui.components.GlassGlareOverlay
+import com.storybloom.app.ui.components.GlassTilt
+import com.storybloom.app.ui.components.rememberGlassTilt
 import com.storybloom.app.ui.text
 
 @Composable
@@ -67,6 +72,7 @@ fun HomeScreen(
     onCreateStory: () -> Unit,
     onScene: () -> Unit,
 ) {
+    val glassTilt = rememberGlassTilt()
     Box(
         Modifier
             .fillMaxSize()
@@ -129,6 +135,7 @@ fun HomeScreen(
                 TactileGlassButton(
                     label = locale.text("Add a Book", "Новая книга"),
                     onClick = onAddBook,
+                    tilt = glassTilt,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
@@ -136,6 +143,7 @@ fun HomeScreen(
                 TactileGlassButton(
                     label = locale.text("Create a Story", "Своя история"),
                     onClick = onCreateStory,
+                    tilt = glassTilt,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
@@ -143,6 +151,7 @@ fun HomeScreen(
                 TactileGlassButton(
                     label = locale.text("My Library", "Библиотека"),
                     onClick = onLibrary,
+                    tilt = glassTilt,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
@@ -164,16 +173,20 @@ fun HomeScreen(
                         if (locale == UiLocale.ENGLISH) UiLocale.RUSSIAN else UiLocale.ENGLISH,
                     )
                 },
+                tilt = glassTilt,
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
+                glareRadius = 20.dp,
                 fontSize = 13.sp,
                 accessibilityLabel = locale.text("Switch to Russian", "Switch to English"),
             )
             TactileGlassButton(
                 label = "3D",
                 onClick = onScene,
+                tilt = glassTilt,
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
+                glareRadius = 20.dp,
                 fontSize = 13.sp,
                 accessibilityLabel = locale.text("Open 3D scene", "Открыть 3D-сцену"),
             )
@@ -185,8 +198,10 @@ fun HomeScreen(
 private fun TactileGlassButton(
     label: String,
     onClick: () -> Unit,
+    tilt: GlassTilt,
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(12.dp),
+    glareRadius: Dp = 12.dp,
     fontSize: TextUnit = 17.sp,
     accessibilityLabel: String = label,
 ) {
@@ -239,6 +254,12 @@ private fun TactileGlassButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        GlassGlareOverlay(
+            tilt = tilt,
+            radius = glareRadius,
+            modifier = Modifier.matchParentSize(),
+            intensity = .4f,
+        )
         Text(
             text = label,
             color = Color.White,
@@ -277,6 +298,7 @@ private class LoopingMenuVideoView(context: Context) :
     private var monitorScheduled = false
     private var videoWidth = 0
     private var videoHeight = 0
+    private var loopMaskBitmap: Bitmap? = null
     private val loopMonitor = object : Runnable {
         override fun run() {
             monitorScheduled = false
@@ -398,6 +420,7 @@ private class LoopingMenuVideoView(context: Context) :
         if (restarting) return
         restarting = true
         stopMonitor()
+        captureDecoderMatchedMask()
         posterView.animate().cancel()
         posterView.animate()
             .alpha(1f)
@@ -408,6 +431,23 @@ private class LoopingMenuVideoView(context: Context) :
                 openPlayer()
             }
             .start()
+    }
+
+    private fun captureDecoderMatchedMask() {
+        if (
+            videoWidth <= 0 ||
+            videoHeight <= 0 ||
+            !videoView.isAvailable
+        ) {
+            return
+        }
+        val snapshot = runCatching {
+            videoView.getBitmap(videoWidth, videoHeight)
+        }.getOrNull() ?: return
+        val previous = loopMaskBitmap
+        loopMaskBitmap = snapshot
+        posterView.setImageBitmap(snapshot)
+        previous?.takeUnless(Bitmap::isRecycled)?.recycle()
     }
 
     private fun retryMasked() {
@@ -523,7 +563,7 @@ private class LoopingMenuVideoView(context: Context) :
     }
 
     private companion object {
-        const val MASKED_RESTART_MS = 12_000
+        const val MASKED_RESTART_MS = 5_200
         const val LOOP_POLL_MS = 100L
         const val POSTER_FADE_MS = 220L
         const val DECODER_SETTLE_MS = 180L

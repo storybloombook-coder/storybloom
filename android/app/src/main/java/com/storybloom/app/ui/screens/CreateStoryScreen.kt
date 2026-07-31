@@ -50,6 +50,7 @@ import com.storybloom.app.speech.VoskRecognizer
 import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.BloomPrimaryButton
+import com.storybloom.app.ui.components.PulsingStoryDot
 import com.storybloom.app.ui.components.StoryScaffold
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomCoral
@@ -92,7 +93,10 @@ fun CreateStoryScreen(
         )
     }
 
-    fun stopListening() {
+    fun stopListening(commitPartial: Boolean = true) {
+        if (commitPartial && partial.isNotBlank()) {
+            draft = appendSpokenText(draft, partial)
+        }
         recognitionSession += 1
         listening = false
         partial = ""
@@ -177,12 +181,13 @@ fun CreateStoryScreen(
     }
 
     fun clearCurrentPage() {
-        if (listening) stopListening()
+        if (listening) stopListening(commitPartial = false)
         draft = ""
         partial = ""
     }
 
     fun addPageAndContinue() {
+        if (listening) stopListening()
         val pageText = draft.trim()
         if (pageText.isBlank()) {
             viewModel.notify(
@@ -193,7 +198,6 @@ fun CreateStoryScreen(
             )
             return
         }
-        if (listening) stopListening()
         savedPages = savedPages + pageText
         draft = ""
         partial = ""
@@ -261,7 +265,6 @@ fun CreateStoryScreen(
                                 )
                             } else {
                                 phase = CreateStoryPhase.WRITING
-                                requestDictation()
                             }
                         },
                     )
@@ -433,6 +436,21 @@ private fun WritingPhase(
                 text = partial,
                 modifier = Modifier.padding(12.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (listening) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PulsingStoryDot(color = BloomCoral)
+            Text(
+                text = locale.text("Listening…", "Слушаю…"),
+                modifier = Modifier.padding(start = 8.dp),
+                color = BloomCoral,
+                fontWeight = FontWeight.Bold,
             )
         }
     }

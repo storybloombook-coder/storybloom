@@ -23,10 +23,14 @@ val BloomCoral = Color(0xFFF17768)
 val BloomGreen = Color(0xFF43A66B)
 val BloomPurple = Color(0xFF8C6DD7)
 val BloomInk = Color(0xFF18283D)
-val StoryCardLight = Color(0xFFF4F4F6)
-val StoryCardDark = Color(0xFF1C1C1E)
-val StorySubtleLight = Color(0xFF6B6B70)
-val StorySubtleDark = Color(0xFF9A9A9E)
+val StoryParchment = Color(0xFFFFF8EC)
+val StoryPaper = Color(0xFFFFFCF6)
+val StoryWood = Color(0xFF8A5A34)
+val StoryWoodDark = Color(0xFF5F3B22)
+val StoryCardLight = Color(0xFFFFFCF6)
+val StoryCardDark = Color(0xFF211F1D)
+val StorySubtleLight = Color(0xFF6E665D)
+val StorySubtleDark = Color(0xFFA9A19A)
 
 private val LightColors = lightColorScheme(
     primary = BloomBlue,
@@ -38,13 +42,13 @@ private val LightColors = lightColorScheme(
     secondaryContainer = Color(0xFFFFDDD7),
     tertiary = BloomGreen,
     tertiaryContainer = Color(0xFFD0F2DC),
-    background = Color.White,
+    background = StoryParchment,
     onBackground = Color(0xFF111113),
     surface = StoryCardLight,
     onSurface = Color(0xFF111113),
-    surfaceVariant = Color(0xFFE6E6EA),
+    surfaceVariant = Color(0xFFF1E8DB),
     onSurfaceVariant = StorySubtleLight,
-    outline = Color(0xFFD3D3D7),
+    outline = Color(0xFFD9CFC1),
 )
 
 private val DarkColors = darkColorScheme(
@@ -53,13 +57,13 @@ private val DarkColors = darkColorScheme(
     primaryContainer = Color(0xFF0B4C7A),
     secondary = Color(0xFFFFB4A9),
     tertiary = Color(0xFF8ED6A8),
-    background = Color.Black,
+    background = Color(0xFF141311),
     onBackground = Color(0xFFF7F7F8),
     surface = StoryCardDark,
     onSurface = Color(0xFFF7F7F8),
-    surfaceVariant = Color(0xFF2C2C2E),
+    surfaceVariant = Color(0xFF302D29),
     onSurfaceVariant = StorySubtleDark,
-    outline = Color(0xFF48484A),
+    outline = Color(0xFF504A44),
 )
 
 private val StoryTypography = androidx.compose.material3.Typography(

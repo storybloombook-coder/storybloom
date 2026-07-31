@@ -17,7 +17,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val captureMenuScene =
             BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_CAPTURE_MENU_SCENE, false)
-        if (captureMenuScene) {
+        val inspectScene =
+            BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_INSPECT_SCENE, false)
+        if (captureMenuScene || inspectScene) {
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 hide(WindowInsetsCompat.Type.systemBars())
                 systemBarsBehavior =
@@ -26,8 +28,8 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             StorybloomTheme {
-                if (captureMenuScene) {
-                    SceneBackdropCaptureScreen()
+                if (captureMenuScene || inspectScene) {
+                    SceneBackdropCaptureScreen(idleForInspection = inspectScene)
                 } else {
                     StorybloomApp()
                 }
@@ -37,5 +39,6 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val EXTRA_CAPTURE_MENU_SCENE = "capture_menu_scene"
+        const val EXTRA_INSPECT_SCENE = "inspect_scene"
     }
 }

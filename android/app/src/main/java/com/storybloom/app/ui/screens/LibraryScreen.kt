@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,8 +44,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,11 +65,17 @@ import androidx.compose.ui.unit.sp
 import com.storybloom.app.data.BookSource
 import com.storybloom.app.data.BookSummary
 import com.storybloom.app.data.PrepStatus
+import com.storybloom.app.reader.ReadinessReport
+import com.storybloom.app.reader.ReadinessWarning
+import com.storybloom.app.reader.ReadinessWarningKind
+import com.storybloom.app.reader.checkReadiness
 import com.storybloom.app.ui.AppRoute
 import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.EmptyState
 import com.storybloom.app.ui.components.NativeImage
+import com.storybloom.app.ui.components.PhysicalBookshelf
+import com.storybloom.app.ui.components.SwipeRevealRow
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomCoral
 import com.storybloom.app.ui.theme.BloomGreen
@@ -95,6 +104,10 @@ fun LibraryScreen(
 ) {
     var favoritesOnly by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<BookSummary?>(null) }
+    var readinessByBook by remember { mutableStateOf<Map<String, ReadinessReport>>(emptyMap()) }
+    var missingFor by remember {
+        mutableStateOf<Pair<BookSummary, ReadinessReport>?>(null)
+    }
     val scope = rememberCoroutineScope()
     val favorites = books
         .filter { it.book.isFavorite }
@@ -103,6 +116,20 @@ fun LibraryScreen(
                 .thenBy { it.book.createdAt },
         )
     val visibleBooks = if (favoritesOnly) favorites else books
+
+    LaunchedEffect(books) {
+        readinessByBook = books.associate { summary ->
+            val bundle = viewModel.repository.getBundle(summary.book.id)
+            summary.book.id to if (bundle == null) {
+                checkReadiness(emptyList(), emptyList())
+            } else {
+                checkReadiness(
+                    bundle.pages.map { it.page },
+                    bundle.pages.flatMap { it.cues },
+                )
+            }
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -144,7 +171,7 @@ fun LibraryScreen(
         },
     ) { padding ->
         when {
-            loading -> Box(
+            loading && books.isEmpty() -> Box(
                 Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -166,24 +193,36 @@ fun LibraryScreen(
                     .padding(padding),
             )
 
-            else -> LazyColumn(
+            else -> PullToRefreshBox(
+                isRefreshing = loading,
+                onRefresh = { scope.launch { viewModel.refreshBooks() } },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    top = 10.dp,
-                    end = 16.dp,
-                    bottom = 88.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 10.dp,
+                        end = 16.dp,
+                        bottom = 88.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                 if (!favoritesOnly && favorites.isNotEmpty()) {
                     item(key = "favorite-shelf") {
-                        FavoriteShelf(
+                        PhysicalBookshelf(
                             books = favorites,
                             locale = locale,
-                            onBook = onBook,
+                            onOpen = onBook,
+                            onReorder = { orderedIds ->
+                                scope.launch {
+                                    viewModel.runOperation {
+                                        viewModel.repository.updateShelfOrder(orderedIds)
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -209,6 +248,7 @@ fun LibraryScreen(
                     items(visibleBooks, key = { it.book.id }) { summary ->
                         SwipeBookCard(
                             summary = summary,
+                            readiness = readinessByBook[summary.book.id],
                             locale = locale,
                             onClick = { onBook(summary.book.id) },
                             onPlay = {
@@ -224,9 +264,15 @@ fun LibraryScreen(
                                     }
                                 }
                             },
+                            onWarnings = {
+                                readinessByBook[summary.book.id]?.let {
+                                    missingFor = summary to it
+                                }
+                            },
                             onDelete = { deleteTarget = summary },
                         )
                     }
+                }
                 }
             }
         }
@@ -262,6 +308,53 @@ fun LibraryScreen(
             dismissButton = {
                 TextButton(onClick = { deleteTarget = null }) {
                     Text(locale.text("Cancel", "Отмена"))
+                }
+            },
+        )
+    }
+    missingFor?.let { (summary, report) ->
+        AlertDialog(
+            onDismissRequest = { missingFor = null },
+            title = {
+                Text(
+                    locale.text(
+                        "What “${summary.book.title}” still needs",
+                        "Что осталось добавить в «${summary.book.title}»",
+                    ),
+                )
+            },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(
+                        items = report.warnings,
+                        key = { "${it.pageId}:${it.kind}:${it.detail}" },
+                    ) { warning ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    missingFor = null
+                                    viewModel.navigate(AppRoute.PageEditor(warning.pageId))
+                                }
+                                .padding(horizontal = 10.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                warningLabel(warning, locale),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { missingFor = null }) {
+                    Text(locale.text("Close", "Закрыть"))
                 }
             },
         )
@@ -537,44 +630,26 @@ private fun NoFavorites(
 @Composable
 private fun SwipeBookCard(
     summary: BookSummary,
+    readiness: ReadinessReport?,
     locale: UiLocale,
     onClick: () -> Unit,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    onWarnings: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) onDelete()
-            false
-        },
-    )
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        backgroundContent = {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(horizontal = 18.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Icon(
-                    Icons.Rounded.Delete,
-                    contentDescription = locale.text("Delete", "Удалить"),
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
+    SwipeRevealRow(
+        onDelete = onDelete,
+        deleteDescription = locale.text("Delete", "Удалить"),
     ) {
         BookCard(
             summary = summary,
+            readiness = readiness,
             locale = locale,
             onClick = onClick,
             onPlay = onPlay,
             onFavorite = onFavorite,
+            onWarnings = onWarnings,
         )
     }
 }
@@ -582,10 +657,12 @@ private fun SwipeBookCard(
 @Composable
 private fun BookCard(
     summary: BookSummary,
+    readiness: ReadinessReport?,
     locale: UiLocale,
     onClick: () -> Unit,
     onPlay: () -> Unit,
     onFavorite: () -> Unit,
+    onWarnings: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -639,6 +716,24 @@ private fun BookCard(
                     if (summary.book.hasDialogue) {
                         BookBadge(locale.text("Dialogue", "Диалоги"))
                     }
+                    val warningCount = readiness?.warnings?.size ?: 0
+                    if (warningCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(PreparingAmber.copy(alpha = .16f))
+                                .clickable(onClick = onWarnings)
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        ) {
+                            Text(
+                                locale.text("$warningCount missing", "Не хватает: $warningCount"),
+                                color = PreparingAmber,
+                                fontSize = 11.sp,
+                                lineHeight = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
             }
             Column(
@@ -668,7 +763,10 @@ private fun BookCard(
                         },
                     )
                 }
-                if (summary.book.prepStatus == PrepStatus.READY && summary.pageCount > 0) {
+                if (
+                    summary.book.prepStatus == PrepStatus.READY &&
+                    (readiness?.storyPageCount ?: 0) > 0
+                ) {
                     Box(
                         modifier = Modifier
                             .size(36.dp)
@@ -789,6 +887,28 @@ private fun formatBookDate(
         isYesterday(date, now) -> locale.text("Yesterday", "Вчера")
         else -> DateFormat.getDateInstance(DateFormat.MEDIUM, language).format(date.time)
     }
+}
+
+private fun warningLabel(
+    warning: ReadinessWarning,
+    locale: UiLocale,
+): String = when (warning.kind) {
+    ReadinessWarningKind.EMPTY_TEXT -> locale.text(
+        "Page ${warning.pageNumber}: add the page text",
+        "Страница ${warning.pageNumber}: добавьте текст",
+    )
+    ReadinessWarningKind.PAGE_NO_SOUNDS -> locale.text(
+        "Page ${warning.pageNumber}: add ambience or a sound",
+        "Страница ${warning.pageNumber}: добавьте фон или звук",
+    )
+    ReadinessWarningKind.SILENT_CUE -> locale.text(
+        "Page ${warning.pageNumber}: choose a sound for “${warning.detail.orEmpty()}”",
+        "Страница ${warning.pageNumber}: выберите звук для «${warning.detail.orEmpty()}»",
+    )
+    ReadinessWarningKind.UNPLAYABLE_CUE -> locale.text(
+        "Page ${warning.pageNumber}: replace the missing sound",
+        "Страница ${warning.pageNumber}: замените недоступный звук",
+    )
 }
 
 private fun isSameDay(

@@ -110,6 +110,41 @@ object LocalCueAnalyzer {
         TriggerEntry("fx_boom", listOf("exploded", "blast", "взрыв")),
     )
 
+    fun relatedSoundIds(
+        query: String,
+        ambient: Boolean,
+        allowedIds: Collection<String>,
+    ): Set<String> {
+        val normalized = query.trim().lowercase(Locale.ROOT)
+        if (normalized.isBlank()) return emptySet()
+        return (if (ambient) scenes else effects)
+            .asSequence()
+            .filter { it.soundId in allowedIds }
+            .filter { entry ->
+                entry.triggers.any { trigger ->
+                    val candidate = trigger.lowercase(Locale.ROOT)
+                    normalized.contains(candidate) || candidate.contains(normalized)
+                }
+            }
+            .map(TriggerEntry::soundId)
+            .toSet()
+    }
+
+    fun soundMatchesSearch(
+        soundId: String,
+        query: String,
+        ambient: Boolean,
+    ): Boolean {
+        val normalized = query.trim().lowercase(Locale.ROOT)
+        if (normalized.isBlank()) return true
+        if (soundId.lowercase(Locale.ROOT).contains(normalized)) return true
+        return (if (ambient) scenes else effects)
+            .firstOrNull { it.soundId == soundId }
+            ?.triggers
+            ?.any { it.lowercase(Locale.ROOT).contains(normalized) }
+            ?: false
+    }
+
     fun analyze(text: String, meanConfidence: Int = -1): PageAnalysis {
         val lower = text.lowercase(Locale.ROOT)
         val ambient = inferAmbient(lower)

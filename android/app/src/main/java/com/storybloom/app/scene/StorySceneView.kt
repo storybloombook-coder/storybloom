@@ -19,6 +19,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
+import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -28,6 +29,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.random.Random
 
 /**
  * Native OpenGL scene. Camera orbit is deliberately owned by the view and
@@ -41,9 +43,18 @@ import kotlin.math.sqrt
  * reset a one-finger camera gesture.
  */
 class StorySceneView(context: Context) : GLSurfaceView(context) {
-    private val storyRenderer = StorySceneRenderer()
+    private var renderScale = .88f
+    private val storyRenderer = StorySceneRenderer { suggestedScale ->
+        post {
+            if (suggestedScale < renderScale) {
+                renderScale = suggestedScale
+                applyRenderScale()
+            }
+        }
+    }
     var onCrossroadsAction: ((CrossroadsAction) -> Unit)? = null
     var onSceneInteraction: ((SceneInteraction) -> Unit)? = null
+    var onSceneInteractionEvent: ((SceneInteractionEvent) -> Unit)? = null
     private var orbitPointerId = MotionEvent.INVALID_POINTER_ID
     private var lastOrbitX = 0f
     private var lastOrbitY = 0f
@@ -55,6 +66,7 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     init {
+        storyRenderer.setAutoplayAllowed(android.animation.ValueAnimator.areAnimatorsEnabled())
         setEGLContextClientVersion(3)
         setEGLConfigChooser(StoryEglConfigChooser())
         preserveEGLContextOnPause = true
@@ -98,7 +110,7 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
                         pressY,
                         pressWidth,
                         pressHeight,
-                    )
+                    )?.let(::dispatchTapResult)
                 }
                 return true
             }
@@ -107,7 +119,10 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
                 velocityTracker?.addMovement(event)
                 if (event.pointerCount >= 2) pinchDistance = pointerDistance(event)
                 moved = true
-                queueEvent(storyRenderer::releaseTreeBonk)
+                queueEvent {
+                    storyRenderer.releaseTreeBonk()
+                    storyRenderer.cancelPressedTreeTap()
+                }
                 // Do not replace orbitPointerId: the first finger continues to
                 // orbit normally while a second finger optionally zooms.
                 return true
@@ -126,18 +141,25 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
                     val crossedSlop = sqrt(totalX * totalX + totalY * totalY) > touchSlop
                     if (!moved && crossedSlop) {
                         moved = true
-                        queueEvent(storyRenderer::releaseTreeBonk)
+                        storyRenderer.beginCameraGesture()
+                        queueEvent {
+                            storyRenderer.releaseTreeBonk()
+                            storyRenderer.cancelPressedTreeTap()
+                        }
                         // Apply the complete buffered drag once so slow,
                         // deliberate motion remains responsive after slop.
                         storyRenderer.orbitBy(
                             yawDegrees = -totalX * 0.28f,
-                            pitchDegrees = totalY * 0.22f,
+                            pitchDegrees = -totalY * 0.22f,
                         )
                     } else if (moved && (dx != 0f || dy != 0f)) {
                         storyRenderer.orbitBy(
                             yawDegrees = -dx * 0.28f,
-                            pitchDegrees = dy * 0.22f,
+                            pitchDegrees = -dy * 0.22f,
                         )
+                    }
+                    if (moved && sqrt(totalX * totalX + totalY * totalY) > 40f) {
+                        queueEvent(storyRenderer::cancelInteractiveEncounter)
                     }
                     lastOrbitX = x
                     lastOrbitY = y
@@ -176,12 +198,11 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
                 if (moved) {
                     storyRenderer.flingOrbit(
                         yawDegreesPerSecond = -(velocityTracker?.xVelocity ?: 0f) * .018f,
-                        pitchDegreesPerSecond = (velocityTracker?.yVelocity ?: 0f) * .012f,
+                        pitchDegreesPerSecond = 0f,
                     )
                 }
                 if (!moved) {
                     super.performClick()
-                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     val tapX = event.x
                     val tapY = event.y
                     val tapWidth = width
@@ -189,15 +210,16 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
                     queueEvent {
                         storyRenderer.releaseTreeBonk()
                         storyRenderer.tapAt(tapX, tapY, tapWidth, tapHeight)?.let { result ->
-                            post {
-                                result.crossroadsAction?.let { onCrossroadsAction?.invoke(it) }
-                                result.interaction?.let { onSceneInteraction?.invoke(it) }
-                            }
+                            dispatchTapResult(result)
                         }
                     }
                 } else {
-                    queueEvent(storyRenderer::releaseTreeBonk)
+                    queueEvent {
+                        storyRenderer.releaseTreeBonk()
+                        storyRenderer.cancelPressedTreeTap()
+                    }
                 }
+                queueEvent(storyRenderer::endCameraGesture)
                 velocityTracker?.recycle()
                 velocityTracker = null
                 orbitPointerId = MotionEvent.INVALID_POINTER_ID
@@ -207,7 +229,11 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                queueEvent(storyRenderer::releaseTreeBonk)
+                queueEvent {
+                    storyRenderer.releaseTreeBonk()
+                    storyRenderer.cancelPressedTreeTap()
+                    storyRenderer.endCameraGesture()
+                }
                 velocityTracker?.recycle()
                 velocityTracker = null
                 orbitPointerId = MotionEvent.INVALID_POINTER_ID
@@ -221,19 +247,59 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
-        if (width > 0 && height > 0) {
-            holder.setFixedSize(
-                (width * RENDER_SCALE).roundToInt().coerceAtLeast(1),
-                (height * RENDER_SCALE).roundToInt().coerceAtLeast(1),
-            )
-        }
+        applyRenderScale()
+    }
+
+    private fun applyRenderScale() {
+        if (width <= 0 || height <= 0) return
+        holder.setFixedSize(
+            (width * renderScale).roundToInt().coerceAtLeast(1),
+            (height * renderScale).roundToInt().coerceAtLeast(1),
+        )
     }
 
     override fun performClick(): Boolean {
         return super.performClick()
     }
 
-    fun setStoryPlaying(playing: Boolean) = storyRenderer.setStoryPlaying(playing)
+    private fun dispatchTapResult(result: SceneTapResult) {
+        post {
+            when (result.haptic) {
+                SceneHaptic.NONE -> Unit
+                SceneHaptic.LIGHT ->
+                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                SceneHaptic.MEDIUM ->
+                    performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            }
+        }
+        val deliverResult = {
+            result.crossroadsAction?.let { onCrossroadsAction?.invoke(it) }
+            result.interaction?.let { interaction ->
+                onSceneInteraction?.invoke(interaction)
+                onSceneInteractionEvent?.invoke(
+                    SceneInteractionEvent(
+                        interaction = interaction,
+                        variant = result.variant,
+                    ),
+                )
+            }
+            Unit
+        }
+        if (result.crossroadsAction != null) {
+            postDelayed(deliverResult, CROSSROADS_NAVIGATION_DELAY_MS)
+        } else {
+            post(deliverResult)
+        }
+    }
+
+    fun requestStoryPlay() = queueEvent(storyRenderer::requestStoryPlay)
+
+    fun requestStoryPause() = queueEvent(storyRenderer::requestStoryPause)
+
+    fun noteUserInput() = queueEvent(storyRenderer::noteUserInput)
+
+    fun setAutoplayAllowed(allowed: Boolean) =
+        queueEvent { storyRenderer.setAutoplayAllowed(allowed) }
 
     fun setSceneRotationEnabled(enabled: Boolean) =
         storyRenderer.setSceneRotationEnabled(enabled)
@@ -242,11 +308,24 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
 
     fun resetCamera() = storyRenderer.resetCamera()
 
-    fun setWeather(weather: SceneWeather) = storyRenderer.setWeather(weather)
+    fun setWeather(weather: SceneWeather) =
+        queueEvent { storyRenderer.setWeather(weather) }
+
+    fun setEnvironment(observation: SceneWeatherObservation) =
+        queueEvent { storyRenderer.setEnvironment(observation) }
 
     fun setRockMenuLanguage(russian: Boolean) = storyRenderer.setRockMenuLanguage(russian)
 
     fun storyTimeSeconds(): Int = storyRenderer.transformSnapshot().storyTime.toInt()
+
+    internal fun storySnapshot(): SceneStorySnapshot = storyRenderer.storySnapshot()
+
+    internal fun encounterSnapshot(): SceneEncounterSnapshot =
+        storyRenderer.encounterSnapshot()
+
+    internal fun bubbleAnchor(): SceneBubbleAnchor? = storyRenderer.bubbleAnchor()
+
+    internal fun activeZone(): SceneZone = storyRenderer.activeZone()
 
     internal fun transformSnapshotForTest(): SceneFrame = storyRenderer.transformSnapshot()
 
@@ -258,7 +337,7 @@ class StorySceneView(context: Context) : GLSurfaceView(context) {
     }
 
     private companion object {
-        const val RENDER_SCALE = .88f
+        const val CROSSROADS_NAVIGATION_DELAY_MS = 250L
     }
 }
 
@@ -309,14 +388,26 @@ private class StoryEglConfigChooser : GLSurfaceView.EGLConfigChooser {
 
 enum class SceneWeather {
     CLEAR,
+    PARTLY,
+    OVERCAST,
+    FOG,
     RAIN,
     SNOW,
+    STORM,
 }
 
 enum class CrossroadsAction {
     ADD_BOOK,
     CREATE_STORY,
     LIBRARY,
+}
+
+enum class SceneZone {
+    IZBA,
+    HARE,
+    WOLF,
+    BEAR,
+    FOX,
 }
 
 enum class SceneInteraction {
@@ -339,31 +430,96 @@ enum class SceneInteraction {
     KOLOBOK,
     MOON_WINK,
     TREE_RUSTLE,
-    MEADOW_BLOOM,
-    PATH_SPARKLE,
     SUN_GLOW,
     BUTTERFLY_DANCE,
     HIVE_BUZZ,
 }
 
+data class SceneInteractionEvent(
+    val interaction: SceneInteraction,
+    val variant: SceneInteractionVariant? = null,
+)
+
+data class SceneBubbleAnchor(
+    val xFraction: Float,
+    val yFraction: Float,
+)
+
+enum class SceneInteractionVariant {
+    FISH_SILVER,
+    FISH_BOOT,
+    FISH_GOLD,
+}
+
 private data class SceneTapResult(
     val crossroadsAction: CrossroadsAction? = null,
     val interaction: SceneInteraction? = null,
+    val variant: SceneInteractionVariant? = null,
+    val haptic: SceneHaptic = SceneHaptic.LIGHT,
 )
 
-private class StorySceneRenderer : GLSurfaceView.Renderer {
+private enum class SceneHaptic {
+    NONE,
+    LIGHT,
+    MEDIUM,
+}
+
+private class StorySceneRenderer(
+    private val onRenderScaleSuggested: (Float) -> Unit,
+) : GLSurfaceView.Renderer {
     private val transforms = SceneTransformState()
+    private val storyDirector = SceneStoryDirector()
+    private val encounterDirector = SceneEncounterDirector()
+    private val eggRegistry = SceneEggRegistry()
+    private val atmosphereDirector = SceneAtmosphereDirector()
+    private val adaptiveQuality = SceneAdaptiveQualityController()
+    private val lifeDirector = SceneLifeDirector()
+    private val introCameraDirector =
+        SceneIntroCameraDirector(SystemClock.uptimeMillis())
     private var frame = SceneFrame()
     @Volatile
+    private var latestStory = storyDirector.snapshot()
+    @Volatile
+    private var latestEncounter = SceneEncounterSnapshot()
+    @Volatile
+    private var latestBubbleAnchor: SceneBubbleAnchor? = null
+    @Volatile
+    private var lastCameraInputMs = 0L
+    @Volatile
+    private var renderedCameraYaw = 180f
+    private var renderedCameraPitch = 24f
+    private var renderedCameraDistance = 13.2f
+    private var followCameraActive = false
+    @Volatile
+    private var cinematicCameraActive = false
+    @Volatile
+    private var introCameraHoldingActive = true
+    private var actorDrawAlpha = 1f
+    private var kolobokRollDegrees = 0f
+    private var kolobokLinearSpeed = 0f
+    private var previousKolobokAngle = latestStory.kolobokAngleRadians
+    private var renderedHappyExpression = 0f
+    private var renderedStartledExpression = 0f
+    private var renderedSlyExpression = 0f
+    @Volatile
     private var weather = SceneWeather.CLEAR
+    private var latestAtmosphere = atmosphereDirector.snapshot()
+    private var localHour = 12f
+    private var lastClockSampleMs = 0L
+    private var solarLatitude: Double? = null
+    private var solarLongitude: Double? = null
+    private var solarElevationDegrees: Float? = null
+    private var retainedWetness = 0f
     private var lastFrameMs = 0L
     private var pausedAtMs = 0L
+    private var latestDeltaSeconds = 0f
     @Volatile
     private var yawVelocity = 0f
     @Volatile
     private var pitchVelocity = 0f
     @Volatile
     private var greetingUntilMs = 0L
+    private var foxTailTipSwayDegrees = 0f
 
     private var program = 0
     private var mvpLocation = 0
@@ -396,6 +552,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var cylinder: GlMesh? = null
     private var cone: GlMesh? = null
     private var disc: GlMesh? = null
+    private var terrain: GlMesh? = null
     private var ring: GlMesh? = null
     private var pondBlob: GlMesh? = null
     private var crossroadsBoulder: GlMesh? = null
@@ -449,6 +606,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private val normalModel = FloatArray(16)
     private val normalMatrix = FloatArray(9)
     private val colorCache = mutableMapOf<String, Array<FloatArray?>>()
+    private val dynamicColor = FloatArray(4)
     private val instanceBuffers = mutableMapOf<Int, Int>()
     private var instanceUploadBuffer: FloatBuffer? = null
     private val dynamicInstanceGroups =
@@ -456,9 +614,20 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var eyeX = 0f
     private var eyeY = 0f
     private var eyeZ = 0f
+    private var sceneSpaceEyeX = 0f
+    private var sceneSpaceEyeZ = 0f
     private var cameraTargetX = 0f
     private var cameraTargetY = 1.1f
     private var cameraTargetZ = 0f
+    private var cameraGestureActive = false
+    private var renderedPlaqueHeading = 0f
+    private var plaqueHeadingInitialized = false
+    private var plaqueTurnActivity = 0f
+    private val plaquePressedAtMs = LongArray(3)
+    private var crossroadsNavigationPendingUntilMs = 0L
+    private val greetingElapsedSeconds = FloatArray(SceneActor.entries.size) { -1f }
+    private var previousGreetingStoryActor: SceneActor? = null
+    private var previousGreetingEncounterActor: SceneActor? = null
     private var viewportWidth = 1
     private var viewportHeight = 1
 
@@ -466,7 +635,6 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var vegetationBatches = emptyList<StaticBatch>()
 
     private var fishingStartedMs = 0L
-    private var fishingCatchCount = 0
     private var fishingKind = FishingKind.SILVER
     private var accumulatedBoots = 0
     private var owlStartedMs = 0L
@@ -475,17 +643,20 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var owlLastTapMs = 0L
     private var owlTapTreeIndex = -1
     private var owlActiveTreeIndex = 2
-    private val owlCooldownUntilMs = mutableMapOf<Int, Long>()
     private var smokeRingsStartedMs = 0L
     private var izbaFlashStartedMs = 0L
-    private var stoneBirdsStartedMs = 0L
+    private val stoneBirdStartedAtMs = LongArray(STONE_BIRD_COUNT)
+    private val stoneBirdCameraX = FloatArray(STONE_BIRD_COUNT)
+    private val stoneBirdCameraZ = FloatArray(STONE_BIRD_COUNT)
     private var willowSwayStartedMs = 0L
-    private var willowTapCount = 0
-    private var willowLastTapMs = 0L
+    private val willowTapSequence = TimedTapSequence(
+        requiredTaps = 3,
+        windowMs = 3_000L,
+    )
     private var magpiesStartedMs = 0L
+    private var magpieFlightSeed = 0
     private var frogJumpStartedMs = 0L
-    private var drizzleStartedMs = 0L
-    private var drizzleCloud = -1
+    private val drizzleStartedAtMs = LongArray(SCENE_CLOUD_COUNT)
     private var moonWinkStartedMs = 0L
     private var animalReaction = AnimalReaction.NONE
     private var animalReactionStartedMs = 0L
@@ -496,6 +667,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private var foxTapCount = 0
     private var foxLastTapMs = 0L
     private var foxEndingStartedMs = 0L
+    private var foxEndingRebirthTriggered = false
+    private var foxEndingCameraStartYaw = 0f
+    private var foxEndingCameraStartPitch = 0f
+    private var foxEndingCameraStartDistance = 0f
+    private var foxEndingCameraStartTarget = WorldPoint3(0f, 1.1f, 0f)
 
     private val mushroomSpots = listOf(
         PolarPoint(184f, 6.78f),
@@ -516,6 +692,53 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         PolarPoint(238f, 3.68f),
         PolarPoint(304f, 3.46f),
     )
+    private val terrainHills = listOf(
+        terrainHill(29f, 6.35f, 1.02f),
+        terrainHill(48f, 7.02f, 1.16f),
+        terrainHill(101f, 6.62f, .96f),
+        terrainHill(120f, 7.08f, 1.19f),
+        terrainHill(171f, 6.44f, 1.08f),
+        terrainHill(193f, 7.02f, .94f),
+        terrainHill(245f, 6.53f, 1.15f),
+        terrainHill(265f, 7.06f, 1.00f),
+        terrainHill(344f, 6.58f, 1.12f),
+        terrainHill(43f, 2.52f, .94f),
+        terrainHill(177f, 3.12f, 1.08f),
+        terrainHill(302f, 2.72f, 1.01f),
+    )
+    private val terrainPotholes = listOf(
+        terrainPothole(65f, 6.74f, .46f, .27f, 18f),
+        terrainPothole(84f, 7.18f, .31f, .24f, 71f),
+        terrainPothole(135f, 6.62f, .50f, .31f, 124f),
+        terrainPothole(154f, 7.13f, .28f, .18f, 39f),
+        terrainPothole(210f, 6.71f, .43f, .27f, 163f),
+        terrainPothole(229f, 7.17f, .34f, .20f, 92f),
+        terrainPothole(281f, 6.61f, .52f, .32f, 147f),
+        terrainPothole(304f, 7.14f, .30f, .23f, 52f),
+        terrainPothole(355f, 7.00f, .39f, .24f, 111f),
+    )
+    private val reactiveGrass = List(REACTIVE_GRASS_COUNT) { index ->
+        ReactivePlant(
+            angle = pseudo(index * 137 + 61) * 360f,
+            radius = 2.40f + pseudo(index * 149 + 67) * 4.80f,
+            yaw = pseudo(index * 157 + 73) * 360f,
+            scale = .78f + pseudo(index * 163 + 79) * .52f,
+        )
+    }
+    private val reactiveFlowers = List(REACTIVE_FLOWER_COUNT) { index ->
+        ReactivePlant(
+            angle = pseudo(index * 173 + 83) * 360f,
+            radius = 3.20f + pseudo(index * 179 + 89) * 3.20f,
+            yaw = pseudo(index * 181 + 97) * 360f,
+            scale = .80f + pseudo(index * 191 + 101) * .50f,
+        )
+    }
+    private val grassBendStartedAtMs = LongArray(REACTIVE_GRASS_COUNT)
+    private val grassBendDirectionX = FloatArray(REACTIVE_GRASS_COUNT)
+    private val grassBendDirectionZ = FloatArray(REACTIVE_GRASS_COUNT)
+    private val flowerBendStartedAtMs = LongArray(REACTIVE_FLOWER_COUNT)
+    private val flowerBendDirectionX = FloatArray(REACTIVE_FLOWER_COUNT)
+    private val flowerBendDirectionZ = FloatArray(REACTIVE_FLOWER_COUNT)
     private val owlTree = PolarPoint(164f, 7.08f)
     private val sprucePoints = listOf(
         PolarPoint(104f, 7.18f),
@@ -557,13 +780,15 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         TreeBonkPose(0f, 0f, 0f, 1f, 0f, active = false)
     }
     private var grabbedTreeIndex = -1
+    private var pressedTreeTapPending = false
     private val leafBursts = mutableListOf<LeafBurst>()
     private val hedgehogJourneys = mutableListOf<HedgehogJourney>()
     private val mushroomTakenAtMs = LongArray(mushroomSpots.size)
     private val mushroomReserved = BooleanArray(mushroomSpots.size)
-    private val moonPosition = WorldPoint3(7.2f, 3.35f, -11.5f)
+    private var sunPosition = WorldPoint3(-7.8f, 8.7f, -13.5f)
+    private var moonPosition = WorldPoint3(7.2f, 3.35f, -11.5f)
 
-    private val rain = List(72) { index ->
+    private val rain = List(380) { index ->
         Particle(
             x = pseudo(index * 13 + 7) * 10f - 5f,
             y = pseudo(index * 29 + 3) * 5f + 1f,
@@ -571,16 +796,29 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             phase = pseudo(index * 61 + 5) * 7f,
         )
     }
+    private val snow = List(200) { index ->
+        Particle(
+            x = pseudo(index * 17 + 13) * 16f - 8f,
+            y = pseudo(index * 31 + 19) * 6f + 2f,
+            z = pseudo(index * 53 + 23) * 16f - 8f,
+            phase = pseudo(index * 67 + 29) * 9f,
+        )
+    }
+    private val rainTransforms = ArrayList<Transform>(rain.size)
+    private val snowTransforms = ArrayList<Transform>(snow.size)
 
     fun orbitBy(yawDegrees: Float, pitchDegrees: Float) {
+        noteCameraInput()
         transforms.orbitBy(yawDegrees, pitchDegrees)
     }
 
     fun zoomBy(scale: Float) {
+        noteCameraInput()
         transforms.zoomBy(scale)
     }
 
     fun resetCamera() {
+        noteCameraInput()
         transforms.resetCamera()
         yawVelocity = 0f
         pitchVelocity = 0f
@@ -591,12 +829,50 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         pitchVelocity = pitchDegreesPerSecond.coerceIn(-65f, 65f)
     }
 
+    fun beginCameraGesture() {
+        cameraGestureActive = true
+    }
+
+    fun endCameraGesture() {
+        cameraGestureActive = false
+        pitchVelocity = 0f
+    }
+
     fun greet() {
         greetingUntilMs = SystemClock.uptimeMillis() + 850L
     }
 
-    fun setStoryPlaying(playing: Boolean) {
-        transforms.setStoryPlaying(playing)
+    fun requestStoryPlay() {
+        storyDirector.noteUserInput()
+        latestStory = storyDirector.requestPlay()
+    }
+
+    fun requestStoryPause() {
+        storyDirector.noteUserInput()
+        // Story camera motion is written back before ownership changes, so
+        // pausing hands the exact current view to the user instead of
+        // snapping to the stale pre-story yaw on the following frame.
+        transforms.setCameraYaw(renderedCameraYaw)
+        latestStory = storyDirector.requestPause()
+    }
+
+    fun noteCameraInput() {
+        storyDirector.noteUserInput()
+        introCameraDirector.releaseByCameraInput()
+        transforms.setCameraYaw(renderedCameraYaw)
+        lastCameraInputMs = SystemClock.uptimeMillis()
+    }
+
+    fun noteUserInput() {
+        storyDirector.noteUserInput()
+    }
+
+    fun setAutoplayAllowed(allowed: Boolean) {
+        storyDirector.setAutoplayAllowed(allowed)
+    }
+
+    fun cancelInteractiveEncounter() {
+        encounterDirector.cancel()
     }
 
     fun setSceneRotationEnabled(enabled: Boolean) {
@@ -611,8 +887,109 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         weather = next
     }
 
+    fun setEnvironment(observation: SceneWeatherObservation) {
+        weather = observation.weather
+        solarLatitude = observation.latitude
+        solarLongitude = observation.longitude
+        lastClockSampleMs = 0L
+    }
+
     fun setRockMenuLanguage(russian: Boolean) {
         russianRockMenu = russian
+    }
+
+    fun storySnapshot(): SceneStorySnapshot = latestStory
+
+    fun encounterSnapshot(): SceneEncounterSnapshot = latestEncounter
+
+    fun bubbleAnchor(): SceneBubbleAnchor? = latestBubbleAnchor
+
+    fun activeZone(): SceneZone {
+        if (
+            cinematicCameraActive &&
+            !introCameraHoldingActive &&
+            (
+                latestStory.mode == SceneStoryMode.PLAYING ||
+                    latestStory.mode == SceneStoryMode.REBIRTH
+                )
+        ) {
+            val storyAngle = Math.toDegrees(
+                latestStory.kolobokAngleRadians.toDouble(),
+            ).toFloat()
+            return zoneForAngle(storyAngle)
+        }
+        val zoneAngle = ((renderedCameraYaw - 180f) % 360f + 360f) % 360f
+        return zoneForAngle(zoneAngle)
+    }
+
+    private fun zoneForAngle(angleDegrees: Float): SceneZone {
+        val zoneAngle = ((angleDegrees % 360f) + 360f) % 360f
+        return when (((zoneAngle + 36f) / 72f).toInt() % 5) {
+            0 -> SceneZone.IZBA
+            1 -> SceneZone.HARE
+            2 -> SceneZone.WOLF
+            3 -> SceneZone.BEAR
+            else -> SceneZone.FOX
+        }
+    }
+
+    private fun zoneCameraFraming(zone: SceneZone): ZoneCameraFraming {
+        val (radius, height, lookAtHeight) = when (zone) {
+            SceneZone.IZBA -> Triple(12.6f, 6.0f, 1.2f)
+            SceneZone.HARE -> Triple(12.8f, 6.3f, 1.1f)
+            SceneZone.WOLF -> Triple(13.3f, 6.8f, 1.3f)
+            SceneZone.BEAR -> Triple(13.4f, 7.0f, 1.4f)
+            SceneZone.FOX -> Triple(12.8f, 6.2f, 1.1f)
+        }
+        val rise = height - lookAtHeight
+        return ZoneCameraFraming(
+            distance = sqrt(radius * radius + rise * rise),
+            pitchDegrees = Math.toDegrees(
+                kotlin.math.atan2(rise.toDouble(), radius.toDouble()),
+            ).toFloat(),
+            lookAtHeight = lookAtHeight,
+        )
+    }
+
+    private fun storyCameraFraming(story: SceneStorySnapshot): ZoneCameraFraming {
+        val (radius, height, lookAtHeight) = when (story.chapter) {
+            SceneStoryChapter.BIRTH -> Triple(12f, 5.2f, 1.2f)
+            SceneStoryChapter.ROAD_TO_HARE,
+            SceneStoryChapter.ROAD_TO_WOLF,
+            SceneStoryChapter.ROAD_TO_BEAR,
+            SceneStoryChapter.ROAD_TO_FOX,
+            -> Triple(13f, 6.5f, 1.2f)
+
+            SceneStoryChapter.HARE -> Triple(13.2f, 5.9f, .9f)
+            SceneStoryChapter.WOLF -> Triple(13.2f, 6.3f, .9f)
+            SceneStoryChapter.BEAR -> Triple(13.2f, 6.5f, .9f)
+            SceneStoryChapter.FOX_FINALE -> Triple(13.2f, 5.9f, .9f)
+        }
+        val rise = height - lookAtHeight
+        return ZoneCameraFraming(
+            distance = sqrt(radius * radius + rise * rise),
+            pitchDegrees = Math.toDegrees(
+                kotlin.math.atan2(rise.toDouble(), radius.toDouble()),
+            ).toFloat(),
+            lookAtHeight = lookAtHeight,
+        )
+    }
+
+    private fun introCameraFraming(): ZoneCameraFraming {
+        val rise = INTRO_CAMERA_HEIGHT - INTRO_CAMERA_TARGET_Y
+        return ZoneCameraFraming(
+            distance = sqrt(
+                INTRO_CAMERA_RADIUS * INTRO_CAMERA_RADIUS +
+                    rise * rise,
+            ),
+            pitchDegrees = Math.toDegrees(
+                kotlin.math.atan2(
+                    rise.toDouble(),
+                    INTRO_CAMERA_RADIUS.toDouble(),
+                ),
+            ).toFloat(),
+            lookAtHeight = INTRO_CAMERA_TARGET_Y,
+        )
     }
 
     fun pauseClock() {
@@ -631,11 +1008,21 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             owlFlapStartedMs = shift(owlFlapStartedMs)
             smokeRingsStartedMs = shift(smokeRingsStartedMs)
             izbaFlashStartedMs = shift(izbaFlashStartedMs)
-            stoneBirdsStartedMs = shift(stoneBirdsStartedMs)
+            stoneBirdStartedAtMs.indices.forEach { index ->
+                stoneBirdStartedAtMs[index] = shift(stoneBirdStartedAtMs[index])
+            }
             willowSwayStartedMs = shift(willowSwayStartedMs)
             magpiesStartedMs = shift(magpiesStartedMs)
             frogJumpStartedMs = shift(frogJumpStartedMs)
-            drizzleStartedMs = shift(drizzleStartedMs)
+            drizzleStartedAtMs.indices.forEach { index ->
+                drizzleStartedAtMs[index] = shift(drizzleStartedAtMs[index])
+            }
+            grassBendStartedAtMs.indices.forEach { index ->
+                grassBendStartedAtMs[index] = shift(grassBendStartedAtMs[index])
+            }
+            flowerBendStartedAtMs.indices.forEach { index ->
+                flowerBendStartedAtMs[index] = shift(flowerBendStartedAtMs[index])
+            }
             moonWinkStartedMs = shift(moonWinkStartedMs)
             animalReactionStartedMs = shift(animalReactionStartedMs)
             ambientReactionStartedMs = shift(ambientReactionStartedMs)
@@ -646,12 +1033,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             mushroomTakenAtMs.indices.forEach { index ->
                 mushroomTakenAtMs[index] = shift(mushroomTakenAtMs[index])
             }
+            plaquePressedAtMs.indices.forEach { index ->
+                plaquePressedAtMs[index] = shift(plaquePressedAtMs[index])
+            }
             if (greetingUntilMs > 0L) greetingUntilMs += pausedDuration
             owlTapCount = 0
             owlLastTapMs = 0L
             owlTapTreeIndex = -1
-            willowTapCount = 0
-            willowLastTapMs = 0L
+            willowTapSequence.reset()
             foxTapCount = 0
             foxLastTapMs = 0L
             pausedAtMs = 0L
@@ -662,6 +1051,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     fun transformSnapshot(): SceneFrame = transforms.snapshot()
 
     override fun onSurfaceCreated(gl: javax.microedition.khronos.opengles.GL10?, config: javax.microedition.khronos.egl.EGLConfig?) {
+        if (
+            introCameraDirector.snapshot(SystemClock.uptimeMillis()).phase ==
+            SceneIntroCameraPhase.HOLDING
+        ) {
+            val introFraming = introCameraFraming()
+            cameraTargetX = INTRO_CAMERA_TARGET_X
+            cameraTargetY = INTRO_CAMERA_TARGET_Y
+            cameraTargetZ = INTRO_CAMERA_TARGET_Z
+            renderedCameraYaw = INTRO_CAMERA_YAW
+            renderedCameraPitch = introFraming.pitchDegrees
+            renderedCameraDistance = introFraming.distance
+        }
         GLES30.glClearColor(0.48f, 0.78f, 0.98f, 1f)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
@@ -712,6 +1113,15 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         cylinder = createMesh(cylinderData)
         cone = createMesh(coneData)
         disc = createMesh(discData)
+        terrain = createMesh(
+            Geometry.terrainDisc(
+                radius = 8f,
+                rings = 32,
+                segments = 128,
+                hills = terrainHills,
+                potholes = terrainPotholes,
+            ),
+        )
         ring = createMesh(Geometry.ring(64, .86f))
         pondBlob = createMesh(Geometry.irregularDisc(20, 140))
         crossroadsBoulder = createMesh(Geometry.profiledBoulder(20))
@@ -774,11 +1184,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             0.1f,
             80f,
         )
+        lastFrameMs = SystemClock.uptimeMillis()
     }
 
     override fun onDrawFrame(gl: javax.microedition.khronos.opengles.GL10?) {
         val now = SystemClock.uptimeMillis()
-        val delta = ((now - lastFrameMs) / 1000f).coerceIn(0f, .25f)
+        val rawFrameMs = (now - lastFrameMs).coerceAtLeast(0L)
+        if (rawFrameMs in 1L..250L) {
+            adaptiveQuality.recordFrame(rawFrameMs.toFloat())
+                ?.let(onRenderScaleSuggested)
+        }
+        val delta = (rawFrameMs / 1000f).coerceIn(0f, .25f)
+        latestDeltaSeconds = delta
         val flingDelta = min(.05f, delta)
         lastFrameMs = now
         if (abs(yawVelocity) > .05f || abs(pitchVelocity) > .05f) {
@@ -787,64 +1204,502 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             yawVelocity *= damping
             pitchVelocity *= damping
         }
+        if (!cameraGestureActive) transforms.settlePitch(delta)
         frame = transforms.advance(delta)
+        latestStory = storyDirector.advance(
+            deltaSeconds = delta,
+            blockedByEncounter = encounterDirector.isRunning(),
+        )
+        latestEncounter = encounterDirector.advance(delta)
+        updateGreetingWaves(delta)
+        if (lastClockSampleMs == 0L || now - lastClockSampleMs >= 60_000L) {
+            val calendar = Calendar.getInstance()
+            localHour =
+                calendar.get(Calendar.HOUR_OF_DAY) +
+                calendar.get(Calendar.MINUTE) / 60f +
+                calendar.get(Calendar.SECOND) / 3_600f
+            val solar = solarLatitude?.let { latitude ->
+                solarLongitude?.let { longitude ->
+                    sceneSolarPosition(
+                        latitude = latitude,
+                        longitude = longitude,
+                        epochMillis = System.currentTimeMillis(),
+                    )
+                }
+            }
+            solarElevationDegrees = solar?.elevationDegrees
+            if (solar != null) {
+                sunPosition = solarCelestial(
+                    azimuthDegrees = solar.azimuthDegrees,
+                    elevationDegrees = solar.elevationDegrees,
+                )
+                moonPosition = solarCelestial(
+                    azimuthDegrees = (solar.azimuthDegrees + 180f) % 360f,
+                    elevationDegrees = max(8f, -solar.elevationDegrees),
+                )
+            } else {
+                sunPosition = fallbackCelestial(hourOffset = 13f)
+                moonPosition = fallbackCelestial(hourOffset = 1f)
+            }
+            lastClockSampleMs = now
+        }
+        atmosphereDirector.setWeather(weather)
+        latestAtmosphere = atmosphereDirector.advance(
+            deltaSeconds = delta,
+            localHour = localHour,
+            solarElevationDegrees = solarElevationDegrees,
+            beforeSolarNoon = localHour < 12f,
+        )
+        retainedWetness = if (latestAtmosphere.rainAmount > retainedWetness) {
+            min(1f, retainedWetness + delta * .85f)
+        } else {
+            max(latestAtmosphere.rainAmount, retainedWetness - delta * .018f)
+        }
+        var angularStep = latestStory.kolobokAngleRadians - previousKolobokAngle
+        while (angularStep > PI.toFloat()) angularStep -= (PI * 2f).toFloat()
+        while (angularStep < -PI.toFloat()) angularStep += (PI * 2f).toFloat()
+        val measuredKolobokSpeed = if (latestStory.rolling && delta > .0001f) {
+            abs(angularStep) * SceneMotion.PATH_RADIUS / delta
+        } else {
+            0f
+        }
+        val speedBlend = 1f - exp(-delta * 12f)
+        kolobokLinearSpeed +=
+            (measuredKolobokSpeed - kolobokLinearSpeed) * speedBlend
+        if (latestStory.rolling) {
+            kolobokRollDegrees = (
+                kolobokRollDegrees +
+                    angularStep * SceneMotion.PATH_RADIUS / SceneMotion.KOLOBOK_RADIUS *
+                    (180f / PI.toFloat())
+                ) % 360f
+        }
+        previousKolobokAngle = latestStory.kolobokAngleRadians
         updateTreeBonks(delta)
         updateHedgehogJourneys(now)
 
-        val evening = eveningAmount()
         GLES30.glClearColor(
-            .48f * (1f - evening) + .15f * evening,
-            .78f * (1f - evening) + .24f * evening,
-            .98f * (1f - evening) + .42f * evening,
+            latestAtmosphere.zenith.red,
+            latestAtmosphere.zenith.green,
+            latestAtmosphere.zenith.blue,
             1f,
         )
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
-        val desiredTarget = if (frame.followKolobok) {
-            val travel = SceneMotion.travelRadians(frame.storyTime)
-            val localX = sin(travel) * SceneMotion.PATH_RADIUS
-            val localZ = cos(travel) * SceneMotion.PATH_RADIUS
+        val storyOwnsCamera =
+            latestStory.mode == SceneStoryMode.PLAYING ||
+                latestStory.mode == SceneStoryMode.REBIRTH
+        val userRecentlySteered =
+            cameraGestureActive ||
+                now - lastCameraInputMs <= STORY_CAMERA_IDLE_RESUME_MS
+        val foxEndingCameraElapsed = eventSeconds(foxEndingStartedMs)
+        val foxEndingCameraActive =
+            foxEndingCameraElapsed in 0f..FOX_ENDING_DURATION_SECONDS
+        val introCamera = introCameraDirector.snapshot(now)
+        val introCameraHolding =
+            introCamera.phase == SceneIntroCameraPhase.HOLDING
+        val introCameraHandoff =
+            introCamera.phase == SceneIntroCameraPhase.HANDOFF
+        introCameraHoldingActive = introCameraHolding
+        val storyCameraEligible = storyOwnsCamera && !userRecentlySteered
+        val storyCameraFollow =
+            storyCameraEligible &&
+                introCamera.phase == SceneIntroCameraPhase.INACTIVE
+        val idleCameraFollow =
+            !storyOwnsCamera &&
+                !userRecentlySteered &&
+                introCamera.phase == SceneIntroCameraPhase.INACTIVE
+        val cinematicCamera =
+            introCameraHolding ||
+                introCameraHandoff ||
+                storyCameraFollow ||
+                foxEndingCameraActive
+        cinematicCameraActive = cinematicCamera
+        // The follow toggle configures free-camera behavior. The cinematic
+        // owns its own framing until the user actually steers. A drag during
+        // the tale temporarily hands the camera back without pausing the
+        // story, and the selected pivot then matters just as it did in the
+        // predecessor.
+        val kolobokSafeToInspect =
+            latestStory.kolobokScale > .08f &&
+                latestStory.positionOverride == null
+        val userFollowKolobok =
+            frame.followKolobok &&
+                kolobokSafeToInspect &&
+                userRecentlySteered &&
+                !foxEndingCameraActive
+        followCameraActive = userFollowKolobok
+        val kolobokPoint = currentKolobokPoint()
+        val zoneFraming = zoneCameraFraming(activeZone())
+        val storyFraming = storyCameraFraming(latestStory)
+        val introFraming = introCameraFraming()
+        val introTarget = WorldPoint3(
+            INTRO_CAMERA_TARGET_X,
+            INTRO_CAMERA_TARGET_Y,
+            INTRO_CAMERA_TARGET_Z,
+        )
+        val (foxCameraTargetX, foxCameraTargetZ) = radial(288f, 5.2f)
+        val foxCameraTarget = WorldPoint3(
+            foxCameraTargetX,
+            .95f,
+            foxCameraTargetZ,
+        )
+        val foxEndingTarget = when {
+            foxEndingCameraElapsed < FOX_ENDING_PUSH_SECONDS ->
+                interpolate(
+                    foxEndingCameraStartTarget,
+                    foxCameraTarget,
+                    smoothStep(
+                        foxEndingCameraElapsed / FOX_ENDING_PUSH_SECONDS,
+                    ),
+                )
+            foxEndingCameraElapsed < FOX_ENDING_BLACK_RESET_SECONDS ->
+                foxCameraTarget
+            foxEndingCameraElapsed < FOX_ENDING_REBIRTH_SECONDS ->
+                interpolate(
+                    foxCameraTarget,
+                    introTarget,
+                    smoothStep(
+                        (
+                            foxEndingCameraElapsed -
+                                FOX_ENDING_BLACK_RESET_SECONDS
+                            ) /
+                            (
+                                FOX_ENDING_REBIRTH_SECONDS -
+                                    FOX_ENDING_BLACK_RESET_SECONDS
+                                ),
+                    ),
+                )
+            else -> introTarget
+        }
+        val postIntroTarget = if (storyCameraEligible) {
+            storyFocusPoint()
+        } else {
+            WorldPoint3(0f, zoneFraming.lookAtHeight, 0f)
+        }
+        val localTarget = when {
+            foxEndingCameraActive -> foxEndingTarget
+            introCameraHolding -> introTarget
+            introCameraHandoff -> interpolate(
+                introTarget,
+                postIntroTarget,
+                introCamera.handoffProgress,
+            )
+            userFollowKolobok -> WorldPoint3(kolobokPoint.x, .8f, kolobokPoint.z)
+            storyCameraFollow -> storyFocusPoint()
+            else -> WorldPoint3(0f, zoneFraming.lookAtHeight, 0f)
+        }
+        val desiredTarget = if (userFollowKolobok || cinematicCamera) {
             val rotation = Math.toRadians(frame.sceneRotation.toDouble())
             val rotationCosine = cos(rotation).toFloat()
             val rotationSine = sin(rotation).toFloat()
             WorldPoint3(
-                x = rotationCosine * localX + rotationSine * localZ,
-                y = .62f,
-                z = -rotationSine * localX + rotationCosine * localZ,
+                x = rotationCosine * localTarget.x + rotationSine * localTarget.z,
+                y = localTarget.y,
+                z = -rotationSine * localTarget.x + rotationCosine * localTarget.z,
             )
         } else {
-            WorldPoint3(0f, 1.1f, 0f)
+            localTarget
         }
-        val targetBlend = 1f - exp(-delta * 5.5f)
-        cameraTargetX += (desiredTarget.x - cameraTargetX) * targetBlend
-        cameraTargetY += (desiredTarget.y - cameraTargetY) * targetBlend
-        cameraTargetZ += (desiredTarget.z - cameraTargetZ) * targetBlend
+        if (
+            foxEndingCameraActive ||
+            introCameraHolding ||
+            introCameraHandoff
+        ) {
+            cameraTargetX = desiredTarget.x
+            cameraTargetY = desiredTarget.y
+            cameraTargetZ = desiredTarget.z
+        } else {
+            val targetBlend = 1f - exp(-delta * 5.5f)
+            cameraTargetX += (desiredTarget.x - cameraTargetX) * targetBlend
+            cameraTargetY += (desiredTarget.y - cameraTargetY) * targetBlend
+            cameraTargetZ += (desiredTarget.z - cameraTargetZ) * targetBlend
+        }
 
-        val effectiveYaw = if (frame.followKolobok) {
-            val outwardYaw = Math.toDegrees(
-                kotlin.math.atan2(
-                    desiredTarget.x.toDouble(),
-                    desiredTarget.z.toDouble(),
-                ),
-            ).toFloat()
-            outwardYaw + FOLLOW_CAMERA_BIAS_DEGREES + (frame.cameraYaw - 180f)
+        val postIntroYaw = if (storyCameraEligible || !userRecentlySteered) {
+            Math.toDegrees(latestStory.kolobokAngleRadians.toDouble()).toFloat() -
+                STORY_CAMERA_LEAD_DEGREES
         } else {
             frame.cameraYaw
         }
-        val yaw = Math.toRadians(effectiveYaw.toDouble())
-        val pitch = Math.toRadians(frame.cameraPitch.toDouble())
-        val houseSide = if (frame.followKolobok) {
-            0f
-        } else {
-            max(0f, cos(yaw).toFloat())
+        val foxEndingTargetYaw = when {
+            foxEndingCameraElapsed < FOX_ENDING_PUSH_SECONDS ->
+                foxEndingCameraStartYaw +
+                    shortestAngleDegrees(
+                        foxEndingCameraStartYaw,
+                        FOX_ENDING_CAMERA_YAW,
+                    ) * smoothStep(
+                        foxEndingCameraElapsed / FOX_ENDING_PUSH_SECONDS,
+                    )
+            foxEndingCameraElapsed < FOX_ENDING_BLACK_RESET_SECONDS ->
+                FOX_ENDING_CAMERA_YAW
+            foxEndingCameraElapsed < FOX_ENDING_REBIRTH_SECONDS ->
+                FOX_ENDING_CAMERA_YAW +
+                    shortestAngleDegrees(
+                        FOX_ENDING_CAMERA_YAW,
+                        FOX_ENDING_REBIRTH_CAMERA_YAW,
+                    ) * smoothStep(
+                        (
+                            foxEndingCameraElapsed -
+                                FOX_ENDING_BLACK_RESET_SECONDS
+                            ) /
+                            (
+                                FOX_ENDING_REBIRTH_SECONDS -
+                                    FOX_ENDING_BLACK_RESET_SECONDS
+                                ),
+                    )
+            else -> FOX_ENDING_REBIRTH_CAMERA_YAW
         }
-        val occlusionSafeDistance = max(frame.cameraDistance, 17.6f)
-        val effectiveDistance = frame.cameraDistance +
-            houseSide * houseSide * (occlusionSafeDistance - frame.cameraDistance)
+        val targetCameraYaw = if (foxEndingCameraActive) {
+            foxEndingTargetYaw
+        } else if (introCameraHolding) {
+            INTRO_CAMERA_YAW
+        } else if (introCameraHandoff) {
+            INTRO_CAMERA_YAW +
+                shortestAngleDegrees(INTRO_CAMERA_YAW, postIntroYaw) *
+                introCamera.handoffProgress
+        } else if (userFollowKolobok) {
+            // Follow swaps the orbit pivot from the island to Kolobok; it
+            // must not also swing the azimuth. Keeping the user's yaw is
+            // what makes the control feel like the predecessor's eye
+            // toggle and avoids flying the camera through the izba.
+            frame.cameraYaw
+        } else if (storyCameraFollow || idleCameraFollow) {
+            Math.toDegrees(latestStory.kolobokAngleRadians.toDouble()).toFloat() -
+                STORY_CAMERA_LEAD_DEGREES
+        } else {
+            frame.cameraYaw
+        }
+        renderedCameraYaw = if (
+            foxEndingCameraActive ||
+            introCameraHolding ||
+            introCameraHandoff
+        ) {
+            targetCameraYaw
+        } else if (
+            storyCameraFollow ||
+                idleCameraFollow ||
+                userFollowKolobok
+        ) {
+            val deltaYaw = shortestAngleDegrees(renderedCameraYaw, targetCameraYaw)
+            renderedCameraYaw +
+                deltaYaw * (1f - exp(-delta * CAMERA_FOLLOW_LAG))
+        } else {
+            targetCameraYaw
+        }
+        lifeDirector.advance(
+            deltaSeconds = delta,
+            activeZone = activeZone(),
+            wetness = retainedWetness,
+            storyActor = latestStory.storyActor.takeIf {
+                latestStory.mode == SceneStoryMode.PLAYING ||
+                    latestStory.mode == SceneStoryMode.REBIRTH
+            },
+            encounterActor = latestEncounter.actor,
+            nightAmount = latestAtmosphere.eveningAmount,
+            grandpaFishing = fishingStartedMs > 0L,
+            kolobokSinging = latestStory.singing || latestEncounter.singing,
+        )
+        val cameraBreathAllowed =
+                latestStory.mode != SceneStoryMode.PLAYING &&
+                latestStory.mode != SceneStoryMode.REBIRTH &&
+                !cameraGestureActive &&
+                !userFollowKolobok &&
+                !foxEndingCameraActive &&
+                !introCameraHolding &&
+                !introCameraHandoff &&
+                now - lastCameraInputMs > 300L
+        val breathClock = now / 1_000f
+        val breathYaw = if (cameraBreathAllowed) {
+            sin(breathClock * PI.toFloat() * 2f / 8f) * .40f
+        } else {
+            0f
+        }
+        val breathHeight = if (cameraBreathAllowed) {
+            sin(breathClock * PI.toFloat() * 2f / 13f) * .05f
+        } else {
+            0f
+        }
+        val effectiveYaw = renderedCameraYaw + breathYaw
+        val yaw = Math.toRadians(effectiveYaw.toDouble())
+        val foxEndingPushProgress = smoothStep(
+            foxEndingCameraElapsed / FOX_ENDING_PUSH_SECONDS,
+        )
+        val foxEndingResetProgress = smoothStep(
+            (
+                foxEndingCameraElapsed -
+                    FOX_ENDING_BLACK_RESET_SECONDS
+                ) /
+                (
+                    FOX_ENDING_REBIRTH_SECONDS -
+                        FOX_ENDING_BLACK_RESET_SECONDS
+                    ),
+        )
+        val foxEndingPitch = when {
+            foxEndingCameraElapsed < FOX_ENDING_PUSH_SECONDS ->
+                interpolate(
+                    foxEndingCameraStartPitch,
+                    FOX_ENDING_CAMERA_PITCH,
+                    foxEndingPushProgress,
+                )
+            foxEndingCameraElapsed < FOX_ENDING_BLACK_RESET_SECONDS ->
+                FOX_ENDING_CAMERA_PITCH
+            foxEndingCameraElapsed < FOX_ENDING_REBIRTH_SECONDS ->
+                interpolate(
+                    FOX_ENDING_CAMERA_PITCH,
+                    introFraming.pitchDegrees,
+                    foxEndingResetProgress,
+                )
+            else -> introFraming.pitchDegrees
+        }
+        val foxEndingDistance = when {
+            foxEndingCameraElapsed < FOX_ENDING_PUSH_SECONDS ->
+                interpolate(
+                    foxEndingCameraStartDistance,
+                    FOX_ENDING_CAMERA_DISTANCE,
+                    foxEndingPushProgress,
+                )
+            foxEndingCameraElapsed < FOX_ENDING_BLACK_RESET_SECONDS ->
+                FOX_ENDING_CAMERA_DISTANCE
+            foxEndingCameraElapsed < FOX_ENDING_REBIRTH_SECONDS ->
+                interpolate(
+                    FOX_ENDING_CAMERA_DISTANCE,
+                    introFraming.distance,
+                    foxEndingResetProgress,
+                )
+            else -> introFraming.distance
+        }
+        val postIntroFraming = if (storyCameraEligible) {
+            storyFraming
+        } else {
+            zoneFraming
+        }
+        val useZoneFraming =
+            !userFollowKolobok &&
+                !storyCameraFollow &&
+                !foxEndingCameraActive &&
+                !introCameraHolding &&
+                !introCameraHandoff
+        val desiredPitch = when {
+            foxEndingCameraActive -> foxEndingPitch
+            introCameraHolding -> introFraming.pitchDegrees
+            introCameraHandoff -> interpolate(
+                introFraming.pitchDegrees,
+                postIntroFraming.pitchDegrees,
+                introCamera.handoffProgress,
+            )
+            storyCameraFollow -> storyFraming.pitchDegrees
+            useZoneFraming ->
+                zoneFraming.pitchDegrees + (frame.cameraPitch - DEFAULT_CAMERA_PITCH)
+            else -> frame.cameraPitch
+        }
+        val desiredDistance = when {
+            foxEndingCameraActive -> foxEndingDistance
+            introCameraHolding -> introFraming.distance
+            introCameraHandoff -> interpolate(
+                introFraming.distance,
+                postIntroFraming.distance,
+                introCamera.handoffProgress,
+            )
+            storyCameraFollow -> storyFraming.distance
+            useZoneFraming -> (
+                zoneFraming.distance +
+                    (frame.cameraDistance - DEFAULT_CAMERA_DISTANCE)
+                ).coerceIn(5.8f, 18f)
+            else -> frame.cameraDistance
+        }
+        if (
+            cameraGestureActive ||
+            foxEndingCameraActive ||
+            introCameraHolding ||
+            introCameraHandoff
+        ) {
+            renderedCameraPitch = desiredPitch
+            renderedCameraDistance = desiredDistance
+        } else {
+            val framingBlend = 1f - exp(-delta * 4.2f)
+            renderedCameraPitch +=
+                (desiredPitch - renderedCameraPitch) * framingBlend
+            renderedCameraDistance +=
+                (desiredDistance - renderedCameraDistance) * framingBlend
+        }
+        val pitch = Math.toRadians(renderedCameraPitch.toDouble())
+        val houseSide = if (useZoneFraming) {
+            max(0f, cos(yaw).toFloat())
+        } else {
+            0f
+        }
+        val occlusionSafeDistance = max(renderedCameraDistance, 17.6f)
+        // Scripted/dialogue push-ins belong only to an idle cinematic.
+        // A user-steered orbit must not lurch merely because a beat starts.
+        val storyPushDistance = if (foxEndingCameraActive) {
+            0f
+        } else if (storyCameraFollow || introCameraHandoff) {
+            (
+                latestStory.cameraPush * 16f +
+                    latestEncounter.cameraPush * 13f
+                ) * if (introCameraHandoff) {
+                introCamera.handoffProgress
+            } else {
+                1f
+            }
+        } else if (!userFollowKolobok && !storyOwnsCamera) {
+            latestEncounter.cameraPush * 13f
+        } else {
+            0f
+        }
+        val minimumCameraDistance =
+            if (userFollowKolobok || foxEndingCameraActive) 5.8f else 8.8f
+        var effectiveDistance = (
+            renderedCameraDistance +
+            houseSide * houseSide *
+            (occlusionSafeDistance - renderedCameraDistance)
+            - storyPushDistance
+            ).coerceAtLeast(minimumCameraDistance)
+        if (userFollowKolobok) {
+            val desiredHorizontal = effectiveDistance * cos(pitch).toFloat()
+            val desiredEyeX = cameraTargetX + desiredHorizontal * sin(yaw).toFloat()
+            val desiredEyeZ = cameraTargetZ + desiredHorizontal * cos(yaw).toFloat()
+            effectiveDistance = SceneCameraOcclusion.clampDistanceForRect(
+                heroX = cameraTargetX,
+                heroZ = cameraTargetZ,
+                desiredCameraX = desiredEyeX,
+                desiredCameraZ = desiredEyeZ,
+                desiredDistance = effectiveDistance,
+                minX = -1.62f,
+                maxX = 1.62f,
+                minZ = 4.68f,
+                maxZ = 7.82f,
+                minimumDistance = 4.8f,
+            )
+            effectiveDistance = SceneCameraOcclusion.clampDistanceForRect(
+                heroX = cameraTargetX,
+                heroZ = cameraTargetZ,
+                desiredCameraX = cameraTargetX +
+                    effectiveDistance * cos(pitch).toFloat() * sin(yaw).toFloat(),
+                desiredCameraZ = cameraTargetZ +
+                    effectiveDistance * cos(pitch).toFloat() * cos(yaw).toFloat(),
+                desiredDistance = effectiveDistance,
+                minX = -1.38f,
+                maxX = 1.38f,
+                minZ = -1.18f,
+                maxZ = 1.18f,
+                minimumDistance = 4.8f,
+            )
+        }
         val horizontal = effectiveDistance * cos(pitch).toFloat()
         eyeX = cameraTargetX + horizontal * sin(yaw).toFloat()
-        eyeY = cameraTargetY + .1f + effectiveDistance * sin(pitch).toFloat()
+        eyeY = cameraTargetY + .1f +
+            effectiveDistance * sin(pitch).toFloat() +
+            breathHeight
         eyeZ = cameraTargetZ + horizontal * cos(yaw).toFloat()
+        val inverseSceneRotation = Math.toRadians(frame.sceneRotation.toDouble())
+        val inverseSceneCosine = cos(inverseSceneRotation).toFloat()
+        val inverseSceneSine = sin(inverseSceneRotation).toFloat()
+        sceneSpaceEyeX =
+            inverseSceneCosine * eyeX - inverseSceneSine * eyeZ
+        sceneSpaceEyeZ =
+            inverseSceneSine * eyeX + inverseSceneCosine * eyeZ
+        updateCrossroadsPlaqueHeading(delta)
         Matrix.setLookAtM(
             view,
             0,
@@ -859,15 +1714,16 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             0f,
         )
         Matrix.multiplyMM(projectionView, 0, projection, 0, view, 0)
+        updateBubbleAnchor()
 
         GLES30.glUseProgram(program)
         GLES30.glUniform3f(lightLocation, -0.48f, 0.78f, 0.39f)
         GLES30.glUniform3f(cameraLocation, eyeX, eyeY, eyeZ)
         GLES30.glUniform3f(
             fogColorLocation,
-            .78f * (1f - evening) + .25f * evening,
-            .89f * (1f - evening) + .33f * evening,
-            .93f * (1f - evening) + .48f * evening,
+            latestAtmosphere.fog.red,
+            latestAtmosphere.fog.green,
+            latestAtmosphere.fog.blue,
         )
 
         drawWorld()
@@ -879,19 +1735,21 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         draw(
             requireNotNull(disc),
             color("#72513A"),
-            Transform(0f, -.34f, 0f, 8f, .34f, 8f),
+            Transform(0f, -.46f, 0f, 8f, .38f, 8f),
         )
         draw(
-            requireNotNull(disc),
+            requireNotNull(terrain),
             color("#7AA85C"),
-            Transform(0f, .015f, 0f, 8f, .035f, 8f),
+            Transform(0f, TERRAIN_BASE_Y, 0f, 1f, 1f, 1f),
         )
+        drawTerrainAccents()
         drawZoneGroundTints()
         draw(
             requireNotNull(ring),
             color("#D4B377"),
             Transform(0f, .075f, 0f, 4.96f, 1f, 4.96f),
         )
+        drawWeatherGround()
 
         // Draw distant ground after the island so early depth rejection keeps
         // these very broad layers inexpensive.
@@ -902,12 +1760,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         drawSkyDetails()
         drawBackgroundForest()
         drawIslandVegetation()
+        drawReactiveGroundCover()
         drawInteractiveTrees()
         drawInteractiveMushrooms()
         drawCrossroadsStone()
         drawIzba()
         drawPondAndGrandpa()
         drawZoneAmbience()
+        drawAtmosphereScenery()
         drawBirchLeafFalls()
         drawAmbientTapReaction()
         drawClouds()
@@ -916,6 +1776,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         drawWolf()
         drawBear()
         drawFox()
+        drawGoldenHourExtras()
     }
 
     private fun drawBackgroundForest() {
@@ -930,10 +1791,181 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
     }
 
+    private fun drawReactiveGroundCover() {
+        val kolobok = currentKolobokPoint()
+        val now = SystemClock.uptimeMillis()
+        dynamicInstanceGroups.clear()
+
+        reactiveGrass.forEachIndexed { index, plant ->
+            val (x, z) = radial(plant.angle, plant.radius)
+            val bend = updatePlantBend(
+                index = index,
+                x = x,
+                z = z,
+                kolobok = kolobok,
+                now = now,
+                startedAtMs = grassBendStartedAtMs,
+                directionX = grassBendDirectionX,
+                directionZ = grassBendDirectionZ,
+            )
+            val windPhase =
+                (x * latestAtmosphere.windDirectionX +
+                    z * latestAtmosphere.windDirectionZ) * .9f +
+                    frame.storyTime * 2.2f
+            val windTilt =
+                sin(windPhase) *
+                    REACTIVE_GRASS_WIND_DEGREES *
+                    latestAtmosphere.windStrength
+            val tiltX =
+                latestAtmosphere.windDirectionZ * windTilt +
+                    bend.directionZ * bend.degrees
+            val tiltZ =
+                -latestAtmosphere.windDirectionX * windTilt -
+                    bend.directionX * bend.degrees
+            val baseY = groundHeightAt(x, z)
+            val baseHeight = (.075f + pseudo(index * 43 + 7) * .095f) * plant.scale
+            val grassColor = when (index % 4) {
+                0 -> "#6F9B52"
+                1 -> "#78A557"
+                2 -> "#80AD5C"
+                else -> "#86B25F"
+            }
+            repeat(3) { blade ->
+                val bladeYaw =
+                    plant.yaw + blade * (104f + pseudo(index * 11 + blade) * 17f)
+                val bladeRadians = Math.toRadians(bladeYaw.toDouble())
+                val bladeHeight =
+                    baseHeight * (.76f + pseudo(index * 89 + blade * 7) * .34f)
+                val naturalLean = (pseudo(index * 97 + blade * 13) - .5f) * 18f
+                val offset = blade * .018f * plant.scale
+                queueDynamicInstance(
+                    requireNotNull(cube),
+                    grassColor,
+                    1f,
+                    Transform(
+                        x = x + cos(bladeRadians).toFloat() * offset,
+                        y = baseY + bladeHeight,
+                        z = z + sin(bladeRadians).toFloat() * offset,
+                        scaleX = (.011f + pseudo(index * 31 + blade) * .005f) * plant.scale,
+                        scaleY = bladeHeight,
+                        scaleZ = (.019f + pseudo(index * 37 + blade) * .006f) * plant.scale,
+                        rotationX = tiltX,
+                        rotationY = bladeYaw,
+                        rotationZ = naturalLean + tiltZ,
+                    ),
+                    rimStrength = .04f,
+                )
+            }
+        }
+
+        reactiveFlowers.forEachIndexed { index, plant ->
+            val (x, z) = radial(plant.angle, plant.radius)
+            val bend = updatePlantBend(
+                index = index,
+                x = x,
+                z = z,
+                kolobok = kolobok,
+                now = now,
+                startedAtMs = flowerBendStartedAtMs,
+                directionX = flowerBendDirectionX,
+                directionZ = flowerBendDirectionZ,
+            )
+            val baseY = groundHeightAt(x, z)
+            val halfHeight = (.075f + pseudo(index * 89 + 13) * .055f) * plant.scale
+            val stemRadius = (.010f + pseudo(index * 97 + 7) * .005f) * plant.scale
+            queueDynamicInstance(
+                requireNotNull(cylinder),
+                "#58914D",
+                1f,
+                Transform(
+                    x = x,
+                    y = baseY + halfHeight,
+                    z = z,
+                    scaleX = stemRadius,
+                    scaleY = halfHeight,
+                    scaleZ = stemRadius,
+                    rotationY = plant.yaw,
+                ),
+                rimStrength = .04f,
+            )
+            val fullHeight = halfHeight * 2f
+            val bendRadians = Math.toRadians(bend.degrees.toDouble())
+            val headX = x + bend.directionX * sin(bendRadians).toFloat() * fullHeight
+            val headZ = z + bend.directionZ * sin(bendRadians).toFloat() * fullHeight
+            val headY = baseY + cos(bendRadians).toFloat() * fullHeight
+            val flowerColor = when (index % 4) {
+                0 -> "#FFF1A8"
+                1 -> "#F07F87"
+                2 -> "#84BCE2"
+                else -> "#E9A8D0"
+            }
+            val headScale = (.044f + pseudo(index * 101 + 19) * .026f) * plant.scale
+            queueDynamicInstance(
+                requireNotNull(lowSphere),
+                flowerColor,
+                1f,
+                Transform(
+                    x = headX,
+                    y = headY,
+                    z = headZ,
+                    scaleX = headScale,
+                    scaleY = headScale * .66f,
+                    scaleZ = headScale,
+                    rotationX = bend.directionZ * bend.degrees,
+                    rotationY = plant.yaw,
+                    rotationZ = -bend.directionX * bend.degrees,
+                ),
+                rimStrength = .08f,
+            )
+        }
+        flushDynamicInstances()
+    }
+
+    private fun updatePlantBend(
+        index: Int,
+        x: Float,
+        z: Float,
+        kolobok: WorldPoint3,
+        now: Long,
+        startedAtMs: LongArray,
+        directionX: FloatArray,
+        directionZ: FloatArray,
+    ): PlantBendPose {
+        if (startedAtMs[index] <= 0L) {
+            val dx = x - kolobok.x
+            val dz = z - kolobok.z
+            val distanceSquared = dx * dx + dz * dz
+            if (distanceSquared < REACTIVE_PLANT_BEND_RADIUS * REACTIVE_PLANT_BEND_RADIUS) {
+                val distance = sqrt(distanceSquared).coerceAtLeast(.001f)
+                startedAtMs[index] = now
+                directionX[index] = dx / distance
+                directionZ[index] = dz / distance
+            }
+        }
+        if (startedAtMs[index] <= 0L) return PlantBendPose()
+        val elapsed = (now - startedAtMs[index]).coerceAtLeast(0L) / 1_000f
+        if (elapsed >= REACTIVE_PLANT_BEND_SECONDS) {
+            startedAtMs[index] = 0L
+            return PlantBendPose()
+        }
+        val degrees =
+            REACTIVE_PLANT_BEND_DEGREES *
+                exp(-elapsed * REACTIVE_PLANT_BEND_DECAY) *
+                cos(
+                    elapsed * REACTIVE_PLANT_BEND_FREQUENCY *
+                        PI.toFloat() * 2f,
+                )
+        return PlantBendPose(
+            degrees = degrees,
+            directionX = directionX[index],
+            directionZ = directionZ[index],
+        )
+    }
+
     private fun updateTreeBonks(deltaSeconds: Float) {
-        val travel = SceneMotion.travelRadians(frame.storyTime)
-        val kolobokX = sin(travel) * SceneMotion.PATH_RADIUS
-        val kolobokZ = cos(travel) * SceneMotion.PATH_RADIUS
+        val kolobok = currentKolobokPoint()
+        val kolobokX = kolobok.x
+        val kolobokZ = kolobok.z
         (sprucePoints + birchPoints).forEachIndexed { index, point ->
             val (treeX, treeZ) = radial(point.angle, point.radius)
             val collisionPose = TreeBonkPhysics.advance(
@@ -947,8 +1979,13 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             treeBonkPoses[index] = if (collisionPose.active) {
                 collisionPose
             } else {
-                // Heavy trees only take a small, phase-offset wind sway.
-                val sway = sin(frame.storyTime * .72f + index * 1.37f) * 2.2f
+                // One global gust rolls across the island instead of making
+                // every tree sway on an unrelated metronome.
+                val windPhase =
+                    (treeX * latestAtmosphere.windDirectionX +
+                        treeZ * latestAtmosphere.windDirectionZ) * .9f +
+                        frame.storyTime * 2.2f
+                val sway = sin(windPhase) * 2.2f * latestAtmosphere.windStrength
                 TreeBonkPose(
                     pushDistance = 0f,
                     tiltDegrees = sway,
@@ -1038,6 +2075,24 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 pose,
                 .12f,
             )
+            if (latestAtmosphere.snowAmount > .01f) {
+                drawBonkedTreePart(
+                    requireNotNull(cone),
+                    "#F2F5F8",
+                    x,
+                    z,
+                    leanX,
+                    (2.02f + pseudo(treeSeed + 179) * .10f) * size,
+                    leanZ,
+                    upperWidth * size * .78f,
+                    .055f * size,
+                    upperWidth * size * .78f,
+                    yaw - 18f + pseudo(treeSeed + 89) * 31f,
+                    pose,
+                    .04f,
+                    alpha = latestAtmosphere.snowAmount * .92f,
+                )
+            }
         }
 
         birchPoints.forEachIndexed { birchIndex, point ->
@@ -1170,6 +2225,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         rotationY: Float,
         pose: TreeBonkPose,
         rimStrength: Float,
+        alpha: Float = 1f,
     ) {
         val intensity = pose.intensity.coerceIn(0f, 1.15f)
         val stretchY = 1f + intensity * TreeBonkPhysics.STRETCH_Y
@@ -1177,10 +2233,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val tiltRadians = Math.toRadians(pose.tiltDegrees.toDouble())
         val stretchedHeight = localY * stretchY
         val hingeOffset = sin(tiltRadians).toFloat() * stretchedHeight
+        val cameraVisibility = treeCameraVisibility(baseX, baseZ)
         queueDynamicInstance(
             mesh,
             hex,
-            1f,
+            alpha * cameraVisibility,
             Transform(
                 x = baseX + localX + pose.directionX * (pose.pushDistance + hingeOffset),
                 y = cos(tiltRadians).toFloat() * stretchedHeight,
@@ -1203,9 +2260,20 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val popScale = mushroomScale(index, now)
             if (popScale <= .01f) return@forEachIndexed
             val (x, z) = radial(point.angle, point.radius)
+            val groundY = groundHeightAt(x, z)
             val size = .88f + pseudo(index * 31 + 6) * .30f
             val yaw = pseudo(index * 61 + 14) * 360f
-            val lean = (pseudo(index * 71 + 8) - .5f) * 12f
+            val scratchMushroomIndex = when {
+                lifeDirector.bearScratchSide < 0f -> 1
+                lifeDirector.bearScratchSide > 0f -> 2
+                else -> -1
+            }
+            val scratchWobble = if (index == scratchMushroomIndex) {
+                lifeDirector.bearScratchDegrees * .72f
+            } else {
+                0f
+            }
+            val lean = (pseudo(index * 71 + 8) - .5f) * 12f + scratchWobble
             val capWidth = (.098f + pseudo(index * 73 + 11) * .038f) * size
             val capDepth = (.088f + pseudo(index * 79 + 5) * .043f) * size
             val capHeight = (.050f + pseudo(index * 83 + 17) * .027f) * size
@@ -1215,7 +2283,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 .18f * popScale,
                 Transform(
                     x,
-                    .066f,
+                    groundY + .066f,
                     z,
                     .15f * size * popScale,
                     .008f,
@@ -1230,7 +2298,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 1f,
                 Transform(
                     x,
-                    .14f * size * popScale,
+                    groundY + .14f * size * popScale,
                     z,
                     .040f * size * popScale,
                     .11f * size * popScale,
@@ -1246,7 +2314,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 1f,
                 Transform(
                     x,
-                    (.27f * size + capHeight * .10f) * popScale,
+                    groundY + (.27f * size + capHeight * .10f) * popScale,
                     z,
                     capWidth * popScale,
                     capHeight * popScale,
@@ -1270,7 +2338,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                     1f,
                     Transform(
                         x + cos(spotRadians).toFloat() * spotRadius * popScale,
-                        (.30f * size + capHeight * .42f) * popScale,
+                        groundY + (.30f * size + capHeight * .42f) * popScale,
                         z + sin(spotRadians).toFloat() * spotRadius * .55f * popScale,
                         spotSize,
                         spotSize * .58f,
@@ -1354,6 +2422,91 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
     }
 
+    private fun drawTerrainAccents() {
+        terrainHills.forEachIndexed { index, hill ->
+            draw(
+                requireNotNull(lowSphere),
+                color(
+                    if (index % 3 == 0) "#75AD58" else "#80B65F",
+                    .24f,
+                ),
+                Transform(
+                    hill.x,
+                    TERRAIN_BASE_Y + .055f,
+                    hill.z,
+                    hill.radius * .88f,
+                    .105f,
+                    hill.radius * .88f,
+                ),
+                rimStrength = .01f,
+            )
+        }
+        terrainPotholes.forEachIndexed { index, hole ->
+            draw(
+                requireNotNull(lowSphere),
+                color(if (index % 2 == 0) "#49382A" else "#3F3329", .72f),
+                Transform(
+                    hole.x,
+                    TERRAIN_BASE_Y - TERRAIN_POTHOLE_DEPTH + .008f,
+                    hole.z,
+                    hole.majorRadius,
+                    .012f,
+                    hole.minorRadius,
+                    rotationY = hole.rotationDegrees,
+                ),
+                rimStrength = .01f,
+            )
+        }
+    }
+
+    private fun drawWeatherGround() {
+        val snowCover = latestAtmosphere.snowAmount
+        if (snowCover > .01f) {
+            draw(
+                requireNotNull(disc),
+                color("#E8ECF0", snowCover * .25f),
+                Transform(0f, .082f, 0f, 7.95f, .010f, 7.95f),
+                rimStrength = 0f,
+            )
+            draw(
+                requireNotNull(ring),
+                color("#F2F5F8", snowCover * .18f),
+                Transform(0f, .094f, 0f, 4.97f, 1f, 4.97f),
+                rimStrength = 0f,
+            )
+            draw(
+                requireNotNull(lowSphere),
+                color("#F2F5F8", snowCover * .88f),
+                Transform(0f, 2.52f, 0f, .66f, .12f, .58f),
+                rimStrength = .05f,
+            )
+        }
+
+        if (retainedWetness <= .01f) return
+        draw(
+            requireNotNull(ring),
+            color("#75543E", retainedWetness * .34f),
+            Transform(0f, .096f, 0f, 4.96f, 1f, 4.96f),
+            rimStrength = 0f,
+        )
+        terrainPotholes.forEachIndexed { index, hole ->
+            draw(
+                requireNotNull(lowSphere),
+                color("#789EAE", retainedWetness * .42f),
+                Transform(
+                    hole.x,
+                    TERRAIN_BASE_Y - TERRAIN_POTHOLE_DEPTH + .016f,
+                    hole.z,
+                    hole.majorRadius * .91f,
+                    .012f,
+                    hole.minorRadius * .91f,
+                    rotationY = hole.rotationDegrees,
+                ),
+                rimStrength = .02f,
+            )
+        }
+    }
+
     private fun drawSkyDetails() {
         val evening = eveningAmount()
         val sunElapsed = eventSeconds(sunGlowStartedMs)
@@ -1363,14 +2516,24 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             0f
         }
         val sunPulse = .96f + sin(frame.storyTime * .25f) * .025f + sunReaction * .16f
-        draw(
-            requireNotNull(lowSphere),
-            color("#FFF0A8", 1f - evening * .86f),
-            Transform(-7.8f, 8.7f, -13.5f, 1.10f * sunPulse, 1.10f * sunPulse, 1.10f * sunPulse),
-            rotateWithScene = false,
-            rimStrength = .08f,
-        )
-        if (sunReaction > .001f) {
+        val sunVisible = sunMechanicallyVisible()
+        if (sunVisible) {
+            draw(
+                requireNotNull(lowSphere),
+                color("#FFF0A8", 1f - evening * .86f),
+                Transform(
+                    sunPosition.x,
+                    sunPosition.y,
+                    sunPosition.z,
+                    1.10f * sunPulse,
+                    1.10f * sunPulse,
+                    1.10f * sunPulse,
+                ),
+                rotateWithScene = false,
+                rimStrength = .08f,
+            )
+        }
+        if (sunVisible && sunReaction > .001f) {
             repeat(12) { index ->
                 val angle = index * 30f + sunElapsed * 42f
                 val radians = Math.toRadians(angle.toDouble())
@@ -1379,9 +2542,9 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                     requireNotNull(lowSphere),
                     color("#FFF5B8", sunReaction * .76f),
                     Transform(
-                        -7.8f + cos(radians).toFloat() * radius,
-                        8.7f + sin(radians).toFloat() * radius,
-                        -13.45f,
+                        sunPosition.x + cos(radians).toFloat() * radius,
+                        sunPosition.y + sin(radians).toFloat() * radius,
+                        sunPosition.z + .05f,
                         .07f + sunReaction * .04f,
                         .025f,
                         .07f + sunReaction * .04f,
@@ -1420,32 +2583,19 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun eveningAmount(): Float {
-        // The narrated loop restarts after its five 13-second chapters. Match
-        // that rhythm so the brighter daytime remains the scene's home state
-        // instead of getting stuck at night after the first play-through.
-        val cycle = if (frame.storyTime < SceneMotion.INTRO_SECONDS) {
-            frame.storyTime
-        } else {
-            SceneMotion.INTRO_SECONDS +
-                ((frame.storyTime - SceneMotion.INTRO_SECONDS) % SceneMotion.LAP_SECONDS)
-        }
-        return when {
-            cycle < 44f -> 0f
-            cycle < 54f -> (cycle - 44f) / 10f
-            cycle < 62f -> 1f
-            else -> ((69f - cycle) / 7f).coerceIn(0f, 1f)
-        }
+        return latestAtmosphere.eveningAmount
     }
 
     private fun drawMoonAndFireflies(evening: Float) {
-        if (evening <= .02f) return
+        if (evening <= .02f || !moonMechanicallyVisible()) return
         val moonX = moonPosition.x
         val moonY = moonPosition.y
         val moonZ = moonPosition.z
+        if (moonY <= -1.5f) return
         val moonVisibility = ((evening - .02f) / .30f).coerceIn(0f, 1f)
         val winkElapsed = eventSeconds(moonWinkStartedMs)
-        val wink = if (winkElapsed in 0f..1.45f) {
-            sin((winkElapsed / 1.45f) * PI.toFloat()).coerceAtLeast(0f)
+        val wink = if (winkElapsed in 0f..MOON_WINK_SECONDS) {
+            sin((winkElapsed / MOON_WINK_SECONDS) * PI.toFloat()).coerceAtLeast(0f)
         } else {
             0f
         }
@@ -1550,6 +2700,26 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 heading,
                 rotateWithScene = false,
             )
+            if (wink > .001f) {
+                repeat(3) { index ->
+                    val angle = index / 3f * PI.toFloat() * 2f + wink * .6f
+                    draw(
+                        requireNotNull(lowSphere),
+                        color("#FFF5B8", wink * .88f),
+                        Transform(
+                            moonX + cos(angle) * (.50f + wink * .14f),
+                            moonY + sin(angle) * (.50f + wink * .14f),
+                            moonZ + .82f,
+                            .042f,
+                            .042f,
+                            .025f,
+                            rotationZ = Math.toDegrees(angle.toDouble()).toFloat(),
+                        ),
+                        rotateWithScene = false,
+                        rimStrength = .24f,
+                    )
+                }
+            }
         }
 
         if (evening > .25f) {
@@ -1575,7 +2745,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 )
             }
         }
-        if (moonWinkStartedMs > 0L && winkElapsed > 1.45f) {
+        if (moonWinkStartedMs > 0L && winkElapsed > MOON_WINK_SECONDS) {
             moonWinkStartedMs = 0L
         }
     }
@@ -2484,13 +3654,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val plaqueColors = listOf("#AA7949", "#95653E", "#B17B48")
         crossroadsPlaqueSpecs.forEachIndexed { index, spec ->
             val plaqueHeading = crossroadsPlaqueHeading() + spec.azimuth
+            val pressDepth = crossroadsPlaquePressDepth(index)
+            val plaqueHeadingRadians = Math.toRadians(plaqueHeading.toDouble())
+            val pressX = -sin(plaqueHeadingRadians).toFloat() * pressDepth
+            val pressZ = -cos(plaqueHeadingRadians).toFloat() * pressDepth
+            val pressPulse = crossroadsPlaquePressPulse(index)
             draw(
                 crossroadsPlaqueAccentMeshes[index],
                 color("#4D3326"),
                 Transform(
-                    0f,
+                    pressX,
                     spec.y * CROSSROADS_SCALE,
-                    0f,
+                    pressZ,
                     CROSSROADS_SCALE,
                     CROSSROADS_SCALE,
                     CROSSROADS_SCALE,
@@ -2503,19 +3678,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 crossroadsPlaqueMeshes[index],
                 color(plaqueColors[index]),
                 Transform(
-                    0f,
+                    pressX,
                     spec.y * CROSSROADS_SCALE,
-                    0f,
+                    pressZ,
                     CROSSROADS_SCALE,
                     CROSSROADS_SCALE,
                     CROSSROADS_SCALE,
                     rotationY = plaqueHeading,
                     rotationZ = spec.tilt,
                 ),
-                rimStrength = .18f,
+                rimStrength = .18f + pressPulse * .34f,
             )
             val fastenerLocalAngle = spec.arcLength / spec.outerRadius * .395f
-            val plaqueHeadingRadians = Math.toRadians(plaqueHeading.toDouble())
             val plaqueTiltRadians = Math.toRadians(spec.tilt.toDouble())
             val fastenerRadius = (spec.outerRadius + .050f) * CROSSROADS_SCALE
             for (side in listOf(-1f, 1f)) {
@@ -2540,9 +3714,9 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                     requireNotNull(lowSphere),
                     color("#49372B"),
                     Transform(
-                        worldX,
+                        worldX + pressX,
                         worldY,
-                        worldZ,
+                        worldZ + pressZ,
                         .032f,
                         .037f,
                         .018f,
@@ -2560,7 +3734,31 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 drawTextLabel(
                     labels[index],
                     crossroadsTextMeshes[index],
-                    crossroadsPlaqueLabelTransform(spec),
+                    crossroadsPlaqueLabelTransform(
+                        spec = spec,
+                        pressDepth = crossroadsPlaquePressDepth(index),
+                    ),
+                )
+            }
+        }
+        if (plaqueTurnActivity > .01f) {
+            repeat(9) { index ->
+                val phase = (frame.storyTime * .72f + index * .137f) % 1f
+                val angle = frame.storyTime * 54f + index * 137.5f
+                val radians = Math.toRadians(angle.toDouble())
+                val radius = .58f + (index % 3) * .16f + phase * .18f
+                draw(
+                    requireNotNull(lowSphere),
+                    color("#C9B188", plaqueTurnActivity * (1f - phase) * .26f),
+                    Transform(
+                        cos(radians).toFloat() * radius,
+                        .10f + phase * .26f,
+                        sin(radians).toFloat() * radius,
+                        .035f + (index % 2) * .014f,
+                        .025f,
+                        .035f + (index % 2) * .014f,
+                    ),
+                    rimStrength = .01f,
                 )
             }
         }
@@ -2578,9 +3776,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun drawStoneBirds() {
-        val elapsed = eventSeconds(stoneBirdsStartedMs)
-        val flying = elapsed in 0f..6.2f
-        repeat(7) { index ->
+        repeat(STONE_BIRD_COUNT) { index ->
+            val elapsed = eventSeconds(stoneBirdStartedAtMs[index])
             val angle = pseudo(index * 47 + 3) * 360f
             val baseRadius = 1.00f + pseudo(index * 59 + 8) * .40f
             val (baseX, baseZ) = radial(angle, baseRadius)
@@ -2590,35 +3787,137 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             var z = baseZ
             var flap = sin(frame.storyTime * 2f + index) * 10f
             var flightAmount = 0f
-            if (flying) {
-                val depart = (elapsed / 1.35f).coerceIn(0f, 1f)
-                val arrive = ((elapsed - 4.65f) / 1.55f).coerceIn(0f, 1f)
-                val airborne = depart * (1f - arrive)
-                flightAmount = airborne
-                val outward = 2.2f + (index % 3) * .55f
-                val (farX, farZ) = radial(angle + (index - 3) * 7f, outward)
-                x = baseX + (farX - baseX) * airborne
-                z = baseZ + (farZ - baseZ) * airborne
-                y = baseY + airborne * (2.1f + (index % 2) * .45f) +
-                    sin(depart * PI.toFloat()) * .24f
-                val flightFlap = sin(elapsed * 14f + index) * 34f
-                flap += (flightFlap - flap) * flightAmount
-            }
-            drawTinyBird(
-                x = x,
-                y = y,
-                z = z,
-                heading = when {
-                    flying && elapsed >= 4.65f -> angle + (index - 3) * 7f + 180f
-                    flying -> angle + (index - 3) * 7f
+            var birdHeading = angle + 180f
+            var visible = true
+            var landingScale = 1f
+            if (stoneBirdFlightActive(index, elapsed)) {
+                val flightSeed = stoneBirdStartedAtMs[index].toInt() xor (index * 911)
+                val escapeAngle =
+                    pseudo(flightSeed) * PI.toFloat() * 2f
+                val scatter = WorldPoint3(
+                    x = baseX + sin(escapeAngle) * STONE_BIRD_SCATTER_DISTANCE,
+                    y = baseY + STONE_BIRD_SCATTER_RISE,
+                    z = baseZ + cos(escapeAngle) * STONE_BIRD_SCATTER_DISTANCE,
+                )
+                var awayX = scatter.x - stoneBirdCameraX[index]
+                var awayZ = scatter.z - stoneBirdCameraZ[index]
+                val awayLength = sqrt(awayX * awayX + awayZ * awayZ).coerceAtLeast(.01f)
+                awayX /= awayLength
+                awayZ /= awayLength
+                val far = WorldPoint3(
+                    x = scatter.x + awayX * STONE_BIRD_CLIMB_DISTANCE,
+                    y = scatter.y + STONE_BIRD_CLIMB_RISE,
+                    z = scatter.z + awayZ * STONE_BIRD_CLIMB_DISTANCE,
+                )
+                val scatterEnd = STONE_BIRD_SCATTER_SECONDS
+                val climbEnd = scatterEnd + STONE_BIRD_CLIMB_SECONDS
+                val awayEnd = climbEnd + stoneBirdAwaySeconds(index)
+                val returnEnd = awayEnd + STONE_BIRD_RETURN_SECONDS
+                val pose = when {
+                    elapsed < scatterEnd -> curvedFlightPoint(
+                        from = WorldPoint3(baseX, baseY, baseZ),
+                        to = scatter,
+                        progress = elapsed / STONE_BIRD_SCATTER_SECONDS,
+                        seed = flightSeed + 41,
+                    )
+                    elapsed < climbEnd -> curvedFlightPoint(
+                        from = scatter,
+                        to = far,
+                        progress = (elapsed - scatterEnd) / STONE_BIRD_CLIMB_SECONDS,
+                        seed = flightSeed + 83,
+                    )
+                    elapsed < awayEnd -> {
+                        visible = false
+                        far
+                    }
+                    elapsed < returnEnd -> curvedFlightPoint(
+                        from = far,
+                        to = WorldPoint3(baseX, baseY, baseZ),
+                        progress = (elapsed - awayEnd) / STONE_BIRD_RETURN_SECONDS,
+                        seed = flightSeed + 127,
+                    )
+                    else -> {
+                        val settle = (
+                            (elapsed - returnEnd) / STONE_BIRD_LAND_SECONDS
+                            ).coerceIn(0f, 1f)
+                        landingScale = 1f - .20f * sin(settle * PI.toFloat())
+                        WorldPoint3(baseX, baseY, baseZ)
+                    }
+                }
+                x = pose.x
+                y = pose.y
+                z = pose.z
+                flightAmount = if (elapsed < returnEnd && visible) 1f else 0f
+                flap = if (flightAmount > 0f) {
+                    sin(elapsed * STONE_BIRD_FLAP_HZ * PI.toFloat() * 2f + index) * 50f
+                } else {
+                    sin(frame.storyTime * 2f + index) * 10f
+                }
+                birdHeading = when {
+                    elapsed < scatterEnd -> Math.toDegrees(escapeAngle.toDouble()).toFloat()
+                    elapsed < awayEnd -> Math.toDegrees(kotlin.math.atan2(awayX, awayZ).toDouble()).toFloat()
+                    elapsed < returnEnd -> Math.toDegrees(kotlin.math.atan2(-awayX, -awayZ).toDouble()).toFloat()
                     else -> angle + 180f
-                },
-                flap = flap,
-                bodyColor = if (index % 3 == 0) "#465662" else if (index % 3 == 1) "#5B5148" else "#56636B",
-                flightAmount = flightAmount,
-            )
+                }
+            }
+            if (visible) {
+                drawTinyBird(
+                    x = x,
+                    y = y,
+                    z = z,
+                    heading = birdHeading,
+                    flap = flap,
+                    bodyColor = if (index % 3 == 0) "#465662" else if (index % 3 == 1) "#5B5148" else "#56636B",
+                    flightAmount = flightAmount,
+                    scale = landingScale,
+                )
+            }
+            if (stoneBirdStartedAtMs[index] > 0L && elapsed > stoneBirdTotalSeconds(index)) {
+                stoneBirdStartedAtMs[index] = 0L
+            }
         }
-        if (stoneBirdsStartedMs > 0L && elapsed > 6.2f) stoneBirdsStartedMs = 0L
+    }
+
+    private fun stoneBirdFlightActive(index: Int, elapsed: Float): Boolean =
+        elapsed in 0f..stoneBirdTotalSeconds(index)
+
+    private fun stoneBirdAwaySeconds(index: Int): Float {
+        val seed = stoneBirdStartedAtMs[index].toInt() xor (index * 911)
+        return STONE_BIRD_AWAY_MIN_SECONDS +
+            pseudo(seed + 191) *
+            (STONE_BIRD_AWAY_MAX_SECONDS - STONE_BIRD_AWAY_MIN_SECONDS)
+    }
+
+    private fun stoneBirdTotalSeconds(index: Int): Float =
+        STONE_BIRD_SCATTER_SECONDS +
+            STONE_BIRD_CLIMB_SECONDS +
+            stoneBirdAwaySeconds(index) +
+            STONE_BIRD_RETURN_SECONDS +
+            STONE_BIRD_LAND_SECONDS
+
+    private fun curvedFlightPoint(
+        from: WorldPoint3,
+        to: WorldPoint3,
+        progress: Float,
+        seed: Int,
+    ): WorldPoint3 {
+        val raw = progress.coerceIn(0f, 1f)
+        val eased = 1f - (1f - raw) * (1f - raw)
+        val dx = to.x - from.x
+        val dz = to.z - from.z
+        val length = sqrt(dx * dx + dz * dz).coerceAtLeast(.001f)
+        val cycles = 1f + pseudo(seed + 1) * 1.3f
+        val sign = if (pseudo(seed + 2) < .5f) -1f else 1f
+        val amplitude = .25f + pseudo(seed + 3) * .35f
+        val wobble =
+            sin(raw * PI.toFloat() * cycles) *
+                amplitude * sign *
+                sin(raw * PI.toFloat())
+        return WorldPoint3(
+            x = from.x + dx * eased - dz / length * wobble,
+            y = from.y + (to.y - from.y) * eased,
+            z = from.z + dz * eased + dx / length * wobble,
+        )
     }
 
     private fun drawIzba() {
@@ -2640,7 +3939,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         } else {
             0f
         }
-        val windowWarmth = max(eveningAmount() * .88f, izbaFlash)
+        val mechanicalWindowGlow = max(
+            latestStory.windowGlow,
+            latestEncounter.windowFlash,
+        )
+        val windowWarmth = max(
+            eveningAmount() * .88f,
+            max(izbaFlash, mechanicalWindowGlow),
+        )
         val windowColor = floatArrayOf(
             .56f * (1f - windowWarmth) + .98f * windowWarmth,
             .82f * (1f - windowWarmth) + .76f * windowWarmth,
@@ -2781,6 +4087,24 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 rimStrength = batch.rimStrength,
             )
         }
+        if (latestAtmosphere.snowAmount > .01f) {
+            for (side in listOf(-1f, 1f)) {
+                draw(
+                    requireNotNull(cube),
+                    color("#F2F5F8", latestAtmosphere.snowAmount * .86f),
+                    Transform(
+                        side * roofCenterOffset,
+                        roofCenterY + .11f,
+                        centerZ,
+                        roofHalfSlope * .94f,
+                        .028f,
+                        roofHalfDepth * .97f,
+                        rotationZ = -side * roofAngle,
+                    ),
+                    rimStrength = .04f,
+                )
+            }
+        }
 
         for (side in listOf(-1f, 1f)) {
             val gableZ = centerZ + side * .955f
@@ -2815,6 +4139,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             color("#6A4633"),
             Transform(.66f, 2.46f, centerZ + .25f, .15f, .43f, .15f),
         )
+        if (latestAtmosphere.snowAmount > .01f) {
+            draw(
+                requireNotNull(lowSphere),
+                color("#F2F5F8", latestAtmosphere.snowAmount * .90f),
+                Transform(.66f, 2.91f, centerZ + .25f, .19f, .045f, .19f),
+                rimStrength = .03f,
+            )
+        }
         draw(
             requireNotNull(cube),
             color("#573424"),
@@ -2841,20 +4173,60 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             Transform(.72f, .67f, centerZ - 1.04f, .035f, .035f, .035f),
         )
 
-        // A moving silhouette and curtains make the lit window feel occupied.
-        val grandmaX = -.48f + sin(frame.storyTime * .48f) * .10f
-        draw(
-            requireNotNull(lowSphere),
-            color("#49392F"),
-            Transform(grandmaX, .95f, centerZ - 1.075f, .085f, .105f, .035f),
-            rimStrength = .02f,
-        )
-        draw(
-            requireNotNull(cone),
-            color("#6D4538"),
-            Transform(grandmaX, .74f, centerZ - 1.07f, .16f, .22f, .045f),
-            rimStrength = .02f,
-        )
+        // Grandma crosses the window occasionally when this micro-scene is
+        // active. During the story she remains visible for the kneading beat.
+        val grandmaCrossing = lifeDirector.grandmaCrossing
+        val grandmaVisible = latestStory.grandmaCooking || grandmaCrossing >= 0f
+        val grandmaX = if (latestStory.grandmaCooking) {
+            -.48f + sin(latestStory.chapterSeconds * .48f) * .10f
+        } else {
+            -.79f + grandmaCrossing.coerceIn(0f, 1f) * .62f
+        }
+        if (grandmaVisible) {
+            draw(
+                requireNotNull(lowSphere),
+                color("#49392F"),
+                Transform(grandmaX, .95f, centerZ - 1.075f, .085f, .105f, .035f),
+                rimStrength = .02f,
+            )
+            draw(
+                requireNotNull(cone),
+                color("#6D4538"),
+                Transform(grandmaX, .74f, centerZ - 1.07f, .16f, .22f, .045f),
+                rimStrength = .02f,
+            )
+        }
+        if (latestStory.grandmaCooking && grandmaVisible) {
+            val knead = sin(latestStory.chapterSeconds * 8f)
+            draw(
+                requireNotNull(lowSphere),
+                color("#F2C96A"),
+                Transform(
+                    grandmaX,
+                    .69f + abs(knead) * .018f,
+                    centerZ - 1.10f,
+                    .105f + abs(knead) * .025f,
+                    .050f,
+                    .030f,
+                ),
+                rimStrength = .10f,
+            )
+            for (side in listOf(-1f, 1f)) {
+                draw(
+                    requireNotNull(lowSphere),
+                    color("#D8A77C"),
+                    Transform(
+                        grandmaX + side * (.11f - knead * side * .025f),
+                        .73f + knead * side * .025f,
+                        centerZ - 1.115f,
+                        .040f,
+                        .040f,
+                        .025f,
+                    ),
+                    rimStrength = .05f,
+                )
+            }
+        }
         for (side in listOf(-.29f, .29f)) {
             draw(
                 requireNotNull(cube),
@@ -2906,20 +4278,21 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             )
         }
 
-        val ridgeBirdT = frame.storyTime % 15f
-        val ridgeArrivalEnd = 2.15f
-        val ridgeDepartureStart = 11.15f
-        val arrivalProgress = smoothStep(ridgeBirdT / ridgeArrivalEnd)
-        val departureProgress = smoothStep(
-            (ridgeBirdT - ridgeDepartureStart) / (15f - ridgeDepartureStart),
-        )
-        val arrivalOffset = 1f - arrivalProgress
-        val flightStrength = max(arrivalOffset, departureProgress)
-        val visitScale = min(
-            smoothStep(ridgeBirdT / .65f),
-            smoothStep((15f - ridgeBirdT) / .65f),
-        )
-        if (visitScale > .001f) {
+        val ridgeBirdVisit = lifeDirector.ridgeBirdVisit
+        if (ridgeBirdVisit >= 0f) {
+            val ridgeBirdT = ridgeBirdVisit * 5.2f
+            val ridgeArrivalEnd = .75f
+            val ridgeDepartureStart = 4.10f
+            val arrivalProgress = smoothStep(ridgeBirdT / ridgeArrivalEnd)
+            val departureProgress = smoothStep(
+                (ridgeBirdT - ridgeDepartureStart) / (5.2f - ridgeDepartureStart),
+            )
+            val arrivalOffset = 1f - arrivalProgress
+            val flightStrength = max(arrivalOffset, departureProgress)
+            val visitScale = min(
+                smoothStep(ridgeBirdT / .28f),
+                smoothStep((5.2f - ridgeBirdT) / .28f),
+            )
             val perchX = -.25f
             val perchY = 2.64f
             val perchZ = centerZ - .10f
@@ -2928,7 +4301,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 ridgeBirdT > ridgeDepartureStart -> 115f + (124f - 115f) * departureProgress
                 else -> 115f
             }
-            val peck = if (ridgeBirdT in 5.0f..8.0f) {
+            val peck = if (ridgeBirdT in 1.7f..3.4f) {
                 abs(sin(ridgeBirdT * 8f)) * 23f
             } else {
                 0f
@@ -2946,15 +4319,20 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             )
         }
 
-        repeat(3) { index ->
+        val smokeCount = (3f * latestStory.smokeBoost)
+            .roundToInt()
+            .coerceIn(3, 7)
+        repeat(smokeCount) { index ->
             val phase = (frame.storyTime * .18f + index * .31f) % 1f
+            val windDrift = phase * phase * latestAtmosphere.windStrength * .48f
             draw(
                 requireNotNull(lowSphere),
                 color("#E9EEF0", .45f * (1f - phase)),
                 Transform(
-                    .66f + sin(frame.storyTime * .4f + index) * .16f,
+                    .66f + sin(frame.storyTime * .4f + index) * .16f +
+                        latestAtmosphere.windDirectionX * windDrift,
                     3.02f + phase * 1.2f,
-                    centerZ + .25f,
+                    centerZ + .25f + latestAtmosphere.windDirectionZ * windDrift,
                     .18f + phase * .18f,
                     .12f + phase * .15f,
                     .18f + phase * .18f,
@@ -2963,26 +4341,32 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
 
         val smokeElapsed = eventSeconds(smokeRingsStartedMs)
-        if (smokeElapsed in 0f..3.4f) {
+        if (smokeElapsed in 0f..3.7f) {
             repeat(3) { index ->
-                val local = smokeElapsed - index * .34f
+                val local = smokeElapsed - index * .30f
                 if (local < 0f) return@repeat
-                val progress = (local / 2.25f).coerceIn(0f, 1f)
+                val progress = (local / 3f).coerceIn(0f, 1f)
+                val radius = .16f *
+                    (.80f + pseudo(index * 59 + smokeRingsStartedMs.toInt()) * .40f)
+                val windDrift = progress * latestAtmosphere.windStrength * .50f
                 draw(
-                    requireNotNull(ring),
-                    color("#EEF2F0", .68f * (1f - progress)),
+                    requireNotNull(lowSphere),
+                    color("#EEF2F0", .62f * (1f - progress)),
                     Transform(
-                        .66f + sin(local * 1.8f) * .12f,
-                        2.96f + progress * 1.55f,
-                        centerZ + .25f,
-                        .16f + progress * .30f,
-                        .16f + progress * .30f,
-                        .16f + progress * .30f,
+                        .66f + sin(progress * PI.toFloat() * 2f + index) * .15f +
+                            latestAtmosphere.windDirectionX * windDrift,
+                        2.96f + progress * 1.50f,
+                        centerZ + .25f +
+                            sin(progress * PI.toFloat() * 2f + index) * .09f +
+                            latestAtmosphere.windDirectionZ * windDrift,
+                        radius,
+                        radius,
+                        radius,
                     ),
                     rimStrength = .02f,
                 )
             }
-            if (smokeElapsed > 3.2f) smokeRingsStartedMs = 0L
+            if (smokeElapsed > 3.65f) smokeRingsStartedMs = 0L
         }
         if (izbaFlashStartedMs > 0L && izbaFlashElapsed > 1.35f) {
             izbaFlashStartedMs = 0L
@@ -3184,7 +4568,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val willowSway = if (willowElapsed in 0f..2.8f) {
             sin(willowElapsed * 9f) * (1f - willowElapsed / 2.8f) * 12f
         } else {
-            sin(frame.storyTime * .55f) * 1.7f
+            val windPhase =
+                (willowX * latestAtmosphere.windDirectionX +
+                    willowZ * latestAtmosphere.windDirectionZ) * .9f +
+                    frame.storyTime * 2.2f
+            sin(windPhase) * 1.7f * latestAtmosphere.windStrength
         }
         val willowRadians = Math.toRadians(willowSway.toDouble())
         val willowHalfHeight = .84f
@@ -3252,6 +4640,21 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val grandpaX = grandpa.x
         val grandpaZ = grandpa.z
         val heading = facingPoint(grandpaX, grandpaZ, bobberPoint.x, bobberPoint.z)
+        val fishingElapsed = eventSeconds(fishingStartedMs)
+        // The rendered arc is authored on a 3.35-second visual timeline, but
+        // the actual egg is 2.7 seconds (5.4 for the rare golden catch).
+        val fishingSequenceElapsed =
+            fishingElapsed * FISHING_TIMELINE_SCALE /
+                if (fishingKind == FishingKind.GOLD) 2f else 1f
+        val grandpaHeadShake = if (
+            fishingKind == FishingKind.BOOT &&
+            fishingSequenceElapsed in 1.10f..1.90f
+        ) {
+            sin((fishingSequenceElapsed - 1.10f) / .80f * PI.toFloat() * 4f) * 10f
+        } else {
+            0f
+        }
+        val grandpaHeadHeading = heading + grandpaHeadShake
         draw(
             requireNotNull(pondBlob),
             color("#88AE68"),
@@ -3274,12 +4677,12 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         )
         drawShadow(grandpaX, grandpaZ, .36f, .27f)
         drawActorPart(requireNotNull(lowSphere), "#557AA4", grandpaX, grandpaZ, 0f, .56f, 0f, .27f, .35f, .23f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, 0f, 1.00f, .02f, .20f, .21f, .19f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E7E2D8", grandpaX, grandpaZ, 0f, .89f, .18f, .18f, .15f, .12f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, 0f, 1.21f, -.01f, .22f, .10f, .19f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, .07f, 1.32f, -.01f, .075f, .075f, .07f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, -.07f, 1.04f, .185f, .022f, .027f, .018f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, .07f, 1.04f, .185f, .022f, .027f, .018f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#E9BE92", grandpaX, grandpaZ, 0f, 1.00f, .02f, .20f, .21f, .19f, grandpaHeadHeading)
+        drawActorPart(requireNotNull(lowSphere), "#E7E2D8", grandpaX, grandpaZ, 0f, .89f, .18f, .18f, .15f, .12f, grandpaHeadHeading)
+        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, 0f, 1.21f, -.01f, .22f, .10f, .19f, grandpaHeadHeading)
+        drawActorPart(requireNotNull(lowSphere), "#D8D5CE", grandpaX, grandpaZ, .07f, 1.32f, -.01f, .075f, .075f, .07f, grandpaHeadHeading)
+        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, -.07f, 1.04f, .185f, .022f, .027f, .018f, grandpaHeadHeading)
+        drawActorPart(requireNotNull(lowSphere), "#332A24", grandpaX, grandpaZ, .07f, 1.04f, .185f, .022f, .027f, .018f, grandpaHeadHeading)
 
         val grip = actorWorldPoint(grandpaX, grandpaZ, heading, .14f, .69f, .13f)
         val leftShoulder = actorWorldPoint(grandpaX, grandpaZ, heading, -.17f, .72f, .03f)
@@ -3303,16 +4706,24 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             )
         }
 
-        val fishingElapsed = eventSeconds(fishingStartedMs)
-        val catchEnvelope = if (fishingElapsed in 0f..3.4f) {
-            sin((fishingElapsed / 3.4f).coerceIn(0f, 1f) * PI.toFloat())
+        val catchEnvelope = if (fishingSequenceElapsed in 0f..3.4f) {
+            sin((fishingSequenceElapsed / 3.4f).coerceIn(0f, 1f) * PI.toFloat())
         } else {
             0f
         }
         val toFloatX = bobberPoint.x - grip.x
         val toFloatZ = bobberPoint.z - grip.z
         val toFloatLength = sqrt(toFloatX * toFloatX + toFloatZ * toFloatZ).coerceAtLeast(.001f)
-        val rodRise = .18f + catchEnvelope * .43f + sin(frame.storyTime * .70f) * .012f
+        val ambientRecast = lifeDirector.grandpaRecast
+        val ambientRecastEnvelope = if (ambientRecast >= 0f) {
+            sin(ambientRecast * PI.toFloat()).coerceAtLeast(0f)
+        } else {
+            0f
+        }
+        val rodRise = .18f +
+            catchEnvelope * .43f +
+            ambientRecastEnvelope * .34f +
+            sin(frame.storyTime * .70f) * .012f
         val rodHorizontal = sqrt((.70f * .70f - rodRise * rodRise).coerceAtLeast(.05f))
         val rodTip = WorldPoint3(
             grip.x + toFloatX / toFloatLength * rodHorizontal,
@@ -3322,7 +4733,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         drawLineSegment(grip, rodTip, "#76512F", 1f, .018f)
 
         val floatBob = sin(frame.storyTime * 2.5f) * .025f
-        val bobberTop = WorldPoint3(bobberPoint.x, .25f + floatBob, bobberPoint.z)
+        val floatYank = if (fishingStartedMs > 0L) {
+            smoothStep((fishingSequenceElapsed - .36f) / .38f) *
+                (1f - smoothStep((fishingSequenceElapsed - 2.35f) / .35f))
+        } else {
+            0f
+        }
+        val bobberLift = floatYank * .16f
+        val bobberTop = WorldPoint3(
+            bobberPoint.x,
+            .25f + floatBob + bobberLift,
+            bobberPoint.z,
+        )
         val lineSag = WorldPoint3(
             x = rodTip.x + (bobberTop.x - rodTip.x) * .55f,
             y = ((rodTip.y + bobberTop.y) * .5f - .13f).coerceAtLeast(.32f),
@@ -3330,8 +4752,56 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         )
         drawLineSegment(rodTip, lineSag, "#E9E5DA", .78f, .008f)
         drawLineSegment(lineSag, bobberTop, "#E9E5DA", .78f, .008f)
-        draw(requireNotNull(lowSphere), color("#F5F2E8"), Transform(bobberPoint.x, .17f + floatBob, bobberPoint.z, .045f, .055f, .045f))
-        draw(requireNotNull(lowSphere), color("#D94D43"), Transform(bobberPoint.x, .22f + floatBob, bobberPoint.z, .046f, .045f, .046f))
+        draw(requireNotNull(lowSphere), color("#F5F2E8"), Transform(bobberPoint.x, .17f + floatBob + bobberLift, bobberPoint.z, .045f, .055f, .045f))
+        draw(requireNotNull(lowSphere), color("#D94D43"), Transform(bobberPoint.x, .22f + floatBob + bobberLift, bobberPoint.z, .046f, .045f, .046f))
+        val catchRipple = when {
+            fishingSequenceElapsed in .36f..1.02f ->
+                (fishingSequenceElapsed - .36f) / .66f
+            fishingSequenceElapsed in 2.35f..3.01f ->
+                (fishingSequenceElapsed - 2.35f) / .66f
+            else -> -1f
+        }
+        if (catchRipple >= 0f) {
+            repeat(3) { index ->
+                val ringProgress = (catchRipple - index * .13f).coerceIn(0f, 1f)
+                if (ringProgress > 0f) {
+                    draw(
+                        requireNotNull(ring),
+                        color("#E8F4F2", (1f - ringProgress) * .46f),
+                        Transform(
+                            bobberPoint.x,
+                            .125f,
+                            bobberPoint.z,
+                            .07f + ringProgress * (.30f + index * .08f),
+                            .07f + ringProgress * (.30f + index * .08f),
+                            .07f + ringProgress * (.30f + index * .08f),
+                        ),
+                        rimStrength = .02f,
+                    )
+                }
+            }
+        }
+        if (ambientRecast >= .42f) {
+            val ripple = ((ambientRecast - .42f) / .58f).coerceIn(0f, 1f)
+            repeat(3) { index ->
+                val ringProgress = (ripple - index * .14f).coerceIn(0f, 1f)
+                if (ringProgress > 0f) {
+                    draw(
+                        requireNotNull(ring),
+                        color("#E8F4F2", (1f - ringProgress) * .42f),
+                        Transform(
+                            bobberPoint.x,
+                            .125f,
+                            bobberPoint.z,
+                            .08f + ringProgress * (.28f + index * .06f),
+                            .08f + ringProgress * (.28f + index * .06f),
+                            .08f + ringProgress * (.28f + index * .06f),
+                        ),
+                        rimStrength = .02f,
+                    )
+                }
+            }
+        }
 
         repeat(accumulatedBoots.coerceAtMost(3)) { index ->
             val boot = actorWorldPoint(
@@ -3359,9 +4829,9 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             )
         }
 
-        if (fishingElapsed in .42f..3.25f) {
-            val up = ((fishingElapsed - .42f) / .88f).coerceIn(0f, 1f)
-            val down = ((fishingElapsed - 2.30f) / .85f).coerceIn(0f, 1f)
+        if (fishingSequenceElapsed in .42f..3.25f) {
+            val up = ((fishingSequenceElapsed - .42f) / .88f).coerceIn(0f, 1f)
+            val down = ((fishingSequenceElapsed - 2.30f) / .85f).coerceIn(0f, 1f)
             val travel = up * (1f - down)
             val fishX = bobberPoint.x + (grip.x - bobberPoint.x) * travel
             val fishZ = bobberPoint.z + (grip.z - bobberPoint.z) * travel
@@ -3372,7 +4842,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 FishingKind.GOLD -> "#FFD15A"
                 FishingKind.BOOT -> "#4A4038"
             }
-            val spin = fishingElapsed *
+            val spin = fishingSequenceElapsed *
                 if (fishingKind == FishingKind.GOLD) 230f else 410f
             draw(
                 requireNotNull(lowSphere),
@@ -3408,7 +4878,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
             if (fishingKind == FishingKind.GOLD) {
                 repeat(8) { index ->
-                    val sparkleAngle = index * PI.toFloat() * .25f + fishingElapsed * 2.2f
+                    val sparkleAngle =
+                        index * PI.toFloat() * .25f + fishingSequenceElapsed * 2.2f
                     draw(
                         requireNotNull(lowSphere),
                         color("#FFF0A0", .82f),
@@ -3425,7 +4896,9 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 }
             }
         }
-        if (fishingStartedMs > 0L && fishingElapsed > 3.35f) fishingStartedMs = 0L
+        if (fishingStartedMs > 0L && fishingSequenceElapsed > 3.35f) {
+            fishingStartedMs = 0L
+        }
 
         val frogElapsed = eventSeconds(frogJumpStartedMs)
         val frogJump = if (frogElapsed in 0f..1.35f) sin(frogElapsed / 1.35f * PI.toFloat()) * .48f else 0f
@@ -3443,15 +4916,33 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
         if (frogJumpStartedMs > 0L && frogElapsed > 1.35f) frogJumpStartedMs = 0L
 
-        val splashCycle = frame.storyTime % 27f
-        if (splashCycle in 0f..1.1f) {
-            val jump = sin(splashCycle / 1.1f * PI.toFloat())
+        val splashProgress = lifeDirector.pondFishSplash
+        if (splashProgress >= 0f) {
+            val jump = sin(splashProgress * PI.toFloat())
             val splash = pondLocalPoint(.48f, .16f + jump * .30f, -.05f)
             draw(
                 requireNotNull(lowSphere),
                 color("#A7C9D4"),
-                Transform(splash.x, splash.y, splash.z, .085f, .035f, .035f, rotationZ = splashCycle * 240f),
+                Transform(splash.x, splash.y, splash.z, .085f, .035f, .035f, rotationZ = splashProgress * 264f),
             )
+            repeat(2) { index ->
+                val ringProgress = (splashProgress - index * .18f).coerceIn(0f, 1f)
+                if (ringProgress > 0f) {
+                    draw(
+                        requireNotNull(ring),
+                        color("#E4F2F0", (1f - ringProgress) * .34f),
+                        Transform(
+                            splash.x,
+                            .122f,
+                            splash.z,
+                            .08f + ringProgress * (.24f + index * .06f),
+                            .08f + ringProgress * (.24f + index * .06f),
+                            .08f + ringProgress * (.24f + index * .06f),
+                        ),
+                        rimStrength = .02f,
+                    )
+                }
+            }
         }
     }
 
@@ -3462,43 +4953,62 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     ) {
         val elapsed = eventSeconds(magpiesStartedMs)
         if (elapsed < 0f) return
-        if (elapsed > 18.4f) {
+        val returnStart = MAGPIE_LAUNCH_SECONDS + MAGPIE_AWAY_SECONDS
+        val cycleEnd = returnStart + MAGPIE_RETURN_SECONDS
+        if (elapsed > cycleEnd) {
             magpiesStartedMs = 0L
             return
         }
-        val returning = elapsed >= 15f
-        if (elapsed in 3.2f..15f) return
+        val returning = elapsed >= returnStart
+        if (elapsed in MAGPIE_LAUNCH_SECONDS..returnStart) return
         val progress = if (returning) {
-            1f - ((elapsed - 15f) / 3.2f).coerceIn(0f, 1f)
+            1f - ((elapsed - returnStart) / MAGPIE_RETURN_SECONDS).coerceIn(0f, 1f)
         } else {
-            (elapsed / 3.2f).coerceIn(0f, 1f)
+            (elapsed / MAGPIE_LAUNCH_SECONDS).coerceIn(0f, 1f)
         }
         repeat(3) { index ->
             val startX = willowX + (index - 1) * .24f
             val startY = 1.95f + willowTopDy + index * .08f
             val startZ = willowZ + (index % 2) * .18f
-            val direction = if (index == 1) -1f else 1f
-            val outward = 5.8f + index * .90f
-            val depth = 4.8f + index * .60f
-            val x = startX + direction * progress * outward +
-                sin(progress * PI.toFloat() * 3f + index) * .36f
-            val y = startY + progress * (6.4f + index * .50f) +
-                sin(progress * PI.toFloat()) * .34f
-            val z = startZ - progress * depth +
-                sin(progress * PI.toFloat() * 2f + index) * .22f
-            val outboundHeading = Math.toDegrees(
+            val seed = magpieFlightSeed + index * 337
+            val escapeAngle = pseudo(seed + 11) * PI.toFloat() * 2f
+            val distance = 3f + pseudo(seed + 19) * 2.5f
+            val endX = startX + sin(escapeAngle) * distance
+            val endY = startY + 6f + pseudo(seed + 29) * 3f
+            val endZ = startZ + cos(escapeAngle) * distance
+            val dx = endX - startX
+            val dz = endZ - startZ
+            val horizontalLength = sqrt(dx * dx + dz * dz).coerceAtLeast(.001f)
+            val side = if (pseudo(seed + 37) < .5f) -1f else 1f
+            val amplitude =
+                horizontalLength * (.15f + pseudo(seed + 43) * .20f) * side
+            val wobble = sin(progress * PI.toFloat() * 2f) * amplitude
+            val x = startX + dx * progress - dz / horizontalLength * wobble
+            val y = startY + (endY - startY) * progress
+            val z = startZ + dz * progress + dx / horizontalLength * wobble
+            val aheadProgress = (
+                progress + if (returning) -.02f else .02f
+                ).coerceIn(0f, 1f)
+            val aheadWobble =
+                sin(aheadProgress * PI.toFloat() * 2f) * amplitude
+            val aheadX =
+                startX + dx * aheadProgress -
+                    dz / horizontalLength * aheadWobble
+            val aheadZ =
+                startZ + dz * aheadProgress +
+                    dx / horizontalLength * aheadWobble
+            val birdHeading = Math.toDegrees(
                 kotlin.math.atan2(
-                    (direction * outward).toDouble(),
-                    (-depth).toDouble(),
+                    (aheadX - x).toDouble(),
+                    (aheadZ - z).toDouble(),
                 ),
             ).toFloat()
-            val birdHeading = outboundHeading + if (returning) 180f else 0f
             drawTinyBird(
                 x = x,
                 y = y,
                 z = z,
                 heading = birdHeading,
-                flap = sin(elapsed * 17f + index) * 38f,
+                flap = sin(elapsed * MAGPIE_FLAP_HZ * PI.toFloat() * 2f + index) * 50f,
                 bodyColor = "#252A2E",
                 flightAmount = 1f,
             )
@@ -3527,14 +5037,182 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         drawOwlEgg()
     }
 
+    private fun drawAtmosphereScenery() {
+        val fogAmount = latestAtmosphere.fogAmount
+        if (fogAmount <= .01f) return
+        repeat(8) { index ->
+            val angle =
+                index / 8f * PI.toFloat() * 2f +
+                    frame.storyTime * (.035f + index * .003f)
+            val radius = 2.2f + (index % 4) * 1.35f
+            val x = sin(angle) * radius
+            val z = cos(angle) * radius
+            val flutter = .84f + sin(frame.storyTime * .7f + index) * .16f
+            draw(
+                requireNotNull(lowSphere),
+                color("#D9DEE2", fogAmount * .17f * flutter),
+                Transform(
+                    x,
+                    .19f + (index % 3) * .055f,
+                    z,
+                    .95f + (index % 2) * .28f,
+                    .11f,
+                    .43f + (index % 3) * .08f,
+                    rotationY = Math.toDegrees(angle.toDouble()).toFloat(),
+                ),
+                rimStrength = 0f,
+            )
+        }
+    }
+
+    private fun drawGoldenHourExtras() {
+        val golden = goldenBandAmount()
+        if (golden > .01f) {
+            GLES30.glDepthMask(false)
+            repeat(20) { index ->
+                val baseX = (pseudo(index * 71 + 5) * 2f - 1f) * 7.6f
+                val baseZ = (pseudo(index * 79 + 11) * 2f - 1f) * 7.6f
+                val phase = frame.storyTime * .15f + index * 1.73f
+                val drift = latestAtmosphere.windStrength * .20f
+                draw(
+                    requireNotNull(lowSphere),
+                    color("#FFE9B0", golden * .30f),
+                    Transform(
+                        baseX +
+                            sin(phase * .31f) * .22f +
+                            latestAtmosphere.windDirectionX * drift,
+                        .30f + pseudo(index * 83 + 17) * 1.20f +
+                            sin(phase) * .08f,
+                        baseZ +
+                            cos(phase * .27f) * .22f +
+                            latestAtmosphere.windDirectionZ * drift,
+                        .022f,
+                        .022f,
+                        .022f,
+                    ),
+                    rimStrength = .08f,
+                )
+            }
+            repeat(3) { index ->
+                val spread = (index - 1) * 6f
+                draw(
+                    requireNotNull(cube),
+                    color("#FFDF9E", golden * (.025f + index * .008f)),
+                    Transform(
+                        0f,
+                        3.1f,
+                        0f,
+                        4.2f,
+                        .035f,
+                        .30f,
+                        rotationY = 180f + spread,
+                        rotationZ = -18f + index * 3f,
+                    ),
+                    rotateWithScene = false,
+                    rimStrength = 0f,
+                )
+            }
+            GLES30.glDepthMask(true)
+        }
+
+        val birdVisit = lifeDirector.distantBirdVisit
+        if (birdVisit < 0f) return
+        val angle = pseudo(251) * PI.toFloat() * 2f +
+            birdVisit * PI.toFloat() * .6f
+        val birdX = sin(angle) * 17f
+        val birdZ = cos(angle) * 17f
+        repeat(4) { index ->
+            val row = if (index == 0) 0 else (index + 1) / 2
+            val side = when {
+                index == 0 -> 0f
+                index % 2 == 0 -> 1f
+                else -> -1f
+            }
+            drawTinyBird(
+                x = birdX + side * row * .30f,
+                y = 9f - row * .08f,
+                z = birdZ - row * .15f,
+                heading = Math.toDegrees(angle.toDouble()).toFloat() + 90f,
+                flap = sin(frame.storyTime * PI.toFloat() * 4f + index) * 22f,
+                bodyColor = "#2E2E33",
+                flightAmount = 1f,
+                scale = .72f,
+            )
+        }
+    }
+
+    private fun goldenBandAmount(): Float {
+        solarElevationDegrees?.let { elevation ->
+            return (1f - abs(elevation - 3f) / 10f).coerceIn(0f, 1f)
+        }
+        val hour = ((localHour % 24f) + 24f) % 24f
+        val dawn = (1f - abs(hour - 6.8f) / 1.8f).coerceIn(0f, 1f)
+        val dusk = (1f - abs(hour - 18.5f) / 2.0f).coerceIn(0f, 1f)
+        return max(dawn, dusk)
+    }
+
+    private fun solarCelestial(
+        azimuthDegrees: Float,
+        elevationDegrees: Float,
+    ): WorldPoint3 {
+        val azimuth = Math.toRadians(azimuthDegrees.toDouble()).toFloat()
+        val elevation = Math.toRadians(elevationDegrees.toDouble()).toFloat()
+        val horizontal = cos(elevation)
+        return WorldPoint3(
+            x = sin(azimuth) * CELESTIAL_RADIUS * horizontal,
+            y = sin(elevation) * CELESTIAL_RADIUS,
+            z = cos(azimuth) * CELESTIAL_RADIUS * horizontal,
+        )
+    }
+
+    private fun fallbackCelestial(hourOffset: Float): WorldPoint3 {
+        val angle = ((localHour - hourOffset) / 24f) * PI.toFloat() * 2f
+        return WorldPoint3(
+            x = sin(angle) * CELESTIAL_RADIUS,
+            y = cos(angle) * 10f,
+            z = cos(angle) * CELESTIAL_RADIUS * .40f,
+        )
+    }
+
+    private fun moonMechanicallyVisible(): Boolean {
+        val elevation = solarElevationDegrees
+        return if (elevation != null) {
+            elevation < 0f && moonPosition.y > -1.5f
+        } else {
+            eveningAmount() > .05f && moonPosition.y > -1.5f
+        }
+    }
+
+    private fun sunMechanicallyVisible(): Boolean =
+        solarElevationDegrees?.let { it > -6f } ?: (sunPosition.y > -1.5f)
+
     private fun drawHareButterflies() {
-        repeat(3) { index ->
+        val butterflyCount = if (activeZone() == SceneZone.HARE) 3 else 2
+        repeat(butterflyCount) { index ->
             val center = radial(61f + index * 10f, 5.62f + index * .25f)
             val orbit = frame.storyTime * (.72f + index * .11f) + index * 2.1f
-            val x = center.first + cos(orbit) * (.24f + index * .04f)
-            val z = center.second + sin(orbit) * (.19f + index * .03f)
-            val y = .62f + sin(orbit * 1.7f) * .18f + index * .08f
-            val flap = .035f + abs(sin(frame.storyTime * 9f + index)) * .045f
+            val landing = lifeDirector.butterflyLanding
+            val landed = index == 2 && landing >= 0f
+            val x = if (landed) {
+                center.first + .11f
+            } else {
+                center.first + cos(orbit) * (.24f + index * .04f)
+            }
+            val z = if (landed) {
+                center.second - .08f
+            } else {
+                center.second + sin(orbit) * (.19f + index * .03f)
+            }
+            val y = if (landed) {
+                groundHeightAt(x, z) + .31f
+            } else {
+                .62f + sin(orbit * 1.7f) * .18f + index * .08f
+            }
+            val flap = if (landed) {
+                .025f + abs(sin(frame.storyTime * PI.toFloat() * 2f)) * .018f
+            } else {
+                .035f + abs(sin(frame.storyTime * 9f + index)) * .045f
+            }
             val wingColor = when (index) {
                 0 -> "#F3AFCF"
                 1 -> "#F5DA67"
@@ -3565,18 +5243,26 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 rimStrength = 0f,
             )
         }
-        val crowCycle = frame.storyTime % 17f
-        if (crowCycle in 2f..12f) {
-            val fly = ((crowCycle - 9f) / 3f).coerceIn(0f, 1f)
-            val (perchX, perchZ) = radial(126f, 7.05f)
+        val crowFlight = lifeDirector.crowFlight
+        if (activeZone() == SceneZone.WOLF && crowFlight >= 0f) {
+            val zoneRadians = Math.toRadians(144.0)
+            val (centerX, centerZ) = radial(144f, 6.15f)
+            val tangentX = cos(zoneRadians).toFloat()
+            val tangentZ = -sin(zoneRadians).toFloat()
+            val travel = (crowFlight - .5f) * 3f
             drawTinyBird(
-                x = perchX + fly * 2.2f,
-                y = 2.15f + fly * 1.4f,
-                z = perchZ - fly * 1.5f,
-                heading = 124f,
-                flap = 3f + sin(crowCycle * 15f) * 35f * fly,
+                x = centerX + tangentX * travel,
+                y = 2.4f + sin(crowFlight * PI.toFloat()) * .16f,
+                z = centerZ + tangentZ * travel,
+                heading = Math.toDegrees(
+                    kotlin.math.atan2(
+                        tangentX.toDouble(),
+                        tangentZ.toDouble(),
+                    ),
+                ).toFloat(),
+                flap = sin(crowFlight * PI.toFloat() * 4f) * 34f,
                 bodyColor = "#2D3338",
-                flightAmount = fly,
+                flightAmount = 1f,
             )
         }
     }
@@ -3595,7 +5281,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             Transform(logX + .15f, .32f, logZ + .04f, .18f, .055f, .12f, rotationY = 22f),
             rimStrength = .14f,
         )
-        repeat(5) { index ->
+        val beeCount = if (activeZone() == SceneZone.BEAR) 5 else 3
+        repeat(beeCount) { index ->
             val orbit = frame.storyTime * (1.6f + index * .08f) + index * 1.26f
             draw(
                 requireNotNull(lowSphere),
@@ -3611,7 +5298,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 rimStrength = .18f,
             )
         }
-        repeat(7) { index ->
+        val leafCount = if (activeZone() == SceneZone.BEAR) 7 else 2
+        repeat(leafCount) { index ->
             val fall = (frame.storyTime * .18f + index * .14f) % 1f
             val (treeX, treeZ) = radial(232f, 6.8f)
             draw(
@@ -3632,22 +5320,25 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun drawFoxAmbience() {
-        val cycle = frame.storyTime % 13f
-        if (cycle < 8f) {
-            val progress = cycle / 8f
+        if (activeZone() != SceneZone.FOX) return
+        val progress = lifeDirector.foxFeatherFall
+        if (progress >= 0f) {
             val (startX, startZ) = radial(282f, 5.45f)
+            val pendulum = sin(progress * PI.toFloat() * 4.8f)
+            val windCarry = latestAtmosphere.windStrength * progress * .35f
             draw(
                 requireNotNull(lowSphere),
                 color("#FFF2DE", .88f),
                 Transform(
-                    startX + progress * 1.3f,
-                    .50f + sin(progress * PI.toFloat() * 3f) * .18f,
-                    startZ + sin(progress * PI.toFloat()) * .55f,
+                    startX + pendulum * .20f +
+                        latestAtmosphere.windDirectionX * windCarry,
+                    1.8f - progress * 1.55f,
+                    startZ + latestAtmosphere.windDirectionZ * windCarry,
                     .035f,
                     .012f,
                     .11f,
-                    rotationY = progress * 290f,
-                    rotationZ = 18f,
+                    rotationY = progress * 360f,
+                    rotationZ = pendulum * 20f,
                 ),
                 rimStrength = .05f,
             )
@@ -3686,30 +5377,36 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         if (elapsed !in 0f..9.7f) return
         val targetPoint = mushroomSpots[journey.mushroomIndex]
         val target = radial(targetPoint.angle, targetPoint.radius)
-        val startX = .85f
-        val startZ = .62f
+        val targetGroundY = groundHeightAt(target.first, target.second)
+        val startX = 0f
+        val startZ = 0f
         val travel = when {
             elapsed < 4f -> elapsed / 4f
             elapsed < 5.6f -> 1f
             else -> (1f - (elapsed - 5.6f) / 4f).coerceIn(0f, 1f)
         }
-        val eased = smoothStep(travel)
+        val pathProgress = travel.coerceIn(0f, 1f)
         val sideDirection = if (journey.seed and 1 == 0) 1f else -1f
-        val side = sin(eased * PI.toFloat()) * .58f * sideDirection
         val dx = target.first - startX
         val dz = target.second - startZ
         val length = sqrt(dx * dx + dz * dz).coerceAtLeast(.01f)
-        var x = startX + dx * eased - dz / length * side
-        var z = startZ + dz * eased + dx / length * side
+        val pathAmplitude =
+            length * (.12f + pseudo(journey.seed + 31) * .16f) * sideDirection
+        val side = sin(pathProgress * PI.toFloat()) * pathAmplitude
+        var x = startX + dx * pathProgress - dz / length * side
+        var z = startZ + dz * pathProgress + dx / length * side
         val sniffing = elapsed in 4f..5.6f
         if (sniffing) {
             val sniff = sin((elapsed - 4f) * 9f) * .045f
             x += dx / length * sniff
             z += dz / length * sniff
         }
-        val y = .27f + abs(sin(elapsed * 3f * PI.toFloat())) * .028f
+        val y =
+            .27f +
+                targetGroundY * pathProgress +
+                abs(sin(elapsed * 3f * PI.toFloat())) * .028f
         val curveDerivative =
-            cos(eased * PI.toFloat()) * .58f * PI.toFloat() * sideDirection
+            cos(pathProgress * PI.toFloat()) * pathAmplitude * PI.toFloat()
         val tangentX = dx - dz / length * curveDerivative
         val tangentZ = dz + dx / length * curveDerivative
         val tangentHeading = Math.toDegrees(
@@ -3815,24 +5512,37 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         if (elapsed < 0f) return
         val activeTree = sprucePoints.getOrElse(owlActiveTreeIndex) { owlTree }
         val (x, z) = radial(activeTree.angle, activeTree.radius)
-        val pop = (elapsed / .34f).coerceIn(0f, 1f)
+        val pop = (elapsed / OWL_POP_SECONDS).coerceIn(0f, 1f)
         val flapElapsed = eventSeconds(owlFlapStartedMs)
         val duck = if (flapElapsed >= 0f) {
-            ((flapElapsed - 1.05f) / .58f).coerceIn(0f, 1f)
+            ((flapElapsed - OWL_FLAP_SECONDS) / OWL_DUCK_SECONDS).coerceIn(0f, 1f)
         } else {
-            0f
+            (
+                (elapsed - OWL_POP_SECONDS - OWL_LOOK_SECONDS) /
+                    OWL_DUCK_SECONDS
+                ).coerceIn(0f, 1f)
         }
-        if (flapElapsed > 1.72f) {
+        val owlFinished = if (flapElapsed >= 0f) {
+            flapElapsed > OWL_FLAP_SECONDS + OWL_DUCK_SECONDS
+        } else {
+            elapsed > OWL_POP_SECONDS + OWL_LOOK_SECONDS + OWL_DUCK_SECONDS
+        }
+        if (owlFinished) {
             owlStartedMs = 0L
             owlFlapStartedMs = 0L
             return
         }
         val visibleScale = pop * (1f - duck)
-        val headYaw = sin(elapsed * 2.4f) * 48f
+        val cameraHeading = facingPoint(x, z, eyeX, eyeZ)
+        val headYaw = cameraHeading + sin(elapsed * 2.2f) * 35f
         val headYawRadians = Math.toRadians(headYaw.toDouble())
         val headYawCosine = cos(headYawRadians).toFloat()
         val headYawSine = sin(headYawRadians).toFloat()
-        val flap = if (flapElapsed in 0f..1.15f) sin(flapElapsed * 19f) * 42f else 7f
+        val flap = if (flapElapsed in 0f..OWL_FLAP_SECONDS) {
+            sin(flapElapsed * 4.5f * PI.toFloat() * 2f) * 55f
+        } else {
+            0f
+        }
         val y = 2.35f + visibleScale * .25f
         draw(requireNotNull(lowSphere), color("#806A52"), Transform(x, y, z, .17f * visibleScale, .22f * visibleScale, .15f * visibleScale), rimStrength = .20f)
         draw(requireNotNull(lowSphere), color("#9A8262"), Transform(x, y + .20f * visibleScale, z + .03f, .14f * visibleScale, .14f * visibleScale, .13f * visibleScale, rotationY = headYaw), rimStrength = .20f)
@@ -3846,7 +5556,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val pupilZ = z - eyeLocalX * headYawSine + pupilForward * headYawCosine
             draw(requireNotNull(lowSphere), color("#F8EECF"), Transform(eyeX, y + .23f * visibleScale, eyeZ, .040f * visibleScale, .047f * visibleScale, .025f * visibleScale, rotationY = headYaw), rimStrength = .06f)
             draw(requireNotNull(lowSphere), color("#28251F"), Transform(pupilX, y + .23f * visibleScale, pupilZ, .018f * visibleScale, .021f * visibleScale, .012f * visibleScale, rotationY = headYaw), rimStrength = .04f)
-            val wingAngle = side * flap
+            val wingAngle = if (flapElapsed >= 0f) {
+                side * flap
+            } else {
+                side * OWL_FOLDED_WING_DEGREES
+            }
             val wingRadians = Math.toRadians(wingAngle.toDouble())
             val wingHalfLength = .18f * visibleScale
             val wingRootX = x + side * .11f * visibleScale
@@ -3902,8 +5616,6 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val base = ambientReactionPoint
         val palette = when (ambientReaction) {
             AmbientReaction.TREE -> listOf("#7FB65B", "#A7C66A", "#D5A34B")
-            AmbientReaction.MEADOW -> listOf("#F07F87", "#FFF1A8", "#A7D7F4")
-            AmbientReaction.PATH -> listOf("#FFF2B8", "#E7C98F", "#FFFFFF")
             AmbientReaction.BUTTERFLIES -> listOf("#F3AFCF", "#F5DA67", "#B8DDF2")
             AmbientReaction.HIVE -> listOf("#F5D34F", "#FFF1A8", "#B67A2F")
             AmbientReaction.NONE -> emptyList()
@@ -3974,37 +5686,110 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     private fun drawClouds() {
         // Once the orbit rises through the cloud layer, drawing nearby cloud
         // lobes would fill the camera. Keep the overhead view unobstructed.
-        if (eyeY >= 6.95f) return
-        val drizzleElapsed = eventSeconds(drizzleStartedMs)
-        repeat(5) { index ->
+        if (eyeY >= 6.35f) return
+        repeat(SCENE_CLOUD_COUNT) { index ->
             val cloud = cloudPosition(index)
-            val raining = index == drizzleCloud && drizzleElapsed in 0f..15f
-            val cloudShade = if (raining) "#A9B7C2" else "#EDF6F7"
-            val edgeShade = if (raining) "#C2CDD3" else "#FFFFFF"
-            draw(requireNotNull(sphere), color(cloudShade, .88f), Transform(cloud.x, cloud.y, cloud.z, 1.18f, .48f, .58f), rotateWithScene = false, rimStrength = .08f)
-            draw(requireNotNull(sphere), color(edgeShade, .92f), Transform(cloud.x + .72f, cloud.y - .04f, cloud.z, .82f, .37f, .46f), rotateWithScene = false, rimStrength = .08f)
-            draw(requireNotNull(sphere), color(edgeShade, .92f), Transform(cloud.x - .72f, cloud.y - .06f, cloud.z, .76f, .35f, .43f), rotateWithScene = false, rimStrength = .08f)
+            val drizzleElapsed = eventSeconds(drizzleStartedAtMs[index])
+            val raining = drizzleElapsed in 0f..15f
+            val rainEnvelope = if (raining) {
+                min(
+                    (drizzleElapsed / CLOUD_DARKEN_SECONDS).coerceIn(0f, 1f),
+                    ((CLOUD_RAIN_SECONDS - drizzleElapsed) / CLOUD_DARKEN_SECONDS)
+                        .coerceIn(0f, 1f),
+                )
+            } else {
+                0f
+            }
+            val cloudShade = latestAtmosphere.cloudColor.lerp(
+                SceneColor(.43f, .48f, .54f),
+                rainEnvelope * .70f,
+            )
+            val edgeShade = cloudShade.brighten(.20f)
+            val cameraVisibility = cloudCameraVisibility(cloud)
+            if (cameraVisibility <= .015f) return@repeat
+            val opacity =
+                max(.68f, latestAtmosphere.cloudOpacity) * cameraVisibility
+            val scale = .85f + pseudo(index * 97 + 31) * .35f
+            val yaw = pseudo(index * 101 + 53) * PI.toFloat() * 2f
+            val yawDegrees = Math.toDegrees(yaw.toDouble()).toFloat()
+            val cosine = cos(yaw)
+            val sine = sin(yaw)
+            fun lobeOffset(across: Float, forward: Float): Pair<Float, Float> =
+                across * cosine + forward * sine to
+                    -across * sine + forward * cosine
+            // Match the predecessor's hand-built three-sphere cloud:
+            // medium, large, small with 30% overlap. The previous native
+            // pass doubled and flattened every lobe, which made a nearby
+            // cloud read as a full-screen slab.
+            val medium = lobeOffset(-.77f * scale, -.01f * scale)
+            val small = lobeOffset(.71f * scale, .02f * scale)
+            draw(
+                requireNotNull(sphere),
+                color(cloudShade, opacity * .94f),
+                Transform(
+                    cloud.x,
+                    cloud.y,
+                    cloud.z,
+                    .65f * scale,
+                    .65f * scale,
+                    .65f * scale,
+                    rotationY = yawDegrees,
+                ),
+                rotateWithScene = false,
+                rimStrength = .08f,
+            )
+            draw(
+                requireNotNull(sphere),
+                color(edgeShade, opacity),
+                Transform(
+                    cloud.x + medium.first,
+                    cloud.y - .04f * scale,
+                    cloud.z + medium.second,
+                    .50f * scale,
+                    .50f * scale,
+                    .50f * scale,
+                    rotationY = yawDegrees,
+                ),
+                rotateWithScene = false,
+                rimStrength = .08f,
+            )
+            draw(
+                requireNotNull(sphere),
+                color(edgeShade, opacity),
+                Transform(
+                    cloud.x + small.first,
+                    cloud.y - .07f * scale,
+                    cloud.z + small.second,
+                    .38f * scale,
+                    .38f * scale,
+                    .38f * scale,
+                    rotationY = yawDegrees,
+                ),
+                rotateWithScene = false,
+                rimStrength = .08f,
+            )
             if (cloud.x * cloud.x + cloud.z * cloud.z <= 8f * 8f) {
                 draw(
                     requireNotNull(disc),
-                    color("#45684C", .08f),
+                    color("#45684C", .08f + rainEnvelope * .08f),
                     Transform(cloud.x, .052f, cloud.z, 1.28f, .008f, .62f),
                     rotateWithScene = false,
                     rimStrength = 0f,
                 )
             }
             if (raining) {
-                repeat(12) { drop ->
-                    val row = drop / 4
-                    val column = drop % 4
+                repeat(10) { drop ->
+                    val row = drop / 5
+                    val column = drop % 5
                     val fall = (drizzleElapsed * 2.7f + row * .25f + column * .11f) % 1f
                     draw(
                         requireNotNull(cylinder),
                         color("#84B7D1", .72f),
                         Transform(
-                            cloud.x + (column - 1.5f) * .34f + sin(drop * 2.4f) * .07f,
+                            cloud.x + (column - 2f) * .28f * scale +
+                                sin(drop * 2.4f) * .07f,
                             cloud.y - .65f - fall * (cloud.y - .58f),
-                            cloud.z + (row - 1f) * .18f,
+                            cloud.z + (row - .5f) * .22f * scale,
                             .012f,
                             .10f,
                             .012f,
@@ -4015,25 +5800,47 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                     )
                 }
             }
-        }
-        if (drizzleStartedMs > 0L && drizzleElapsed > 15f) {
-            drizzleStartedMs = 0L
-            drizzleCloud = -1
+            if (drizzleStartedAtMs[index] > 0L && drizzleElapsed > CLOUD_RAIN_SECONDS) {
+                drizzleStartedAtMs[index] = 0L
+            }
         }
     }
 
     private fun drawKolobok() {
-        val travel = SceneMotion.travelRadians(frame.storyTime)
-        var x = sin(travel) * 4.6f
-        var z = cos(travel) * 4.6f
-        val foxEndingElapsed = eventSeconds(foxEndingStartedMs)
+        var foxEndingElapsed = eventSeconds(foxEndingStartedMs)
+        if (foxEndingElapsed > FOX_ENDING_DURATION_SECONDS) {
+            latestStory = storyDirector.finishStandaloneFoxEnding()
+            transforms.setCameraYaw(renderedCameraYaw)
+            foxEndingStartedMs = 0L
+            foxEndingRebirthTriggered = false
+            foxEndingElapsed = -1f
+        }
+        if (
+            foxEndingElapsed >= FOX_ENDING_REBIRTH_SECONDS &&
+            !foxEndingRebirthTriggered
+        ) {
+            foxEndingRebirthTriggered = true
+            val now = SystemClock.uptimeMillis()
+            izbaFlashStartedMs = now
+            smokeRingsStartedMs = now
+        }
+        val story = latestStory
+        val encounter = latestEncounter
+        val position = currentKolobokPoint()
+        var x = position.x
+        var z = position.z
         var endingHeightOffset = 0f
+        var endingScaleMultiplier = 1f
         if (foxEndingElapsed in .60f..1.50f) {
             val (foxX, foxZ) = radial(288f, 5.42f)
             val progress = smoothStep((foxEndingElapsed - .60f) / .50f)
             x += (foxX - x) * progress
             z += (foxZ - z) * progress
             endingHeightOffset = sin(progress * PI.toFloat()) * .12f
+            if (foxEndingElapsed >= 1.10f) {
+                endingScaleMultiplier =
+                    1f - smoothStep((foxEndingElapsed - 1.10f) / .40f)
+            }
         } else if (foxEndingElapsed in 1.50f..1.90f) {
             // The native UI is fully black during this teleport.
             return
@@ -4043,28 +5850,111 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             z = 5.46f + (4.60f - 5.46f) * progress
             endingHeightOffset = (1f - progress) * 1.05f +
                 sin(progress * PI.toFloat()) * .42f
-        } else if (foxEndingElapsed > 4.60f) {
-            foxEndingStartedMs = 0L
+            endingScaleMultiplier = easeOutBack01(
+                (foxEndingElapsed - 1.90f) / .50f,
+            ).coerceAtLeast(0f)
+        } else if (foxEndingElapsed in 3.35f..FOX_ENDING_DURATION_SECONDS) {
+            x = 0f
+            z = SceneMotion.PATH_RADIUS
         }
         val greeting = if (SystemClock.uptimeMillis() < greetingUntilMs) {
             abs(sin((greetingUntilMs - SystemClock.uptimeMillis()) * .012f)) * .18f
         } else {
             0f
         }
-        val bounce = if (frame.storyPlaying) abs(sin(frame.storyTime * 4.0f)) * .055f else 0f
-        val y = .52f + bounce + greeting + endingHeightOffset
-        val heading = Math.toDegrees(travel.toDouble()).toFloat() + 90f
-        val blinkCycle = (frame.storyTime + 1.7f) % 4.8f
-        val eyeOpen = if (blinkCycle < .16f) .018f else .10f
+        val speedAmount = (kolobokLinearSpeed / .65f).coerceIn(0f, 1f)
+        val bounce = if (speedAmount > .15f) {
+            abs(sin(Math.toRadians(kolobokRollDegrees.toDouble()).toFloat() * 2f)) * .020f
+        } else {
+            0f
+        }
+        val idleBob = if (story.positionOverride == null) {
+            sin(frame.storyTime * 2.5f) * .030f
+        } else {
+            0f
+        }
+        val singing = story.singing || encounter.singing
+        val singingBob = if (singing) {
+            sin(frame.storyTime * 2.2f * PI.toFloat() * 2f) * .050f
+        } else {
+            0f
+        }
+        val y =
+            position.y +
+                idleBob +
+                bounce +
+                greeting +
+                singingBob +
+                encounter.kolobokHop +
+                endingHeightOffset
+        val heading = Math.toDegrees(story.kolobokAngleRadians.toDouble()).toFloat() +
+            90f + (story.spinTurns + encounter.kolobokSpinTurns) * 360f
+        val faceHeading = heading + story.faceYawDegrees
+        val eyelidClose = max(
+            lifeDirector.kolobokEyelidClose,
+            story.forcedBlink,
+        )
+        val eyeOpen = .10f +
+            (.018f - .10f) * eyelidClose
+        val visibleScale =
+            story.kolobokScale.coerceAtLeast(0f) * endingScaleMultiplier
+        if (
+            story.chapter == SceneStoryChapter.BIRTH &&
+            story.chapterSeconds in 9.5f..10.3f
+        ) {
+            drawKolobokLandingDust(
+                x = x,
+                z = z,
+                progress = (story.chapterSeconds - 9.5f) / .8f,
+            )
+        }
+        if (story.catchBurst > .001f) {
+            drawFoxCatchBurst(x, y, z, story.catchBurst)
+        }
+        if (visibleScale <= .004f) return
+        val squash = min(
+            .35f,
+            speedAmount * .18f +
+                encounter.kolobokSquash +
+                story.squash,
+        )
+        val bodyScaleX = .42f * visibleScale * (1f + squash * .45f)
+        val bodyScaleY = .42f * visibleScale * (1f - squash)
+        val bodyScaleZ = .42f * visibleScale * (1f + squash * .45f)
+        val expression = story.expression
+        val expressionBlend =
+            (latestDeltaSeconds / .20f).coerceIn(0f, 1f)
+        renderedHappyExpression += (
+            (if (expression == KolobokExpression.HAPPY) 1f else 0f) -
+                renderedHappyExpression
+            ) * expressionBlend
+        renderedStartledExpression += (
+            (if (expression == KolobokExpression.STARTLED) 1f else 0f) -
+                renderedStartledExpression
+            ) * expressionBlend
+        renderedSlyExpression += (
+            (if (expression == KolobokExpression.SLY) 1f else 0f) -
+                renderedSlyExpression
+            ) * expressionBlend
 
-        drawShadow(x, z, .47f, .34f)
+        drawShadow(x, z, .47f * visibleScale, .34f * visibleScale)
         draw(
             requireNotNull(sphere),
             color("#F2C14E"),
-            Transform(x, y, z, .42f, .42f, .42f, rotationX = frame.kolobokRotation, rotationY = heading),
+            Transform(
+                x,
+                y,
+                z,
+                bodyScaleX,
+                bodyScaleY,
+                bodyScaleZ,
+                rotationX = kolobokRollDegrees,
+                rotationY = heading,
+                rotationZ = story.bodyTiltDegrees,
+            ),
             rimStrength = .36f,
         )
-        val rollRadians = Math.toRadians(frame.kolobokRotation.toDouble())
+        val rollRadians = Math.toRadians(kolobokRollDegrees.toDouble())
         val rollCosine = cos(rollRadians).toFloat()
         val rollSine = sin(rollRadians).toFloat()
         listOf(
@@ -4082,60 +5972,123 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 localX,
                 y + rolledY,
                 rolledForward,
-                .085f,
-                .055f,
-                .035f,
+                .085f * visibleScale,
+                .055f * visibleScale,
+                .035f * visibleScale,
                 heading,
-                rotationX = frame.kolobokRotation,
+                rotationX = kolobokRollDegrees,
+                rotationZ = story.bodyTiltDegrees,
             )
         }
 
         for (offset in listOf(-.13f, .13f)) {
-            drawActorPart(requireNotNull(sphere), "#FAF6EC", x, z, offset, y + .10f, .365f, .082f, eyeOpen, .040f, heading)
+            drawActorPart(
+                requireNotNull(sphere),
+                "#FAF6EC",
+                x,
+                z,
+                offset * visibleScale,
+                y + .10f * visibleScale,
+                .365f * visibleScale,
+                .082f * visibleScale,
+                eyeOpen * visibleScale,
+                .040f * visibleScale,
+                faceHeading,
+                rotationZ = story.bodyTiltDegrees,
+            )
             if (eyeOpen > .02f) {
-                drawActorPart(requireNotNull(lowSphere), "#3A2C1A", x, z, offset, y + .095f, .410f, .031f, .043f, .020f, heading)
+                drawActorPart(
+                    requireNotNull(lowSphere),
+                    "#3A2C1A",
+                    x,
+                    z,
+                    offset * visibleScale,
+                    y + .095f * visibleScale,
+                    .410f * visibleScale,
+                    .031f * visibleScale,
+                    .043f * visibleScale,
+                    .020f * visibleScale,
+                    faceHeading,
+                    rotationZ = story.bodyTiltDegrees,
+                )
             }
+            val browLift =
+                renderedHappyExpression * .025f +
+                    renderedStartledExpression * .050f +
+                    renderedSlyExpression * if (offset < 0f) .045f else .005f
+            val restingBrowTilt = if (offset < 0f) -8f else 8f
+            val browTilt =
+                restingBrowTilt +
+                    renderedHappyExpression *
+                    ((if (offset < 0f) -18f else 18f) - restingBrowTilt) +
+                    renderedSlyExpression *
+                    ((if (offset < 0f) -13f else 5f) - restingBrowTilt)
             drawActorPart(
                 requireNotNull(cube),
                 "#8A5A22",
                 x,
                 z,
-                offset,
-                y + .245f,
-                .372f,
-                .075f,
-                .018f,
-                .018f,
-                heading,
-                rotationZ = if (offset < 0f) -8f else 8f,
+                offset * visibleScale,
+                y + (.245f + browLift) * visibleScale,
+                .372f * visibleScale,
+                .075f * visibleScale,
+                .018f * visibleScale,
+                .018f * visibleScale,
+                faceHeading,
+                rotationZ = browTilt + story.bodyTiltDegrees,
             )
         }
-        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, 0f, y - .015f, .415f, .060f, .050f, .028f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, -.235f, y - .055f, .345f, .078f, .045f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, .235f, y - .055f, .345f, .078f, .045f, .025f, heading)
-        repeat(7) { index ->
-            val t = index / 6f
+        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, 0f, y - .015f * visibleScale, .415f * visibleScale, .060f * visibleScale, .050f * visibleScale, .028f * visibleScale, faceHeading, rotationZ = story.bodyTiltDegrees)
+        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, -.235f * visibleScale, y - .055f * visibleScale, .345f * visibleScale, .078f * visibleScale, .045f * visibleScale, .025f * visibleScale, faceHeading, rotationZ = story.bodyTiltDegrees)
+        drawActorPart(requireNotNull(lowSphere), "#E89A5B", x, z, .235f * visibleScale, y - .055f * visibleScale, .345f * visibleScale, .078f * visibleScale, .045f * visibleScale, .025f * visibleScale, faceHeading, rotationZ = story.bodyTiltDegrees)
+        if (singing || renderedStartledExpression > .06f) {
+            val mouthScale = if (singing) 1f else {
+                .62f + (1f - renderedStartledExpression) * .38f
+            }
             drawActorPart(
                 requireNotNull(lowSphere),
                 "#6D392A",
                 x,
                 z,
-                (t - .5f) * .27f,
-                y - .14f - abs(t - .5f) * .065f,
-                .395f,
-                .021f,
-                .018f,
-                .013f,
-                heading,
+                0f,
+                y - .145f * visibleScale,
+                .405f * visibleScale,
+                .105f * mouthScale * visibleScale,
+                .105f * mouthScale * visibleScale,
+                .028f * visibleScale,
+                faceHeading,
+                rotationZ = story.bodyTiltDegrees,
             )
+        } else {
+            val smileScale = 1f + renderedSlyExpression * .15f
+            repeat(7) { index ->
+                val t = index / 6f
+                drawActorPart(
+                    requireNotNull(lowSphere),
+                    "#6D392A",
+                    x,
+                    z,
+                    (t - .5f) * .27f * smileScale * visibleScale,
+                    y - (.14f + abs(t - .5f) * .065f) * visibleScale,
+                    .395f * visibleScale,
+                    .021f * visibleScale,
+                    .018f * visibleScale,
+                    .013f * visibleScale,
+                    faceHeading,
+                    rotationZ = story.bodyTiltDegrees,
+                )
+            }
         }
 
-        if (frame.storyPlaying) {
+        if (story.rolling) {
             repeat(5) { index ->
-                val trailTravel = travel - .10f - index * .075f
-                val trailX = sin(trailTravel) * 4.6f
-                val trailZ = cos(trailTravel) * 4.6f
+                val trailTravel = story.kolobokAngleRadians - .10f - index * .075f
                 val life = ((frame.storyTime * 1.4f + index * .22f) % 1f)
+                val windDrift = life * latestAtmosphere.windStrength * .22f
+                val trailX = sin(trailTravel) * 4.6f +
+                    latestAtmosphere.windDirectionX * windDrift
+                val trailZ = cos(trailTravel) * 4.6f +
+                    latestAtmosphere.windDirectionZ * windDrift
                 draw(
                     requireNotNull(lowSphere),
                     color("#E5C693", .24f * (1f - life)),
@@ -4150,45 +6103,134 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                     rimStrength = 0f,
                 )
             }
-            val songCycle = frame.storyTime % 9f
-            if (songCycle < 1.8f) {
-                repeat(4) { index ->
-                    val noteLife = ((songCycle + index * .28f) % 1.8f) / 1.8f
-                    draw(
-                        requireNotNull(lowSphere),
-                        color("#FFF8D7", .72f * (1f - noteLife)),
-                        Transform(
-                            x + (index - 1.5f) * .10f + sin(noteLife * 5f) * .08f,
-                            y + .55f + noteLife * .60f,
-                            z,
-                            .035f,
-                            .035f,
-                            .035f,
-                        ),
-                        rimStrength = .18f,
-                    )
-                }
+        }
+        if (singing) {
+            repeat(4) { index ->
+                val noteLife = ((frame.storyTime + index * .28f) % 1.8f) / 1.8f
+                draw(
+                    requireNotNull(lowSphere),
+                    color("#FFF8D7", .72f * (1f - noteLife)),
+                    Transform(
+                        x + (index - 1.5f) * .10f + sin(noteLife * 5f) * .08f,
+                        y + .55f + noteLife * .60f,
+                        z,
+                        .035f,
+                        .035f,
+                        .035f,
+                    ),
+                    rimStrength = .18f,
+                )
             }
         }
     }
 
+    private fun drawKolobokLandingDust(
+        x: Float,
+        z: Float,
+        progress: Float,
+    ) {
+        val life = progress.coerceIn(0f, 1f)
+        repeat(10) { index ->
+            val angle = index * 36f + pseudo(index * 43 + 17) * 24f
+            val radians = Math.toRadians(angle.toDouble())
+            val radius = .10f + life * (.34f + pseudo(index * 47 + 11) * .24f)
+            val size = (.055f + pseudo(index * 53 + 9) * .045f) * (1f - life * .45f)
+            draw(
+                requireNotNull(lowSphere),
+                color("#D5B37D", .46f * (1f - life)),
+                Transform(
+                    x + cos(radians).toFloat() * radius,
+                    .10f + sin(life * PI.toFloat()) * .12f,
+                    z + sin(radians).toFloat() * radius,
+                    size,
+                    size * .55f,
+                    size,
+                ),
+                rimStrength = .01f,
+            )
+        }
+    }
+
+    private fun drawFoxCatchBurst(
+        x: Float,
+        y: Float,
+        z: Float,
+        amount: Float,
+    ) {
+        val life = 1f - amount.coerceIn(0f, 1f)
+        repeat(10) { index ->
+            val angle = index * 36f + (pseudo(index * 67 + 23) - .5f) * 18f
+            val radians = Math.toRadians(angle.toDouble())
+            val startRadius = .16f + life * .13f
+            val endRadius = .42f + life * (.48f + pseudo(index * 71 + 31) * .24f)
+            val lift = sin(radians).toFloat() * .34f
+            drawLineSegment(
+                start = WorldPoint3(
+                    x + cos(radians).toFloat() * startRadius,
+                    y + lift * startRadius,
+                    z + sin(radians).toFloat() * startRadius * .45f,
+                ),
+                end = WorldPoint3(
+                    x + cos(radians).toFloat() * endRadius,
+                    y + lift * endRadius,
+                    z + sin(radians).toFloat() * endRadius * .45f,
+                ),
+                hex = if (index % 2 == 0) "#FFF0A3" else "#F8C75B",
+                alpha = amount * .84f,
+                thickness = .018f,
+            )
+        }
+        repeat(7) { index ->
+            val angle = pseudo(index * 79 + 37) * PI.toFloat() * 2f
+            val radius = life * (.18f + pseudo(index * 83 + 41) * .38f)
+            val puffScale = (.10f + pseudo(index * 89 + 43) * .09f) * (1f + life)
+            draw(
+                requireNotNull(lowSphere),
+                color("#F8E2B8", amount * .48f),
+                Transform(
+                    x + cos(angle) * radius,
+                    y + (pseudo(index * 97 + 47) - .5f) * .30f + life * .16f,
+                    z + sin(angle) * radius,
+                    puffScale,
+                    puffScale * .72f,
+                    puffScale,
+                ),
+                rimStrength = .02f,
+            )
+        }
+    }
+
     private fun drawHare() {
-        val (x, z) = radial(72f, 6.15f)
-        val heading = facingCenter(x, z)
+        val approach = actorApproach(SceneActor.HARE)
         val reaction = reactionEnvelope(AnimalReaction.HARE)
-        val idleHopCycle = frame.storyTime % 6.5f
-        val idleHop = if (idleHopCycle < .75f) sin(idleHopCycle / .75f * PI.toFloat()) * .16f else 0f
-        val bob = sin(frame.storyTime * 2.2f + .4f) * .025f + idleHop + reaction * .28f
-        val earTwitch = sin(frame.storyTime * 1.6f) * 3f + reaction * 18f
+        val (x, z) = radial(72f, 6.15f - approach * .60f - reaction * .22f)
+        val previousActorAlpha = actorDrawAlpha
+        actorDrawAlpha = animalCameraVisibility(x, z, .62f)
+        val heading = facingCenter(x, z)
+        val greeting = greetingEnvelope(SceneActor.HARE)
+        val wetShake = lifeDirector.wetShakeDegrees(SceneActor.HARE)
+        val wetX = wetShake / 12f * .035f
+        val bob = sin(frame.storyTime * 2.2f + .4f) * .025f +
+            lifeDirector.hareHop +
+            reaction * .32f
         drawShadow(x, z, .46f, .34f)
-        drawActorPart(requireNotNull(sphere), "#D9D7D5", x, z, 0f, .50f + bob, 0f, .38f, .50f, .34f, heading)
-        drawActorPart(requireNotNull(sphere), "#E6E4E1", x, z, 0f, .96f + bob, .05f, .32f, .34f, .31f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#F8F4EF", x, z, 0f, .53f + bob, .31f, .23f, .28f, .14f, heading)
+        drawActorPart(requireNotNull(sphere), "#D9D7D5", x, z, wetX, .50f + bob, 0f, .38f, .50f, .34f, heading, rotationZ = wetShake * .16f)
+        drawActorPart(requireNotNull(sphere), "#E6E4E1", x, z, wetX, .96f + bob, .05f, .32f, .34f, .31f, heading, rotationZ = wetShake * .20f)
+        drawActorPart(requireNotNull(lowSphere), "#F8F4EF", x, z, wetX, .53f + bob, .31f, .23f, .28f, .14f, heading)
         for (side in listOf(-1f, 1f)) {
-            val earAngle = side * (7f + earTwitch)
+            val idleTwitch = if (side < 0f) {
+                lifeDirector.hareLeftEarDegrees
+            } else {
+                lifeDirector.hareRightEarDegrees
+            }
+            val earAngle = side * 7f +
+                idleTwitch +
+                side * reaction * 18f +
+                side * sin(frame.storyTime * 9f) * greeting * 14f +
+                wetShake * .18f
             val earRadians = Math.toRadians(earAngle.toDouble())
             val earHalfLength = .43f
-            val earRootX = side * .15f
+            val earRootX = side * .15f + wetX
             val earRootY = .99f + bob
             val earCenterX = earRootX - sin(earRadians).toFloat() * earHalfLength
             val earCenterY = earRootY + cos(earRadians).toFloat() * earHalfLength
@@ -4225,46 +6267,65 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 rotationZ = earAngle,
             )
         }
-        drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, -.115f, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, .115f, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#F28B9E", x, z, 0f, .90f + bob, .355f, .052f, .042f, .028f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#F4F1EC", x, z, .35f, .52f + bob, -.24f, .22f, .23f, .22f, heading)
-        drawActorPart(requireNotNull(cone), "#F28C32", x, z, -.48f, .18f, .14f, .08f, .28f, .08f, heading, rotationZ = 90f)
+        drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, -.115f + wetX, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#25211F", x, z, .115f + wetX, 1.02f + bob, .315f, .038f, .045f, .025f, heading)
+        val sniffScale = 1f +
+            max(0f, sin(frame.storyTime * PI.toFloat() * 2f * 4f)) * .02f
+        drawActorPart(requireNotNull(lowSphere), "#F28B9E", x, z, wetX, .90f + bob, .355f, .052f * sniffScale, .042f * sniffScale, .028f * sniffScale, heading)
+        drawActorPart(requireNotNull(lowSphere), "#F4F1EC", x, z, .35f + wetX, .52f + bob, -.24f, .22f, .23f, .22f, heading)
+        drawActorPart(requireNotNull(cone), "#F28C32", x, z, -.48f + wetX, .18f, .14f, .08f, .28f, .08f, heading, rotationZ = 90f)
         repeat(3) { index ->
-            drawActorPart(requireNotNull(cube), "#4E8C45", x, z, -.56f + index * .04f, .27f, .13f, .018f, .12f, .035f, heading, rotationZ = -18f + index * 18f)
+            drawActorPart(requireNotNull(cube), "#4E8C45", x, z, -.56f + index * .04f + wetX, .27f, .13f, .018f, .12f, .035f, heading, rotationZ = -18f + index * 18f)
         }
+        actorDrawAlpha = previousActorAlpha
     }
 
     private fun drawWolf() {
-        val (x, z) = radial(144f, 6.15f)
-        val heading = facingCenter(x, z)
+        val approach = actorApproach(SceneActor.WOLF)
         val reaction = reactionEnvelope(AnimalReaction.WOLF)
-        val headSweep = sin(frame.storyTime * .62f) * 12f + reaction * 22f
+        val reactionProgress = actorReactionProgress(SceneActor.WOLF)
+        val (x, z) = radial(144f, 6.15f - approach * .60f - reaction * .28f)
+        val previousActorAlpha = actorDrawAlpha
+        actorDrawAlpha = animalCameraVisibility(x, z, .72f)
+        val heading = facingCenter(x, z)
+        val greeting = greetingEnvelope(SceneActor.WOLF)
+        val wetShake = lifeDirector.wetShakeDegrees(SceneActor.WOLF)
+        val wetX = wetShake / 12f * .040f
+        val landingShake = if (reactionProgress > .60f) {
+            sin((reactionProgress - .60f) / .40f * PI.toFloat() * 4f) * 10f
+        } else {
+            0f
+        }
+        val headSweep = lifeDirector.wolfHeadSweepDegrees + landingShake
+        val howlPitch = lifeDirector.wolfHowlDegrees
         val headHeading = heading + headSweep
-        val tailYaw = 180f + sin(frame.storyTime * 1.4f) * 11f
-        val tailPitch = 12f - reaction * 36f
+        val reactY = reaction * .22f
+        val tailYaw = 180f +
+            sin(frame.storyTime * 1.4f) * 11f +
+            sin(frame.storyTime * 8f) * greeting * 28f
+        val tailPitch = 12f
         val tailYawRadians = Math.toRadians(tailYaw.toDouble())
         val tailPitchRadians = Math.toRadians(tailPitch.toDouble())
         val tailHalfLength = .48f
         val tailHorizontal = cos(tailPitchRadians).toFloat() * tailHalfLength
         val tailLocalX = -.30f + sin(tailYawRadians).toFloat() * tailHorizontal
         val tailForward = -.22f + cos(tailYawRadians).toFloat() * tailHorizontal
-        val tailY = .70f + sin(tailPitchRadians).toFloat() * tailHalfLength
+        val tailY = .70f + reactY + sin(tailPitchRadians).toFloat() * tailHalfLength
         drawShadow(x, z, .56f, .38f)
-        drawActorPart(requireNotNull(sphere), "#66727D", x, z, 0f, .55f, -.10f, .43f, .52f, .58f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#75818B", x, z, 0f, 1.03f + reaction * .08f, .18f, .36f, .38f, .34f, headHeading)
-        drawActorPart(requireNotNull(lowSphere), "#AAB1B4", x, z, 0f, .93f + reaction * .08f, .43f, .25f, .19f, .24f, headHeading)
-        drawActorPart(requireNotNull(cone), "#58646E", x, z, -.22f, 1.44f + reaction * .08f, .10f, .16f, .31f, .15f, headHeading, rotationZ = -10f)
-        drawActorPart(requireNotNull(cone), "#58646E", x, z, .22f, 1.44f + reaction * .08f, .10f, .16f, .31f, .15f, headHeading, rotationZ = 10f)
-        drawActorPart(requireNotNull(lowSphere), "#20252A", x, z, -.12f, 1.10f + reaction * .08f, .34f, .038f, .045f, .025f, headHeading)
-        drawActorPart(requireNotNull(lowSphere), "#20252A", x, z, .12f, 1.10f + reaction * .08f, .34f, .038f, .045f, .025f, headHeading)
-        drawActorPart(requireNotNull(lowSphere), "#242425", x, z, 0f, .96f + reaction * .08f, .62f, .065f, .050f, .055f, headHeading)
+        drawActorPart(requireNotNull(sphere), "#66727D", x, z, wetX, .55f + reactY, -.10f, .43f, .52f, .58f, heading, rotationZ = wetShake * .16f)
+        drawActorPart(requireNotNull(lowSphere), "#75818B", x, z, wetX, 1.03f + reactY, .18f, .36f, .38f, .34f, headHeading, rotationX = howlPitch, rotationZ = wetShake * .18f)
+        drawActorPart(requireNotNull(lowSphere), "#AAB1B4", x, z, wetX, .93f + reactY, .43f, .25f, .19f, .24f, headHeading, rotationX = howlPitch)
+        drawActorPart(requireNotNull(cone), "#58646E", x, z, -.22f + wetX, 1.44f + reactY, .10f, .16f, .31f, .15f, headHeading, rotationX = howlPitch, rotationZ = -10f + wetShake * .18f)
+        drawActorPart(requireNotNull(cone), "#58646E", x, z, .22f + wetX, 1.44f + reactY, .10f, .16f, .31f, .15f, headHeading, rotationX = howlPitch, rotationZ = 10f + wetShake * .18f)
+        drawActorPart(requireNotNull(lowSphere), "#20252A", x, z, -.12f + wetX, 1.10f + reactY, .34f, .038f, .045f, .025f, headHeading, rotationX = howlPitch)
+        drawActorPart(requireNotNull(lowSphere), "#20252A", x, z, .12f + wetX, 1.10f + reactY, .34f, .038f, .045f, .025f, headHeading, rotationX = howlPitch)
+        drawActorPart(requireNotNull(lowSphere), "#242425", x, z, wetX, .96f + reactY, .62f, .065f, .050f, .055f, headHeading, rotationX = howlPitch)
         drawActorPart(
             requireNotNull(sphere),
             "#5B6670",
             x,
             z,
-            tailLocalX,
+            tailLocalX + wetX,
             tailY,
             tailForward,
             .16f,
@@ -4275,15 +6336,23 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             yawOffset = tailYaw,
         )
         for (side in listOf(-.24f, .24f)) {
-            drawActorPart(requireNotNull(cylinder), "#59646D", x, z, side, .26f, .20f, .09f, .27f, .09f, heading)
+            drawActorPart(requireNotNull(cylinder), "#59646D", x, z, side + wetX, .26f + reactY, .20f, .09f, .27f, .09f, heading)
         }
+        actorDrawAlpha = previousActorAlpha
     }
 
     private fun drawBear() {
-        val (x, z) = radial(216f, 6.15f)
+        val approach = actorApproach(SceneActor.BEAR)
+        val (x, z) = radial(216f, 6.15f - approach * .60f)
+        val previousActorAlpha = actorDrawAlpha
+        actorDrawAlpha = animalCameraVisibility(x, z, .92f)
         val heading = facingCenter(x, z)
         val reaction = reactionEnvelope(AnimalReaction.BEAR)
-        val sway = sin(frame.storyTime * .9f + 1.2f) * 2f + reaction * 5f
+        val greeting = greetingEnvelope(SceneActor.BEAR)
+        val wetShake = lifeDirector.wetShakeDegrees(SceneActor.BEAR)
+        val wetX = wetShake / 12f * .045f
+        val sway = lifeDirector.bearWeightShiftDegrees +
+            wetShake * .18f
         val swayRadians = Math.toRadians(sway.toDouble())
         val swayCosine = cos(swayRadians).toFloat()
         val swaySine = sin(swayRadians).toFloat()
@@ -4291,7 +6360,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         fun posed(localX: Float, y: Float): Pair<Float, Float> {
             val relativeY = y - pivotY
             return (
-                localX * swayCosine - relativeY * swaySine
+                localX * swayCosine - relativeY * swaySine + wetX
                 ) to (
                 pivotY + localX * swaySine + relativeY * swayCosine
                 )
@@ -4315,15 +6384,34 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val belly = posed(0f, .69f)
         drawActorPart(requireNotNull(lowSphere), "#B88963", x, z, belly.first, belly.second, .44f, .34f, .37f, .15f, heading, rotationZ = sway)
         for (side in listOf(-1f, 1f)) {
-            val wave = if (side > 0f) reaction * 58f else 0f
+            val wave = if (side > 0f && greeting > 0f) {
+                greeting * 100f +
+                    sin(frame.storyTime * 2.5f * PI.toFloat() * 2f) *
+                    greeting * 14f
+            } else {
+                0f
+            }
             val armAngle = sway + side * (12f + wave)
             val armRadians = Math.toRadians(armAngle.toDouble())
+            val scratch = if (lifeDirector.bearScratchSide == side) {
+                lifeDirector.bearScratchDegrees
+            } else {
+                0f
+            }
+            val armPitch = reaction * 45f + scratch
+            val armPitchRadians = Math.toRadians(armPitch.toDouble())
             val armHalfLength = .42f
-            val shoulder = posed(side * .43f, .98f)
+            val shoulder = posed(side * (.43f - reaction * .12f), .98f)
             val shoulderX = shoulder.first
             val shoulderY = shoulder.second
-            val armCenterX = shoulderX + sin(armRadians).toFloat() * armHalfLength
-            val armCenterY = shoulderY - cos(armRadians).toFloat() * armHalfLength
+            val armCenterX = shoulderX +
+                sin(armRadians).toFloat() * cos(armPitchRadians).toFloat() *
+                armHalfLength
+            val armCenterY = shoulderY -
+                cos(armRadians).toFloat() * cos(armPitchRadians).toFloat() *
+                armHalfLength
+            val armCenterForward =
+                .02f + sin(armPitchRadians).toFloat() * armHalfLength
             drawActorPart(
                 requireNotNull(cylinder),
                 "#744D35",
@@ -4331,21 +6419,56 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 z,
                 armCenterX,
                 armCenterY,
-                .02f,
+                armCenterForward,
                 .12f,
                 armHalfLength,
                 .12f,
                 heading,
+                rotationX = -armPitch,
                 rotationZ = armAngle,
             )
         }
+        actorDrawAlpha = previousActorAlpha
     }
 
     private fun drawFox() {
-        val (x, z) = radial(288f, 6.15f)
+        val approach = actorApproach(SceneActor.FOX)
+        val (x, z) = radial(288f, 6.15f - approach * .50f)
+        val previousActorAlpha = actorDrawAlpha
+        actorDrawAlpha = animalCameraVisibility(x, z, .70f)
         val heading = facingCenter(x, z)
-        val reaction = reactionEnvelope(AnimalReaction.FOX)
-        val tailSway = sin(frame.storyTime * 1.8f) * 18f + reaction * 32f
+        val watchProgress = lifeDirector.foxWatching
+        val watchEnvelope = if (watchProgress >= 0f) {
+            sin(watchProgress * PI.toFloat()).coerceAtLeast(0f)
+        } else {
+            0f
+        }
+        val cameraHeading = facingPoint(x, z, eyeX, eyeZ)
+        val headHeading =
+            heading + shortestAngleDegrees(heading, cameraHeading) * watchEnvelope
+        val reactionProgress = actorReactionProgress(SceneActor.FOX)
+        val greeting = greetingEnvelope(SceneActor.FOX)
+        val wetShake = lifeDirector.wetShakeDegrees(SceneActor.FOX)
+        val wetX = wetShake / 12f * .038f
+        val encounterLean = if (reactionProgress >= 0f) {
+            (1f - easeOutBack01(reactionProgress)) * 8f
+        } else {
+            0f
+        }
+        val headTilt = lifeDirector.foxHeadTiltDegrees +
+            encounterLean +
+            wetShake * .18f
+        val storyHeadPitch = -latestStory.foxHeadPitch * 34f
+        val eyeScaleY = .045f * (1f - lifeDirector.foxHalfBlink * .48f)
+        val tailEncounterBoost = if (approach > .001f) 1.6f else 1f
+        val tailSway =
+            sin(frame.storyTime * .4f * PI.toFloat() * 2f) *
+                14f * tailEncounterBoost +
+                sin(frame.storyTime * 2.2f * PI.toFloat() * 2f) *
+                greeting * 30f
+        foxTailTipSwayDegrees +=
+            (tailSway - foxTailTipSwayDegrees) *
+            (1f - exp(-latestDeltaSeconds / .20f))
         val tailRootX = -.30f
         val tailRootY = .63f
         val tailRootForward = -.24f
@@ -4361,7 +6484,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val tipRootX = tailRootX + sin(baseYawRadians).toFloat() * baseHorizontal * 2f
         val tipRootY = tailRootY + sin(basePitchRadians).toFloat() * baseHalfLength * 2f
         val tipRootForward = tailRootForward + cos(baseYawRadians).toFloat() * baseHorizontal * 2f
-        val tipYaw = baseYaw + sin(frame.storyTime * 1.8f - .45f) * 9f + reaction * 8f
+        val tipYaw = 180f + foxTailTipSwayDegrees
         val tipPitch = basePitch + 7f
         val tipYawRadians = Math.toRadians(tipYaw.toDouble())
         val tipPitchRadians = Math.toRadians(tipPitch.toDouble())
@@ -4371,20 +6494,20 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val tipCenterY = tipRootY + sin(tipPitchRadians).toFloat() * tipHalfLength
         val tipCenterForward = tipRootForward + cos(tipYawRadians).toFloat() * tipHorizontal
         drawShadow(x, z, .56f, .38f)
-        drawActorPart(requireNotNull(sphere), "#D9722F", x, z, 0f, .56f, -.06f, .42f, .56f, .39f, heading)
-        drawActorPart(requireNotNull(sphere), "#E07A34", x, z, 0f, 1.10f, .10f, .37f, .40f, .35f, heading)
-        drawActorPart(requireNotNull(cone), "#C95E28", x, z, -.23f, 1.50f, .05f, .17f, .33f, .16f, heading, rotationZ = -11f)
-        drawActorPart(requireNotNull(cone), "#C95E28", x, z, .23f, 1.50f, .05f, .17f, .33f, .16f, heading, rotationZ = 11f)
-        drawActorPart(requireNotNull(lowSphere), "#F5DFC5", x, z, 0f, .99f, .39f, .25f, .19f, .20f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#22201E", x, z, -.12f, 1.17f, .34f, .038f, .045f, .023f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#22201E", x, z, .12f, 1.17f, .34f, .038f, .045f, .023f, heading)
-        drawActorPart(requireNotNull(lowSphere), "#29211E", x, z, 0f, 1.02f, .58f, .060f, .045f, .040f, heading)
+        drawActorPart(requireNotNull(sphere), "#D9722F", x, z, wetX, .56f, -.06f, .42f, .56f, .39f, heading, rotationZ = wetShake * .14f)
+        drawActorPart(requireNotNull(sphere), "#E07A34", x, z, wetX, 1.10f, .10f, .37f, .40f, .35f, headHeading, rotationX = storyHeadPitch, rotationZ = headTilt)
+        drawActorPart(requireNotNull(cone), "#C95E28", x, z, -.23f + wetX, 1.50f, .05f, .17f, .33f, .16f, headHeading, rotationX = storyHeadPitch, rotationZ = -11f + headTilt)
+        drawActorPart(requireNotNull(cone), "#C95E28", x, z, .23f + wetX, 1.50f, .05f, .17f, .33f, .16f, headHeading, rotationX = storyHeadPitch, rotationZ = 11f + headTilt)
+        drawActorPart(requireNotNull(lowSphere), "#F5DFC5", x, z, wetX, .99f, .39f, .25f, .19f, .20f, headHeading, rotationX = storyHeadPitch, rotationZ = headTilt)
+        drawActorPart(requireNotNull(lowSphere), "#22201E", x, z, -.12f + wetX, 1.17f, .34f, .038f, eyeScaleY, .023f, headHeading, rotationX = storyHeadPitch, rotationZ = headTilt)
+        drawActorPart(requireNotNull(lowSphere), "#22201E", x, z, .12f + wetX, 1.17f, .34f, .038f, eyeScaleY, .023f, headHeading, rotationX = storyHeadPitch, rotationZ = headTilt)
+        drawActorPart(requireNotNull(lowSphere), "#29211E", x, z, wetX, 1.02f, .58f, .060f, .045f, .040f, headHeading, rotationX = storyHeadPitch, rotationZ = headTilt)
         drawActorPart(
             requireNotNull(sphere),
             "#D9722F",
             x,
             z,
-            baseCenterX,
+            baseCenterX + wetX,
             baseCenterY,
             baseCenterForward,
             .23f,
@@ -4399,7 +6522,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             "#F4E2C9",
             x,
             z,
-            tipCenterX,
+            tipCenterX + wetX,
             tipCenterY,
             tipCenterForward,
             .18f,
@@ -4409,13 +6532,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             rotationX = -tipPitch,
             yawOffset = tipYaw,
         )
-        drawActorPart(requireNotNull(lowSphere), "#F5DFC5", x, z, 0f, .58f, .35f, .25f, .27f, .13f, heading)
+        drawActorPart(requireNotNull(lowSphere), "#F5DFC5", x, z, wetX, .58f, .35f, .25f, .27f, .13f, heading)
+        actorDrawAlpha = previousActorAlpha
     }
 
     private fun drawShadow(x: Float, z: Float, width: Float, depth: Float) {
         draw(
             requireNotNull(disc),
-            color("#29462A", .24f),
+            color("#29462A", .24f * actorDrawAlpha),
             Transform(x, .085f, z, width, .012f, depth),
             rimStrength = 0f,
         )
@@ -4475,7 +6599,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val worldZ = centerZ - localX * sin(radians).toFloat() + forward * cos(radians).toFloat()
         draw(
             mesh,
-            color(hex),
+            color(hex, actorDrawAlpha),
             Transform(
                 worldX,
                 y,
@@ -4496,6 +6620,82 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val radians = Math.toRadians(degrees.toDouble())
         return sin(radians).toFloat() * radius to cos(radians).toFloat() * radius
     }
+
+    private fun terrainHill(
+        angleDegrees: Float,
+        radius: Float,
+        size: Float,
+    ): TerrainHill {
+        val (x, z) = radial(angleDegrees, radius)
+        return TerrainHill(x, z, size)
+    }
+
+    private fun terrainPothole(
+        angleDegrees: Float,
+        radius: Float,
+        majorRadius: Float,
+        minorRadius: Float,
+        rotationDegrees: Float,
+    ): TerrainPothole {
+        val (x, z) = radial(angleDegrees, radius)
+        return TerrainPothole(
+            x = x,
+            z = z,
+            majorRadius = majorRadius,
+            minorRadius = minorRadius,
+            rotationDegrees = rotationDegrees,
+        )
+    }
+
+    private fun groundHeightAt(x: Float, z: Float): Float =
+        TERRAIN_BASE_Y + terrainHeightAt(x, z, terrainHills, terrainPotholes)
+
+    private fun currentKolobokPoint(): WorldPoint3 {
+        val override = latestStory.positionOverride
+        return if (override != null) {
+            WorldPoint3(override.x, override.y, override.z)
+        } else {
+            WorldPoint3(
+                sin(latestStory.kolobokAngleRadians) * SceneMotion.PATH_RADIUS,
+                .52f,
+                cos(latestStory.kolobokAngleRadians) * SceneMotion.PATH_RADIUS,
+            )
+        }
+    }
+
+    private fun storyFocusPoint(): WorldPoint3 {
+        if (latestStory.chapter == SceneStoryChapter.BIRTH) {
+            return WorldPoint3(0f, 1.2f, 4.2f)
+        }
+        val angleDegrees = when (latestStory.storyActor) {
+            SceneActor.HARE -> 72f
+            SceneActor.WOLF -> 144f
+            SceneActor.BEAR -> 216f
+            SceneActor.FOX -> 288f
+            SceneActor.IZBA -> 0f
+            SceneActor.KOLOBOK,
+            null,
+            -> return WorldPoint3(0f, 1.15f, 0f)
+        }
+        val (x, z) = radial(angleDegrees, 5.2f)
+        return WorldPoint3(x, .95f, z)
+    }
+
+    private fun interpolate(
+        from: WorldPoint3,
+        to: WorldPoint3,
+        progress: Float,
+    ): WorldPoint3 = WorldPoint3(
+        x = interpolate(from.x, to.x, progress),
+        y = interpolate(from.y, to.y, progress),
+        z = interpolate(from.z, to.z, progress),
+    )
+
+    private fun interpolate(
+        from: Float,
+        to: Float,
+        progress: Float,
+    ): Float = from + (to - from) * progress.coerceIn(0f, 1f)
 
     private fun pondLocalPoint(
         localX: Float,
@@ -4531,6 +6731,22 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         return progress * progress * (3f - 2f * progress)
     }
 
+    private fun easeOutBack01(value: Float): Float {
+        val progress = value.coerceIn(0f, 1f)
+        val shifted = progress - 1f
+        val overshoot = 1.70158f
+        return 1f +
+            (overshoot + 1f) * shifted * shifted * shifted +
+            overshoot * shifted * shifted
+    }
+
+    private fun shortestAngleDegrees(from: Float, to: Float): Float {
+        var delta = (to - from) % 360f
+        if (delta > 180f) delta -= 360f
+        if (delta < -180f) delta += 360f
+        return delta
+    }
+
     private fun facingCenter(x: Float, z: Float): Float =
         Math.toDegrees(kotlin.math.atan2(-x, -z).toDouble()).toFloat()
 
@@ -4543,12 +6759,26 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         kotlin.math.atan2((toX - fromX).toDouble(), (toZ - fromZ).toDouble()),
     ).toFloat()
 
-    private fun crossroadsPlaqueHeading(): Float {
+    private fun updateCrossroadsPlaqueHeading(deltaSeconds: Float) {
         val worldHeading = Math.toDegrees(
             kotlin.math.atan2(eyeX.toDouble(), eyeZ.toDouble()),
         ).toFloat()
-        return worldHeading - frame.sceneRotation
+        val desired = worldHeading - frame.sceneRotation
+        if (!plaqueHeadingInitialized) {
+            renderedPlaqueHeading = desired
+            plaqueHeadingInitialized = true
+            plaqueTurnActivity = 0f
+            return
+        }
+        val remaining = shortestAngleDegrees(renderedPlaqueHeading, desired)
+        val safeDelta = deltaSeconds.coerceIn(0f, .25f)
+        renderedPlaqueHeading += remaining * (1f - exp(-safeDelta * 6.4f))
+        val targetActivity = (abs(remaining) / 11f).coerceIn(0f, 1f)
+        plaqueTurnActivity +=
+            (targetActivity - plaqueTurnActivity) * (1f - exp(-safeDelta * 8f))
     }
+
+    private fun crossroadsPlaqueHeading(): Float = renderedPlaqueHeading
 
     private fun crossroadsPlaquePoint(spec: CrossroadsPlaqueSpec): WorldPoint3 {
         val heading = crossroadsPlaqueHeading() + spec.azimuth
@@ -4561,17 +6791,40 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         )
     }
 
-    private fun crossroadsPlaqueLabelTransform(spec: CrossroadsPlaqueSpec): Transform {
+    private fun crossroadsPlaqueLabelTransform(
+        spec: CrossroadsPlaqueSpec,
+        pressDepth: Float = 0f,
+    ): Transform {
+        val heading = crossroadsPlaqueHeading() + spec.azimuth
+        val radians = Math.toRadians(heading.toDouble())
         return Transform(
-            x = 0f,
+            x = -sin(radians).toFloat() * pressDepth,
             y = spec.y * CROSSROADS_SCALE,
-            z = 0f,
+            z = -cos(radians).toFloat() * pressDepth,
             scaleX = 1f,
             scaleY = spec.labelScaleY * .95f,
             scaleZ = 1f,
-            rotationY = crossroadsPlaqueHeading() + spec.azimuth,
+            rotationY = heading,
             rotationZ = spec.tilt,
         )
+    }
+
+    private fun crossroadsPlaquePressDepth(index: Int): Float {
+        val elapsed = eventSeconds(plaquePressedAtMs.getOrElse(index) { 0L })
+        if (elapsed !in 0f..CROSSROADS_PRESS_SECONDS) return 0f
+        return when {
+            elapsed < .085f -> smoothStep(elapsed / .085f) * .055f
+            else -> (1f - smoothStep((elapsed - .085f) / .125f)) * .055f
+        }
+    }
+
+    private fun crossroadsPlaquePressPulse(index: Int): Float {
+        val elapsed = eventSeconds(plaquePressedAtMs.getOrElse(index) { 0L })
+        return if (elapsed in 0f..CROSSROADS_PRESS_SECONDS) {
+            sin(elapsed / CROSSROADS_PRESS_SECONDS * PI.toFloat()).coerceAtLeast(0f)
+        } else {
+            0f
+        }
     }
 
     fun beginTreeBonkAt(
@@ -4579,10 +6832,31 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         touchY: Float,
         viewWidth: Int,
         viewHeight: Int,
-    ) {
+    ): SceneTapResult? {
         val mappedX = touchX * viewportWidth / max(1, viewWidth).toFloat()
         val mappedY = touchY * viewportHeight / max(1, viewHeight).toFloat()
-        val treeIndex = findTreeAt(mappedX, mappedY) ?: return
+        val treeTarget = findTreeAt(mappedX, mappedY) ?: return null
+        val foregroundTarget = findTapTargetAt(
+            mappedX = mappedX,
+            mappedY = mappedY,
+            includeTrees = false,
+        )
+        // Tree holds begin on ACTION_DOWN, before a normal tap can run.
+        // Apply the same visual-depth rule here so a generous canopy hitbox
+        // cannot steal Grandpa, an animal, Kolobok, or another visible prop
+        // that is actually in front of it.
+        if (
+            !SceneTapArbitration.treeOwnsPress(
+                treeDepth = treeTarget.depth,
+                treeNormalizedDistance = treeTarget.normalizedDistance,
+                foregroundDepth = foregroundTarget?.depth,
+                foregroundNormalizedDistance =
+                    foregroundTarget?.normalizedDistance,
+            )
+        ) {
+            return null
+        }
+        val treeIndex = treeTarget.payload
         val point = (sprucePoints + birchPoints)[treeIndex]
         val (treeX, treeZ) = radial(point.angle, point.radius)
         val ground = groundPointAt(mappedX, mappedY)
@@ -4596,6 +6870,8 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }
         TreeBonkPhysics.hold(treeBonkStates[treeIndex], directionX, directionZ)
         grabbedTreeIndex = treeIndex
+        pressedTreeTapPending = true
+        return triggerTreePress(treeIndex, SystemClock.uptimeMillis())
     }
 
     fun releaseTreeBonk() {
@@ -4604,10 +6880,70 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         grabbedTreeIndex = -1
     }
 
-    private fun findTreeAt(mappedX: Float, mappedY: Float): Int? {
+    fun cancelPressedTreeTap() {
+        pressedTreeTapPending = false
+    }
+
+    private fun triggerTreePress(
+        treeIndex: Int,
+        now: Long,
+    ): SceneTapResult {
+        var interaction = SceneInteraction.TREE_RUSTLE
+        if (treeIndex < sprucePoints.size) {
+            if (
+                owlTapTreeIndex != treeIndex ||
+                now - owlLastTapMs > 1_200L
+            ) {
+                owlTapTreeIndex = treeIndex
+                owlTapCount = 0
+            }
+            owlLastTapMs = now
+            owlTapCount += 1
+            if (owlTapCount >= 3) {
+                owlTapCount = 0
+                if (
+                    eggRegistry.tryTrigger(
+                        SceneEgg.OWL,
+                        now,
+                        instance = treeIndex,
+                        suppressed = encounterDirector.isRunning(),
+                    )
+                ) {
+                    owlActiveTreeIndex = treeIndex
+                    owlStartedMs = now
+                    owlFlapStartedMs = 0L
+                    interaction = SceneInteraction.OWL_WAKE
+                }
+            }
+        } else {
+            val birchIndex = treeIndex - sprucePoints.size
+            val point = birchPoints.getOrNull(birchIndex)
+            if (point != null) {
+                val (x, z) = radial(point.angle, point.radius)
+                val size = .78f + pseudo(birchIndex * 41 + 5) * .23f
+                if (leafBursts.size >= 4) leafBursts.removeAt(0)
+                leafBursts += LeafBurst(
+                    x = x,
+                    y = 1.72f * size,
+                    z = z,
+                    seed = birchIndex * 409 + now.toInt(),
+                    startedAtMs = now,
+                )
+            }
+        }
+        return SceneTapResult(
+            interaction = interaction,
+            haptic = SceneHaptic.LIGHT,
+        )
+    }
+
+    private fun findTreeAt(mappedX: Float, mappedY: Float): TapTarget? {
         val candidates = mutableListOf<TapTarget>()
         (sprucePoints + birchPoints).forEachIndexed { index, point ->
             val (x, z) = radial(point.angle, point.radius)
+            // A tree deliberately faded out of the follow sightline should
+            // not retain an invisible hitbox over Kolobok.
+            if (treeCameraVisibility(x, z) < .80f) return@forEachIndexed
             listOf(
                 .70f to .10f,
                 1.46f to .13f,
@@ -4630,20 +6966,16 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
         }
         return candidates.minWithOrNull(
-            compareBy<TapTarget> { (it.normalizedDistance * 8f).toInt() }
-                .thenBy { it.depth }
+            compareBy<TapTarget> { it.depth }
                 .thenBy { it.normalizedDistance },
-        )?.payload
+        )
     }
 
-    fun tapAt(
-        tapX: Float,
-        tapY: Float,
-        viewWidth: Int,
-        viewHeight: Int,
-    ): SceneTapResult? {
-        val mappedX = tapX * viewportWidth / max(1, viewWidth).toFloat()
-        val mappedY = tapY * viewportHeight / max(1, viewHeight).toFloat()
+    private fun findTapTargetAt(
+        mappedX: Float,
+        mappedY: Float,
+        includeTrees: Boolean,
+    ): TapTarget? {
         val targets = mutableListOf<TapTarget>()
 
         fun addTarget(
@@ -4659,13 +6991,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             val radius = min(viewportWidth, viewportHeight) * radiusFraction
             val dx = mappedX - point.x
             val dy = mappedY - point.y
-            val normalizedDistance = sqrt(dx * dx + dy * dy) / radius.coerceAtLeast(1f)
+            val normalizedDistance =
+                sqrt(dx * dx + dy * dy) / radius.coerceAtLeast(1f)
             if (normalizedDistance <= 1f) {
                 targets += TapTarget(id, payload, normalizedDistance, point.depth)
             }
         }
 
-        val grandpa = pondLocalPoint(POND_GRANDPA_LOCAL_X, .90f, POND_GRANDPA_LOCAL_Z)
+        val grandpa = pondLocalPoint(
+            POND_GRANDPA_LOCAL_X,
+            .90f,
+            POND_GRANDPA_LOCAL_Z,
+        )
         val willow = pondLocalPoint(.50f, 1.42f, 1.90f)
         val pond = pondLocalPoint(0f, .30f, 0f)
         addTarget("grandpa", grandpa.x, grandpa.y, grandpa.z, .115f)
@@ -4678,9 +7015,36 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         val createPlaque = crossroadsPlaquePoint(crossroadsPlaqueSpecs[1])
         val libraryPlaque = crossroadsPlaquePoint(crossroadsPlaqueSpecs[2])
         addTarget("menu_add", addPlaque.x, addPlaque.y, addPlaque.z, .072f)
-        addTarget("menu_create", createPlaque.x, createPlaque.y, createPlaque.z, .075f)
-        addTarget("menu_library", libraryPlaque.x, libraryPlaque.y, libraryPlaque.z, .070f)
-        addTarget("stone", 0f, 1.05f, 0f, .105f)
+        addTarget(
+            "menu_create",
+            createPlaque.x,
+            createPlaque.y,
+            createPlaque.z,
+            .075f,
+        )
+        addTarget(
+            "menu_library",
+            libraryPlaque.x,
+            libraryPlaque.y,
+            libraryPlaque.z,
+            .070f,
+        )
+        repeat(STONE_BIRD_COUNT) { index ->
+            if (!stoneBirdFlightActive(index, eventSeconds(stoneBirdStartedAtMs[index]))) {
+                val angle = pseudo(index * 47 + 3) * 360f
+                val radius = 1.00f + pseudo(index * 59 + 8) * .40f
+                val (birdX, birdZ) = radial(angle, radius)
+                val birdY = .20f + pseudo(index * 71 + 4) * .13f
+                addTarget(
+                    id = "stone_bird",
+                    x = birdX,
+                    y = birdY,
+                    z = birdZ,
+                    radiusFraction = .060f,
+                    payload = index,
+                )
+            }
+        }
 
         listOf(
             Triple("hare", 72f, AnimalReaction.HARE),
@@ -4688,62 +7052,106 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             Triple("bear", 216f, AnimalReaction.BEAR),
             Triple("fox", 288f, AnimalReaction.FOX),
         ).forEach { (id, angle, reaction) ->
-            val (x, z) = radial(angle, 6.15f)
+            val actor = when (reaction) {
+                AnimalReaction.HARE -> SceneActor.HARE
+                AnimalReaction.WOLF -> SceneActor.WOLF
+                AnimalReaction.BEAR -> SceneActor.BEAR
+                AnimalReaction.FOX -> SceneActor.FOX
+                AnimalReaction.NONE -> return@forEach
+            }
+            val blockerRadius = when (actor) {
+                SceneActor.HARE -> .62f
+                SceneActor.WOLF -> .72f
+                SceneActor.BEAR -> .92f
+                SceneActor.FOX -> .70f
+                else -> .70f
+            }
+            val approachScale = if (actor == SceneActor.FOX) .50f else .60f
+            val (x, z) = radial(
+                angle,
+                6.15f - actorApproach(actor) * approachScale,
+            )
+            if (animalCameraVisibility(x, z, blockerRadius) < .80f) {
+                return@forEach
+            }
             addTarget(id, x, 1.0f, z, .105f, payload = reaction.ordinal)
         }
 
-        val travel = SceneMotion.travelRadians(frame.storyTime)
-        addTarget("kolobok", sin(travel) * 4.6f, .58f, cos(travel) * 4.6f, .105f)
+        val kolobok = currentKolobokPoint()
+        if (latestStory.kolobokScale > .08f) {
+            addTarget("kolobok", kolobok.x, kolobok.y, kolobok.z, .105f)
+        }
 
         mushroomSpots.forEachIndexed { index, point ->
-            if (mushroomReserved[index] || mushroomScale(index, SystemClock.uptimeMillis()) <= .50f) {
+            if (
+                mushroomReserved[index] ||
+                mushroomScale(index, SystemClock.uptimeMillis()) <= .50f
+            ) {
                 return@forEachIndexed
             }
             val (x, z) = radial(point.angle, point.radius)
-            addTarget("mushroom", x, .27f, z, .065f, payload = index)
+            addTarget(
+                "mushroom",
+                x,
+                groundHeightAt(x, z) + .27f,
+                z,
+                .065f,
+                payload = index,
+            )
         }
 
         if (owlStartedMs > 0L) {
-            val activeTree = sprucePoints.getOrElse(owlActiveTreeIndex) { owlTree }
+            val activeTree =
+                sprucePoints.getOrElse(owlActiveTreeIndex) { owlTree }
             val (owlX, owlZ) = radial(activeTree.angle, activeTree.radius)
             addTarget("owl", owlX, 2.58f, owlZ, .105f)
         }
 
-        (sprucePoints + birchPoints)
-            .forEachIndexed { index, point ->
-                val (x, z) = radial(point.angle, point.radius)
-                addTarget("tree", x, .72f, z, .10f, payload = index)
-                addTarget("tree", x, 1.48f, z, .13f, payload = index)
-                addTarget("tree", x, 2.18f, z, .11f, payload = index)
-            }
+        if (includeTrees) {
+            (sprucePoints + birchPoints)
+                .forEachIndexed { index, point ->
+                    val (x, z) = radial(point.angle, point.radius)
+                    if (treeCameraVisibility(x, z) < .80f) {
+                        return@forEachIndexed
+                    }
+                    addTarget("tree", x, .72f, z, .10f, payload = index)
+                    addTarget("tree", x, 1.48f, z, .13f, payload = index)
+                    addTarget("tree", x, 2.18f, z, .11f, payload = index)
+                }
+        }
 
         val (butterflyX, butterflyZ) = radial(71f, 5.82f)
         addTarget("butterflies", butterflyX, .72f, butterflyZ, .095f)
         val (hiveX, hiveZ) = radial(205f, 5.55f)
         addTarget("hive", hiveX, .42f, hiveZ, .082f)
-        addTarget(
-            id = "sun",
-            x = -7.8f,
-            y = 8.7f,
-            z = -13.5f,
-            radiusFraction = .105f,
-            rotatesWithScene = false,
-        )
-
-        repeat(5) { index ->
-            val cloud = cloudPosition(index)
+        if (sunMechanicallyVisible()) {
             addTarget(
-                id = "cloud",
-                x = cloud.x,
-                y = cloud.y,
-                z = cloud.z,
-                radiusFraction = .125f,
-                payload = index,
+                id = "sun",
+                x = sunPosition.x,
+                y = sunPosition.y,
+                z = sunPosition.z,
+                radiusFraction = .105f,
                 rotatesWithScene = false,
             )
         }
 
-        if (eveningAmount() > .05f) {
+        if (eyeY < 6.35f) {
+            repeat(SCENE_CLOUD_COUNT) { index ->
+                val cloud = cloudPosition(index)
+                if (cloudCameraVisibility(cloud) < .65f) return@repeat
+                addTarget(
+                    id = "cloud",
+                    x = cloud.x,
+                    y = cloud.y,
+                    z = cloud.z,
+                    radiusFraction = .090f,
+                    payload = index,
+                    rotatesWithScene = false,
+                )
+            }
+        }
+
+        if (moonMechanicallyVisible()) {
             addTarget(
                 id = "moon",
                 x = moonPosition.x,
@@ -4754,64 +7162,159 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             )
         }
 
-        // Plaques are navigation, so a generous overlapping boulder hitbox
-        // must never steal their taps near an edge.
-        val target = targets
-            .filter { it.id.startsWith("menu_") }
-            .minByOrNull { it.normalizedDistance }
-            ?: targets.minWithOrNull(
-                compareBy<TapTarget> {
-                    // Screen-distance buckets preserve intentional target
-                    // padding, while depth resolves genuinely overlapping hits.
-                    (it.normalizedDistance * 8f).toInt()
-                }.thenBy { it.depth }
+        // A padded hit area is useful only when it does not pass through a
+        // visibly nearer object.
+        val depthWinner = targets.minWithOrNull(
+            compareBy<TapTarget> { it.depth }
+                .thenBy { it.normalizedDistance },
+        )
+        if (depthWinner?.id != "tree") return depthWinner
+        val foregroundWinner = targets
+            .asSequence()
+            .filter { it.id != "tree" }
+            .minWithOrNull(
+                compareBy<TapTarget> { it.depth }
                     .thenBy { it.normalizedDistance },
             )
+        return if (
+            SceneTapArbitration.treeOwnsPress(
+                treeDepth = depthWinner.depth,
+                treeNormalizedDistance = depthWinner.normalizedDistance,
+                foregroundDepth = foregroundWinner?.depth,
+                foregroundNormalizedDistance =
+                    foregroundWinner?.normalizedDistance,
+            )
+        ) {
+            depthWinner
+        } else {
+            foregroundWinner
+        }
+    }
+
+    fun tapAt(
+        tapX: Float,
+        tapY: Float,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): SceneTapResult? {
+        if (pressedTreeTapPending) {
+            pressedTreeTapPending = false
+            return null
+        }
+        val mappedX = tapX * viewportWidth / max(1, viewWidth).toFloat()
+        val mappedY = tapY * viewportHeight / max(1, viewHeight).toFloat()
+        val target = findTapTargetAt(
+            mappedX = mappedX,
+            mappedY = mappedY,
+            includeTrees = true,
+        )
         val now = SystemClock.uptimeMillis()
         var interaction: SceneInteraction? = null
+        val dialogueSuppressed = latestStory.mode == SceneStoryMode.PLAYING ||
+            latestStory.mode == SceneStoryMode.REBIRTH ||
+            latestStory.mode == SceneStoryMode.STOPPED
         when (target?.id) {
-            "menu_add" -> return SceneTapResult(crossroadsAction = CrossroadsAction.ADD_BOOK)
-            "menu_create" -> return SceneTapResult(crossroadsAction = CrossroadsAction.CREATE_STORY)
-            "menu_library" -> return SceneTapResult(crossroadsAction = CrossroadsAction.LIBRARY)
+            "menu_add" -> {
+                if (now < crossroadsNavigationPendingUntilMs) return null
+                crossroadsNavigationPendingUntilMs =
+                    now + CROSSROADS_NAVIGATION_LOCK_MS
+                plaquePressedAtMs[0] = now
+                storyDirector.stopForNavigation()
+                return SceneTapResult(
+                    crossroadsAction = CrossroadsAction.ADD_BOOK,
+                    haptic = SceneHaptic.MEDIUM,
+                )
+            }
+            "menu_create" -> {
+                if (now < crossroadsNavigationPendingUntilMs) return null
+                crossroadsNavigationPendingUntilMs =
+                    now + CROSSROADS_NAVIGATION_LOCK_MS
+                plaquePressedAtMs[1] = now
+                storyDirector.stopForNavigation()
+                return SceneTapResult(
+                    crossroadsAction = CrossroadsAction.CREATE_STORY,
+                    haptic = SceneHaptic.MEDIUM,
+                )
+            }
+            "menu_library" -> {
+                if (now < crossroadsNavigationPendingUntilMs) return null
+                crossroadsNavigationPendingUntilMs =
+                    now + CROSSROADS_NAVIGATION_LOCK_MS
+                plaquePressedAtMs[2] = now
+                storyDirector.stopForNavigation()
+                return SceneTapResult(
+                    crossroadsAction = CrossroadsAction.LIBRARY,
+                    haptic = SceneHaptic.MEDIUM,
+                )
+            }
 
             "grandpa" -> {
-                fishingCatchCount += 1
-                val roll = pseudo(fishingCatchCount * 71 + 23)
-                fishingKind = when {
-                    roll < .05f -> FishingKind.GOLD
-                    roll < .30f -> FishingKind.BOOT
+                val nextFishingKind = when (Random.nextFloat()) {
+                    in 0f..<.05f -> FishingKind.GOLD
+                    in .05f..<.30f -> FishingKind.BOOT
                     else -> FishingKind.SILVER
                 }
-                if (fishingKind == FishingKind.BOOT) {
-                    accumulatedBoots = (accumulatedBoots + 1).coerceAtMost(3)
+                if (
+                    eggRegistry.tryTrigger(
+                        SceneEgg.GRANDPA_FISHING,
+                        now,
+                        suppressed = encounterDirector.isRunning(),
+                        activeForMs = if (nextFishingKind == FishingKind.GOLD) {
+                            5_400L
+                        } else {
+                            2_700L
+                        },
+                    )
+                ) {
+                    fishingKind = nextFishingKind
+                    if (fishingKind == FishingKind.BOOT) {
+                        accumulatedBoots = (accumulatedBoots + 1).coerceAtMost(3)
+                    }
+                    fishingStartedMs = now
+                    interaction = SceneInteraction.GRANDPA_FISHING
                 }
-                fishingStartedMs = now
-                interaction = SceneInteraction.GRANDPA_FISHING
             }
 
             "chimney" -> {
-                smokeRingsStartedMs = now
-                interaction = SceneInteraction.CHIMNEY_SMOKE
+                if (
+                    eggRegistry.tryTrigger(
+                        SceneEgg.SMOKE_RINGS,
+                        now,
+                        suppressed = encounterDirector.isRunning(),
+                    )
+                ) {
+                    smokeRingsStartedMs = now
+                    interaction = SceneInteraction.CHIMNEY_SMOKE
+                }
             }
             "izba" -> {
-                izbaFlashStartedMs = now
-                smokeRingsStartedMs = now
-                interaction = SceneInteraction.IZBA_WINDOW
+                if (startInteractiveEncounter(SceneActor.IZBA, dialogueSuppressed)) {
+                    izbaFlashStartedMs = now
+                    smokeRingsStartedMs = now
+                    interaction = SceneInteraction.IZBA_WINDOW
+                }
             }
 
             "willow" -> {
                 if (eventSeconds(willowSwayStartedMs) !in 0f..2.8f) {
                     willowSwayStartedMs = now
                 }
-                if (now - willowLastTapMs > 1_250L) willowTapCount = 0
-                willowLastTapMs = now
-                willowTapCount += 1
-                if (willowTapCount >= 3) {
-                    willowTapCount = 0
-                    if (eventSeconds(magpiesStartedMs) !in 0f..18.4f) {
+                if (willowTapSequence.record(now)) {
+                    if (
+                        eggRegistry.tryTrigger(
+                            SceneEgg.MAGPIES,
+                            now,
+                            suppressed = false,
+                        ) &&
+                        eventSeconds(magpiesStartedMs) !in
+                        0f..(MAGPIE_LAUNCH_SECONDS + MAGPIE_AWAY_SECONDS + MAGPIE_RETURN_SECONDS)
+                    ) {
                         magpiesStartedMs = now
+                        magpieFlightSeed = now.toInt() xor 0x4D41_4750
+                        interaction = SceneInteraction.MAGPIES
+                    } else {
+                        interaction = SceneInteraction.WILLOW_RUSTLE
                     }
-                    interaction = SceneInteraction.MAGPIES
                 } else {
                     interaction = SceneInteraction.WILLOW_RUSTLE
                 }
@@ -4823,20 +7326,52 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
                 }
                 interaction = SceneInteraction.FROG_SPLASH
             }
-            "stone" -> {
-                if (eventSeconds(stoneBirdsStartedMs) !in 0f..6.2f) {
-                    stoneBirdsStartedMs = now
+            "stone_bird" -> {
+                val birdIndex = target.payload
+                if (
+                    birdIndex in stoneBirdStartedAtMs.indices &&
+                    !stoneBirdFlightActive(
+                        birdIndex,
+                        eventSeconds(stoneBirdStartedAtMs[birdIndex]),
+                    )
+                ) {
+                    stoneBirdStartedAtMs[birdIndex] = now
+                    val rotation = Math.toRadians(frame.sceneRotation.toDouble())
+                    val rotationCosine = cos(rotation).toFloat()
+                    val rotationSine = sin(rotation).toFloat()
+                    stoneBirdCameraX[birdIndex] =
+                        rotationCosine * eyeX - rotationSine * eyeZ
+                    stoneBirdCameraZ[birdIndex] =
+                        rotationSine * eyeX + rotationCosine * eyeZ
+                    interaction = SceneInteraction.STONE_BIRDS
                 }
-                interaction = SceneInteraction.STONE_BIRDS
             }
             "cloud" -> {
-                drizzleCloud = target.payload
-                drizzleStartedMs = now
-                interaction = SceneInteraction.CLOUD_RAIN
+                if (
+                    target.payload in drizzleStartedAtMs.indices &&
+                    eventSeconds(drizzleStartedAtMs[target.payload]) !in
+                    0f..CLOUD_RAIN_SECONDS &&
+                    eggRegistry.tryTrigger(
+                        SceneEgg.CLOUD_DRIZZLE,
+                        now,
+                        instance = target.payload,
+                    )
+                ) {
+                    drizzleStartedAtMs[target.payload] = now
+                    interaction = SceneInteraction.CLOUD_RAIN
+                }
             }
             "moon" -> {
-                moonWinkStartedMs = now
-                interaction = SceneInteraction.MOON_WINK
+                if (
+                    eggRegistry.tryTrigger(
+                        SceneEgg.MOON_WINK,
+                        now,
+                        suppressed = encounterDirector.isRunning(),
+                    )
+                ) {
+                    moonWinkStartedMs = now
+                    interaction = SceneInteraction.MOON_WINK
+                }
             }
 
             "mushroom" -> {
@@ -4847,55 +7382,32 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
 
             "owl" -> {
-                owlFlapStartedMs = now
-                interaction = SceneInteraction.OWL_FLAP
+                val owlElapsed = eventSeconds(owlStartedMs)
+                if (
+                    owlFlapStartedMs == 0L &&
+                    owlElapsed in OWL_POP_SECONDS..(OWL_POP_SECONDS + OWL_LOOK_SECONDS)
+                ) {
+                    owlFlapStartedMs = now
+                    interaction = SceneInteraction.OWL_FLAP
+                }
             }
 
             "tree" -> {
-                val point = (sprucePoints + birchPoints)
-                    .getOrNull(target.payload)
-                if (point != null) {
+                val point = (sprucePoints + birchPoints).getOrNull(target.payload)
+                if (point == null) {
+                    return null
+                } else {
                     val (x, z) = radial(point.angle, point.radius)
                     val state = treeBonkStates[target.payload]
                     if (!state.held && state.elapsedSeconds < 0f) {
                         TreeBonkPhysics.kick(state, x, z)
                     }
-                    interaction = SceneInteraction.TREE_RUSTLE
-                    val spruceIndex = sprucePoints.indexOf(point)
-                    if (spruceIndex >= 0) {
-                        if (owlTapTreeIndex != spruceIndex || now - owlLastTapMs > 1_200L) {
-                            owlTapTreeIndex = spruceIndex
-                            owlTapCount = 0
-                        }
-                        owlLastTapMs = now
-                        owlTapCount += 1
-                        if (
-                            owlTapCount >= 3 &&
-                            now >= (owlCooldownUntilMs[spruceIndex] ?: 0L)
-                        ) {
-                            owlTapCount = 0
-                            owlActiveTreeIndex = spruceIndex
-                            owlCooldownUntilMs[spruceIndex] = now + 10_000L
-                            owlStartedMs = now
-                            owlFlapStartedMs = 0L
-                            interaction = SceneInteraction.OWL_WAKE
-                        }
-                    } else {
-                        val birchIndex = birchPoints.indexOf(point)
-                        val size = .78f + pseudo(birchIndex * 41 + 5) * .23f
-                        if (leafBursts.size >= 4) leafBursts.removeAt(0)
-                        leafBursts += LeafBurst(
-                            x = x,
-                            y = 1.72f * size,
-                            z = z,
-                            seed = birchIndex * 409 + now.toInt(),
-                            startedAtMs = now,
-                        )
-                    }
+                    return triggerTreePress(target.payload, now)
                 }
             }
 
             "butterflies" -> {
+                val (butterflyX, butterflyZ) = radial(71f, 5.82f)
                 startAmbientReaction(
                     AmbientReaction.BUTTERFLIES,
                     WorldPoint3(butterflyX, .38f, butterflyZ),
@@ -4905,6 +7417,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
 
             "hive" -> {
+                val (hiveX, hiveZ) = radial(205f, 5.55f)
                 startAmbientReaction(
                     AmbientReaction.HIVE,
                     WorldPoint3(hiveX, .32f, hiveZ),
@@ -4919,49 +7432,125 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
             }
 
             "hare", "wolf", "bear", "fox" -> {
-                animalReaction = AnimalReaction.entries[target.payload]
-                animalReactionStartedMs = now
-                if (animalReaction == AnimalReaction.FOX) {
+                val selectedReaction = AnimalReaction.entries[target.payload]
+                val actor = when (selectedReaction) {
+                    AnimalReaction.HARE -> SceneActor.HARE
+                    AnimalReaction.WOLF -> SceneActor.WOLF
+                    AnimalReaction.BEAR -> SceneActor.BEAR
+                    AnimalReaction.FOX -> SceneActor.FOX
+                    AnimalReaction.NONE -> null
+                }
+                val storyAlreadyOwnsActor =
+                    (latestStory.mode == SceneStoryMode.PLAYING ||
+                        latestStory.mode == SceneStoryMode.REBIRTH) &&
+                        latestStory.storyActor == actor
+                if (storyAlreadyOwnsActor) {
+                    // Do not overwrite a story-owned beat, but still
+                    // acknowledge that the visible character was tapped.
+                    // The non-null empty result produces the light haptic
+                    // without starting a second timeline or leaking copy.
+                    return SceneTapResult()
+                }
+                if (selectedReaction == AnimalReaction.FOX) {
                     if (now - foxLastTapMs > 6_000L) foxTapCount = 0
                     foxLastTapMs = now
                     foxTapCount += 1
                     if (foxTapCount >= 5) {
                         foxTapCount = 0
+                        // The hidden ending replaces the ordinary fifth
+                        // fox beat. Starting both timelines used to leave
+                        // the fox gliding/sitting while the catch sequence
+                        // teleported Kolobok, producing contradictory poses.
+                        encounterDirector.cancel()
+                        latestStory = storyDirector.startStandaloneFoxEnding()
+                        foxEndingCameraStartYaw = renderedCameraYaw
+                        foxEndingCameraStartPitch = renderedCameraPitch
+                        foxEndingCameraStartDistance = renderedCameraDistance
+                        foxEndingCameraStartTarget = WorldPoint3(
+                            cameraTargetX,
+                            cameraTargetY,
+                            cameraTargetZ,
+                        )
+                        foxEndingRebirthTriggered = false
                         foxEndingStartedMs = now
                         interaction = SceneInteraction.FOX_TRUE_ENDING
                     } else {
-                        interaction = SceneInteraction.FOX
+                        val started = actor?.let {
+                            startInteractiveEncounter(
+                                actor = it,
+                                dialogueSuppressed = dialogueSuppressed,
+                                greetingOnly = latestStory.mode == SceneStoryMode.STOPPED,
+                            )
+                        } == true
+                        if (started) interaction = SceneInteraction.FOX
                     }
                 } else {
-                    interaction = when (animalReaction) {
-                        AnimalReaction.HARE -> SceneInteraction.HARE
-                        AnimalReaction.WOLF -> SceneInteraction.WOLF
-                        AnimalReaction.BEAR -> SceneInteraction.BEAR
-                        AnimalReaction.FOX -> SceneInteraction.FOX
-                        AnimalReaction.NONE -> null
+                    val started = actor?.let {
+                        startInteractiveEncounter(
+                            actor = it,
+                            dialogueSuppressed = dialogueSuppressed,
+                            greetingOnly = latestStory.mode == SceneStoryMode.STOPPED,
+                        )
+                    } == true
+                    if (started) {
+                        interaction = when (selectedReaction) {
+                            AnimalReaction.HARE -> SceneInteraction.HARE
+                            AnimalReaction.WOLF -> SceneInteraction.WOLF
+                            AnimalReaction.BEAR -> SceneInteraction.BEAR
+                            AnimalReaction.FOX -> SceneInteraction.FOX
+                            AnimalReaction.NONE -> null
+                        }
                     }
                 }
             }
 
             "kolobok" -> {
-                greet()
-                interaction = SceneInteraction.KOLOBOK
-            }
-            null -> {
-                val ground = groundPointAt(mappedX, mappedY)
-                if (ground != null && sqrt(ground.x * ground.x + ground.z * ground.z) <= 8.1f) {
-                    val radius = sqrt(ground.x * ground.x + ground.z * ground.z)
-                    if (abs(radius - 4.72f) <= .58f) {
-                        startAmbientReaction(AmbientReaction.PATH, ground, now)
-                        interaction = SceneInteraction.PATH_SPARKLE
-                    } else {
-                        startAmbientReaction(AmbientReaction.MEADOW, ground, now)
-                        interaction = SceneInteraction.MEADOW_BLOOM
-                    }
+                if (startInteractiveEncounter(SceneActor.KOLOBOK, dialogueSuppressed)) {
+                    greet()
+                    interaction = SceneInteraction.KOLOBOK
                 }
             }
+            null -> Unit
         }
-        return interaction?.let { SceneTapResult(interaction = it) }
+        return interaction?.let {
+            SceneTapResult(
+                interaction = it,
+                variant = if (it == SceneInteraction.GRANDPA_FISHING) {
+                    when (fishingKind) {
+                        FishingKind.SILVER -> SceneInteractionVariant.FISH_SILVER
+                        FishingKind.BOOT -> SceneInteractionVariant.FISH_BOOT
+                        FishingKind.GOLD -> SceneInteractionVariant.FISH_GOLD
+                    }
+                } else {
+                    null
+                },
+                haptic = when (it) {
+                    SceneInteraction.IZBA_WINDOW,
+                    SceneInteraction.HARE,
+                    SceneInteraction.WOLF,
+                    SceneInteraction.BEAR,
+                    SceneInteraction.FOX,
+                    -> SceneHaptic.MEDIUM
+
+                    SceneInteraction.FOX_TRUE_ENDING -> SceneHaptic.NONE
+                    else -> SceneHaptic.LIGHT
+                },
+            )
+        }
+    }
+
+    private fun startInteractiveEncounter(
+        actor: SceneActor,
+        dialogueSuppressed: Boolean,
+        greetingOnly: Boolean = false,
+    ): Boolean {
+        val started = encounterDirector.start(
+            actor = actor,
+            dialogueSuppressed = dialogueSuppressed,
+            greetingOnly = greetingOnly,
+        )
+        if (started) storyDirector.noteUserInput()
+        return started
     }
 
     private fun startAmbientReaction(
@@ -4972,6 +7561,43 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         ambientReaction = reaction
         ambientReactionPoint = point
         ambientReactionStartedMs = now
+    }
+
+    private fun treeCameraVisibility(
+        treeX: Float,
+        treeZ: Float,
+    ): Float {
+        if (!followCameraActive) return 1f
+        val hero = currentKolobokPoint()
+        return SceneCameraOcclusion.treeAlpha(
+            heroX = hero.x,
+            heroZ = hero.z,
+            cameraX = sceneSpaceEyeX,
+            cameraZ = sceneSpaceEyeZ,
+            treeX = treeX,
+            treeZ = treeZ,
+            treeRadius = .72f,
+        )
+    }
+
+    private fun animalCameraVisibility(
+        actorX: Float,
+        actorZ: Float,
+        actorRadius: Float,
+    ): Float {
+        if (!followCameraActive) return 1f
+        val hero = currentKolobokPoint()
+        return SceneCameraOcclusion.sightlineAlpha(
+            heroX = hero.x,
+            heroZ = hero.z,
+            cameraX = sceneSpaceEyeX,
+            cameraZ = sceneSpaceEyeZ,
+            blockerX = actorX,
+            blockerZ = actorZ,
+            blockerRadius = actorRadius,
+            minimumAlpha = .08f,
+            shoulderWidth = .65f,
+        )
     }
 
     private fun groundPointAt(screenX: Float, screenY: Float): WorldPoint3? {
@@ -5039,11 +7665,84 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         )
     }
 
+    private fun updateBubbleAnchor() {
+        val speaker = if (latestStory.narration != null) {
+            latestStory.speaker
+        } else if (latestEncounter.narration != null) {
+            latestEncounter.speaker
+        } else {
+            null
+        }
+        if (speaker == null) {
+            latestBubbleAnchor = null
+            return
+        }
+        val anchor = when (speaker) {
+            SceneSpeaker.KOLOBOK -> currentKolobokPoint().let {
+                WorldPoint3(it.x, it.y + .90f, it.z)
+            }
+            SceneSpeaker.GRANDMA -> WorldPoint3(-.48f, 1.46f, 5.28f)
+            SceneSpeaker.HARE -> radial(72f, 6.15f - actorApproach(SceneActor.HARE) * .60f)
+                .let { WorldPoint3(it.first, 1.72f, it.second) }
+            SceneSpeaker.WOLF -> radial(144f, 6.15f - actorApproach(SceneActor.WOLF) * .60f)
+                .let { WorldPoint3(it.first, 1.70f, it.second) }
+            SceneSpeaker.BEAR -> radial(216f, 6.15f - actorApproach(SceneActor.BEAR) * .60f)
+                .let { WorldPoint3(it.first, 1.92f, it.second) }
+            SceneSpeaker.FOX -> radial(288f, 6.15f - actorApproach(SceneActor.FOX) * .50f)
+                .let { WorldPoint3(it.first, 1.74f, it.second) }
+            SceneSpeaker.NARRATOR -> if (latestStory.kolobokScale > .08f) {
+                currentKolobokPoint().let { WorldPoint3(it.x, it.y + .90f, it.z) }
+            } else {
+                WorldPoint3(-.48f, 1.46f, 5.28f)
+            }
+        }
+        val projected = projectPoint(anchor.x, anchor.y, anchor.z, rotatesWithScene = true)
+        latestBubbleAnchor = projected?.let {
+            SceneBubbleAnchor(
+                xFraction = (it.x / viewportWidth.coerceAtLeast(1)).coerceIn(0f, 1f),
+                yFraction = (it.y / viewportHeight.coerceAtLeast(1)).coerceIn(0f, 1f),
+            )
+        }
+    }
+
     private fun cloudPosition(index: Int): WorldPoint3 {
-        val x = ((frame.storyTime * (0.065f + index * .009f) + index * 5.1f) % 26f) - 13f
-        val z = -8f + index * 4f
-        val y = 7.35f + (index % 2) * .68f
-        return WorldPoint3(x, y, z)
+        val quadrantStart = index * PI.toFloat() * .5f
+        val orbit =
+            quadrantStart +
+                Math.toRadians((10f + pseudo(index * 73 + 17) * 70f).toDouble())
+                    .toFloat() +
+                frame.storyTime * .006f
+        val radiusProgress = pseudo(index * 79 + 23)
+        val radius = PATH_RADIUS * (.85f + radiusProgress * .30f)
+        val windTravel =
+            sin(frame.storyTime * .035f + index * .7f) *
+                latestAtmosphere.windStrength * .75f
+        return WorldPoint3(
+            x = sin(orbit) * radius + latestAtmosphere.windDirectionX * windTravel,
+            y = 4.59f + radiusProgress * 1.53f +
+                sin(frame.storyTime + index * 1.73f) * .15f,
+            z = cos(orbit) * radius + latestAtmosphere.windDirectionZ * windTravel,
+        )
+    }
+
+    private fun cloudCameraVisibility(cloud: WorldPoint3): Float {
+        val dx = cloud.x - eyeX
+        val dy = cloud.y - eyeY
+        val dz = cloud.z - eyeZ
+        val distance = sqrt(dx * dx + dy * dy + dz * dz)
+        val distanceAlpha = SceneCameraOcclusion.cloudAlpha(distance)
+        if (distanceAlpha <= .015f) return 0f
+        val projected = projectPoint(
+            cloud.x,
+            cloud.y,
+            cloud.z,
+            rotatesWithScene = false,
+        ) ?: return distanceAlpha
+        val headerAlpha = SceneCameraOcclusion.headerSafeAlpha(
+            normalizedX = projected.x / viewportWidth.coerceAtLeast(1).toFloat(),
+            normalizedY = projected.y / viewportHeight.coerceAtLeast(1).toFloat(),
+        )
+        return distanceAlpha * headerAlpha
     }
 
     private fun eventSeconds(startedAtMs: Long): Float {
@@ -5052,14 +7751,116 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun reactionEnvelope(target: AnimalReaction): Float {
-        if (animalReaction != target) return 0f
-        val elapsed = eventSeconds(animalReactionStartedMs)
-        if (elapsed > 1.35f) {
-            animalReaction = AnimalReaction.NONE
-            animalReactionStartedMs = 0L
-            return 0f
+        val actor = when (target) {
+            AnimalReaction.HARE -> SceneActor.HARE
+            AnimalReaction.WOLF -> SceneActor.WOLF
+            AnimalReaction.BEAR -> SceneActor.BEAR
+            AnimalReaction.FOX -> SceneActor.FOX
+            AnimalReaction.NONE -> null
         }
-        return sin((elapsed / 1.35f).coerceIn(0f, 1f) * PI.toFloat())
+        val legacyReaction = if (animalReaction == target) {
+            val elapsed = eventSeconds(animalReactionStartedMs)
+            if (elapsed > 1.35f) {
+                animalReaction = AnimalReaction.NONE
+                animalReactionStartedMs = 0L
+                0f
+            } else {
+                sin((elapsed / 1.35f).coerceIn(0f, 1f) * PI.toFloat())
+            }
+        } else {
+            0f
+        }
+        if (actor == null) return legacyReaction
+        val storyReaction = if (latestStory.storyActor == actor) {
+            latestStory.storyActorReaction
+        } else {
+            0f
+        }
+        val encounterReaction = if (latestEncounter.actor == actor) {
+            latestEncounter.reaction
+        } else {
+            0f
+        }
+        return max(legacyReaction, max(storyReaction, encounterReaction))
+    }
+
+    private fun actorApproach(actor: SceneActor): Float {
+        val storyApproach = if (latestStory.storyActor == actor) {
+            latestStory.storyActorApproach
+        } else {
+            0f
+        }
+        val encounterApproach = if (latestEncounter.actor == actor) {
+            latestEncounter.approach
+        } else {
+            0f
+        }
+        return max(storyApproach, encounterApproach).coerceIn(0f, 1f)
+    }
+
+    private fun actorReactionProgress(actor: SceneActor): Float {
+        if (
+            latestEncounter.actor == actor &&
+            latestEncounter.reactionProgress >= 0f
+        ) {
+            return latestEncounter.reactionProgress
+        }
+        if (latestStory.storyActor != actor) return -1f
+        val seconds = latestStory.chapterSeconds
+        return when (actor) {
+            SceneActor.HARE,
+            SceneActor.WOLF,
+            SceneActor.BEAR,
+            -> if (seconds in 2.6f..<3f) {
+                ((seconds - 2.6f) / .4f).coerceIn(0f, 1f)
+            } else {
+                -1f
+            }
+
+            SceneActor.FOX -> if (seconds in 5.8f..<6.7f) {
+                ((seconds - 5.8f) / .9f).coerceIn(0f, 1f)
+            } else {
+                -1f
+            }
+
+            SceneActor.IZBA,
+            SceneActor.KOLOBOK,
+            -> -1f
+        }
+    }
+
+    private fun greetingEnvelope(actor: SceneActor): Float {
+        val elapsed = greetingElapsedSeconds[actor.ordinal]
+        return if (elapsed in 0f..GREETING_WAVE_SECONDS) {
+            sin((elapsed / GREETING_WAVE_SECONDS) * PI.toFloat())
+                .coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+    }
+
+    private fun updateGreetingWaves(deltaSeconds: Float) {
+        greetingElapsedSeconds.indices.forEach { index ->
+            val elapsed = greetingElapsedSeconds[index]
+            if (elapsed >= 0f) {
+                val next = elapsed + deltaSeconds.coerceIn(0f, .25f)
+                greetingElapsedSeconds[index] =
+                    if (next > GREETING_WAVE_SECONDS) -1f else next
+            }
+        }
+
+        val storyActor = latestStory.storyActor
+            ?.takeIf { latestStory.mode == SceneStoryMode.PLAYING && it.isAnimal() }
+        if (storyActor != null && storyActor != previousGreetingStoryActor) {
+            greetingElapsedSeconds[storyActor.ordinal] = 0f
+        }
+        previousGreetingStoryActor = storyActor
+
+        val encounterActor = latestEncounter.actor?.takeIf(SceneActor::isAnimal)
+        if (encounterActor != null && encounterActor != previousGreetingEncounterActor) {
+            greetingElapsedSeconds[encounterActor.ordinal] = 0f
+        }
+        previousGreetingEncounterActor = encounterActor
     }
 
     private fun drawTinyBird(
@@ -5175,26 +7976,60 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 
     private fun drawWeather() {
-        if (weather == SceneWeather.CLEAR) return
-        rain.forEachIndexed { index, particle ->
-            val speed = if (weather == SceneWeather.RAIN) 2.8f else 0.55f
-            val fall = (frame.storyTime * speed + particle.phase) % 5.5f
-            val y = 5.4f - fall
-            val drift = if (weather == SceneWeather.SNOW) {
-                sin(frame.storyTime * 1.3f + index) * 0.22f
-            } else {
-                frame.storyTime * .07f
+        val rainAmount = latestAtmosphere.rainAmount
+        if (rainAmount > .01f) {
+            rainTransforms.clear()
+            val count = (rain.size * rainAmount).roundToInt().coerceIn(0, rain.size)
+            repeat(count) { index ->
+                val particle = rain[index]
+                val fall = (frame.storyTime * 9f + particle.phase) % 8f
+                val wind = latestAtmosphere.windStrength
+                rainTransforms += Transform(
+                    x = particle.x + latestAtmosphere.windDirectionX * fall * .075f * wind,
+                    y = 8.2f - fall,
+                    z = particle.z + latestAtmosphere.windDirectionZ * fall * .075f * wind,
+                    scaleX = .014f,
+                    scaleY = .18f,
+                    scaleZ = .014f,
+                    rotationZ = -10f - wind * 6f,
+                )
             }
-            val shade = if (weather == SceneWeather.RAIN) "#A7D4EE" else "#FFFFFF"
-            val transform = if (weather == SceneWeather.RAIN) {
-                Transform(particle.x + drift, y, particle.z, .015f, .16f, .015f, rotationZ = -12f)
-            } else {
-                Transform(particle.x + drift, y, particle.z, .045f, .045f, .045f)
+            drawInstanced(
+                mesh = requireNotNull(cylinder),
+                color = color("#AEBFD0", .58f),
+                transforms = rainTransforms,
+                rimStrength = 0f,
+                rotateWithScene = false,
+            )
+        }
+
+        val snowAmount = latestAtmosphere.snowAmount
+        if (snowAmount > .01f) {
+            snowTransforms.clear()
+            val count = (snow.size * snowAmount).roundToInt().coerceIn(0, snow.size)
+            repeat(count) { index ->
+                val particle = snow[index]
+                val fall = (frame.storyTime * 1.1f + particle.phase) % 7f
+                val drift =
+                    sin(frame.storyTime * 1.3f + index) * .30f +
+                        latestAtmosphere.windDirectionX * latestAtmosphere.windStrength * .18f
+                val pulse = 1f + sin(frame.storyTime * .8f + particle.phase) * .15f
+                snowTransforms += Transform(
+                    x = particle.x + drift,
+                    y = 8.1f - fall,
+                    z = particle.z +
+                        cos(frame.storyTime * 1.1f + index) * .16f +
+                        latestAtmosphere.windDirectionZ * latestAtmosphere.windStrength * .18f,
+                    scaleX = .050f * pulse,
+                    scaleY = .050f * pulse,
+                    scaleZ = .050f * pulse,
+                )
             }
-            draw(
-                if (weather == SceneWeather.RAIN) requireNotNull(cylinder) else requireNotNull(sphere),
-                color(shade, .72f),
-                transform,
+            drawInstanced(
+                mesh = requireNotNull(lowSphere),
+                color = color("#FFFFFF", .90f),
+                transforms = snowTransforms,
+                rimStrength = .05f,
                 rotateWithScene = false,
             )
         }
@@ -5262,6 +8097,7 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         color: FloatArray,
         transforms: List<Transform>,
         rimStrength: Float,
+        rotateWithScene: Boolean = true,
     ) {
         if (transforms.isEmpty() || color[3] <= .015f) return
         val requiredFloats = transforms.size * 16
@@ -5278,7 +8114,9 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         upload.clear()
         transforms.forEach { transform ->
             Matrix.setIdentityM(model, 0)
-            Matrix.rotateM(model, 0, frame.sceneRotation, 0f, 1f, 0f)
+            if (rotateWithScene) {
+                Matrix.rotateM(model, 0, frame.sceneRotation, 0f, 1f, 0f)
+            }
             Matrix.translateM(model, 0, transform.x, transform.y, transform.z)
             if (transform.rotationY != 0f) {
                 Matrix.rotateM(model, 0, transform.rotationY, 0f, 1f, 0f)
@@ -5334,12 +8172,11 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform4fv(instancedColorLocation, 1, color, 0)
         GLES30.glUniform3f(instancedLightLocation, -0.48f, 0.78f, 0.39f)
         GLES30.glUniform3f(instancedCameraLocation, eyeX, eyeY, eyeZ)
-        val evening = eveningAmount()
         GLES30.glUniform3f(
             instancedFogColorLocation,
-            .78f * (1f - evening) + .25f * evening,
-            .89f * (1f - evening) + .33f * evening,
-            .93f * (1f - evening) + .48f * evening,
+            latestAtmosphere.fog.red,
+            latestAtmosphere.fog.green,
+            latestAtmosphere.fog.blue,
         )
         GLES30.glUniform1f(instancedRimLocation, rimStrength)
 
@@ -5625,6 +8462,14 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         }.also { alphaSlots[alphaStep] = it }
     }
 
+    private fun color(value: SceneColor, alpha: Float = 1f): FloatArray {
+        dynamicColor[0] = value.red.coerceIn(0f, 1f)
+        dynamicColor[1] = value.green.coerceIn(0f, 1f)
+        dynamicColor[2] = value.blue.coerceIn(0f, 1f)
+        dynamicColor[3] = alpha.coerceIn(0f, 1f)
+        return dynamicColor
+    }
+
     private fun pseudo(seed: Int): Float {
         val x = sin(seed * 12.9898) * 43758.5453
         return (x - kotlin.math.floor(x)).toFloat()
@@ -5641,7 +8486,63 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
         private const val BRIDGE_ARC_HALF_DEGREES = 17f
         private const val BRIDGE_SEGMENTS = 7
         private const val CROSSROADS_SCALE = .91f
-        private const val FOLLOW_CAMERA_BIAS_DEGREES = 110f
+        private const val DEFAULT_CAMERA_PITCH = 24f
+        private const val DEFAULT_CAMERA_DISTANCE = 13.2f
+        private const val STORY_CAMERA_IDLE_RESUME_MS = 10_000L
+        private const val GREETING_WAVE_SECONDS = 2.6f
+        private const val STORY_CAMERA_LEAD_DEGREES = 24f
+        private const val CAMERA_FOLLOW_LAG = 2.4f
+        private const val INTRO_CAMERA_YAW = 180f
+        private const val INTRO_CAMERA_RADIUS = 12f
+        private const val INTRO_CAMERA_HEIGHT = 5.2f
+        private const val INTRO_CAMERA_TARGET_X = 0f
+        private const val INTRO_CAMERA_TARGET_Y = 1.2f
+        private const val INTRO_CAMERA_TARGET_Z = 4.2f
+        private const val FOX_ENDING_PUSH_SECONDS = .60f
+        private const val FOX_ENDING_BLACK_RESET_SECONDS = 1.50f
+        private const val FOX_ENDING_REBIRTH_SECONDS = 1.90f
+        private const val FOX_ENDING_DURATION_SECONDS = 4.60f
+        private const val FOX_ENDING_CAMERA_YAW = 264f
+        private const val FOX_ENDING_REBIRTH_CAMERA_YAW = -24f
+        private const val FOX_ENDING_CAMERA_PITCH = 22f
+        private const val FOX_ENDING_CAMERA_DISTANCE = 6.2f
+        private const val SCENE_CLOUD_COUNT = 4
+        private const val CLOUD_RAIN_SECONDS = 15f
+        private const val CLOUD_DARKEN_SECONDS = .50f
+        private const val FISHING_TIMELINE_SCALE = 3.35f / 2.7f
+        private const val CROSSROADS_PRESS_SECONDS = .21f
+        private const val CROSSROADS_NAVIGATION_LOCK_MS = 250L
+        private const val OWL_POP_SECONDS = .25f
+        private const val OWL_LOOK_SECONDS = 3f
+        private const val OWL_FLAP_SECONDS = 1.4f
+        private const val OWL_DUCK_SECONDS = .25f
+        private const val OWL_FOLDED_WING_DEGREES = 65f
+        private const val CELESTIAL_RADIUS = 24f
+        private const val MOON_WINK_SECONDS = .40f
+        private const val STONE_BIRD_COUNT = 7
+        private const val STONE_BIRD_SCATTER_SECONDS = .55f
+        private const val STONE_BIRD_SCATTER_DISTANCE = 1.6f
+        private const val STONE_BIRD_SCATTER_RISE = .55f
+        private const val STONE_BIRD_CLIMB_SECONDS = 1.2f
+        private const val STONE_BIRD_CLIMB_DISTANCE = 3.5f
+        private const val STONE_BIRD_CLIMB_RISE = 5.5f
+        private const val STONE_BIRD_AWAY_MIN_SECONDS = 4f
+        private const val STONE_BIRD_AWAY_MAX_SECONDS = 9f
+        private const val STONE_BIRD_RETURN_SECONDS = 1.6f
+        private const val STONE_BIRD_LAND_SECONDS = .18f
+        private const val STONE_BIRD_FLAP_HZ = 9f
+        private const val MAGPIE_LAUNCH_SECONDS = 1.8f / .7f
+        private const val MAGPIE_AWAY_SECONDS = 15f
+        private const val MAGPIE_RETURN_SECONDS = 1.8f / .7f
+        private const val MAGPIE_FLAP_HZ = 8f
+        private const val REACTIVE_GRASS_COUNT = 168
+        private const val REACTIVE_FLOWER_COUNT = 23
+        private const val REACTIVE_PLANT_BEND_RADIUS = .55f
+        private const val REACTIVE_PLANT_BEND_DEGREES = 28f
+        private const val REACTIVE_PLANT_BEND_DECAY = 9f
+        private const val REACTIVE_PLANT_BEND_FREQUENCY = 3.2f
+        private const val REACTIVE_PLANT_BEND_SECONDS = .40f
+        private const val REACTIVE_GRASS_WIND_DEGREES = 14f
         private const val INSTANCED_VERTEX_SHADER = """#version 300 es
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec3 aNormal;
@@ -5741,6 +8642,18 @@ private class StorySceneRenderer : GLSurfaceView.Renderer {
     }
 }
 
+private fun SceneActor.isAnimal(): Boolean = when (this) {
+    SceneActor.HARE,
+    SceneActor.WOLF,
+    SceneActor.BEAR,
+    SceneActor.FOX,
+    -> true
+
+    SceneActor.IZBA,
+    SceneActor.KOLOBOK,
+    -> false
+}
+
 private data class Transform(
     val x: Float,
     val y: Float,
@@ -5786,6 +8699,85 @@ private data class ForestRing(
     val topTint: String,
     val baseSize: Float,
 )
+
+private const val TERRAIN_BASE_Y = .018f
+private const val TERRAIN_HILL_HEIGHT = .16f
+private const val TERRAIN_POTHOLE_DEPTH = .09f
+
+private data class TerrainHill(
+    val x: Float,
+    val z: Float,
+    val radius: Float,
+)
+
+private data class TerrainPothole(
+    val x: Float,
+    val z: Float,
+    val majorRadius: Float,
+    val minorRadius: Float,
+    val rotationDegrees: Float,
+)
+
+private data class ReactivePlant(
+    val angle: Float,
+    val radius: Float,
+    val yaw: Float,
+    val scale: Float,
+)
+
+private data class PlantBendPose(
+    val degrees: Float = 0f,
+    val directionX: Float = 0f,
+    val directionZ: Float = 0f,
+)
+
+private data class ZoneCameraFraming(
+    val distance: Float,
+    val pitchDegrees: Float,
+    val lookAtHeight: Float,
+)
+
+private fun terrainHeightAt(
+    x: Float,
+    z: Float,
+    hills: List<TerrainHill>,
+    potholes: List<TerrainPothole>,
+): Float {
+    var height = 0f
+    hills.forEach { hill ->
+        val dx = x - hill.x
+        val dz = z - hill.z
+        val distance = sqrt(dx * dx + dz * dz)
+        if (distance < hill.radius) {
+            height +=
+                cos(
+                    distance / hill.radius *
+                        PI.toFloat() * .5f,
+                ) * TERRAIN_HILL_HEIGHT
+        }
+    }
+    var deepestPothole = 0f
+    potholes.forEach { hole ->
+        val radians = Math.toRadians((-hole.rotationDegrees).toDouble())
+        val cosine = cos(radians).toFloat()
+        val sine = sin(radians).toFloat()
+        val dx = x - hole.x
+        val dz = z - hole.z
+        val localX = dx * cosine - dz * sine
+        val localZ = dx * sine + dz * cosine
+        val normalizedDistance = sqrt(
+            localX * localX / (hole.majorRadius * hole.majorRadius) +
+                localZ * localZ / (hole.minorRadius * hole.minorRadius),
+        )
+        if (normalizedDistance < 1f) {
+            deepestPothole = max(
+                deepestPothole,
+                cos(normalizedDistance * PI.toFloat() * .5f),
+            )
+        }
+    }
+    return height - deepestPothole * TERRAIN_POTHOLE_DEPTH
+}
 
 private data class PolarPoint(
     val angle: Float,
@@ -5860,8 +8852,6 @@ private enum class AnimalReaction {
 private enum class AmbientReaction {
     NONE,
     TREE,
-    MEADOW,
-    PATH,
     BUTTERFLIES,
     HIVE,
 }
@@ -5893,6 +8883,82 @@ private data class MeshData(
 )
 
 private object Geometry {
+    fun terrainDisc(
+        radius: Float,
+        rings: Int,
+        segments: Int,
+        hills: List<TerrainHill>,
+        potholes: List<TerrainPothole>,
+    ): MeshData {
+        val vertexCount = 1 + rings * (segments + 1)
+        val vertices = FloatArray(vertexCount * 6)
+        val indices = ArrayList<Short>(
+            segments * 3 + (rings - 1) * segments * 6,
+        )
+
+        fun writeVertex(index: Int, x: Float, z: Float) {
+            val y = terrainHeightAt(x, z, hills, potholes)
+            val sample = .035f
+            val slopeX = (
+                terrainHeightAt(x - sample, z, hills, potholes) -
+                    terrainHeightAt(x + sample, z, hills, potholes)
+                ) / (sample * 2f)
+            val slopeZ = (
+                terrainHeightAt(x, z - sample, hills, potholes) -
+                    terrainHeightAt(x, z + sample, hills, potholes)
+                ) / (sample * 2f)
+            val normalLength =
+                sqrt(slopeX * slopeX + 1f + slopeZ * slopeZ)
+                    .coerceAtLeast(.001f)
+            val offset = index * 6
+            vertices[offset] = x
+            vertices[offset + 1] = y
+            vertices[offset + 2] = z
+            vertices[offset + 3] = slopeX / normalLength
+            vertices[offset + 4] = 1f / normalLength
+            vertices[offset + 5] = slopeZ / normalLength
+        }
+
+        writeVertex(0, 0f, 0f)
+        for (ringIndex in 1..rings) {
+            val ringRadius = radius * ringIndex / rings.toFloat()
+            for (segment in 0..segments) {
+                val angle = segment.toDouble() / segments * PI * 2.0
+                val vertexIndex = 1 + (ringIndex - 1) * (segments + 1) + segment
+                writeVertex(
+                    vertexIndex,
+                    sin(angle).toFloat() * ringRadius,
+                    cos(angle).toFloat() * ringRadius,
+                )
+            }
+        }
+
+        repeat(segments) { segment ->
+            val current = (1 + segment).toShort()
+            val next = (1 + segment + 1).toShort()
+            indices += 0.toShort()
+            indices += current
+            indices += next
+        }
+        for (ringIndex in 1 until rings) {
+            val innerStart = 1 + (ringIndex - 1) * (segments + 1)
+            val outerStart = 1 + ringIndex * (segments + 1)
+            repeat(segments) { segment ->
+                val inner = (innerStart + segment).toShort()
+                val innerNext = (innerStart + segment + 1).toShort()
+                val outer = (outerStart + segment).toShort()
+                val outerNext = (outerStart + segment + 1).toShort()
+                indices += inner
+                indices += outer
+                indices += outerNext
+                indices += inner
+                indices += outerNext
+                indices += innerNext
+            }
+        }
+        return MeshData(vertices, indices.toShortArray())
+    }
+
     fun merge(parts: List<MeshPart>): MeshData {
         val vertexFloatCount = parts.sumOf { it.data.vertices.size }
         val indexCount = parts.sumOf { it.data.indices.size }

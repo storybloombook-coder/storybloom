@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -80,6 +82,7 @@ import com.storybloom.app.data.BookBundle
 import com.storybloom.app.data.Cue
 import com.storybloom.app.data.PageWithCues
 import com.storybloom.app.data.TrimEnvelope
+import com.storybloom.app.audio.EffectPlayback
 import com.storybloom.app.reader.AlignmentUpdate
 import com.storybloom.app.reader.ReaderAligner
 import com.storybloom.app.speech.RecognizedWord
@@ -89,11 +92,13 @@ import com.storybloom.app.speech.speechWords
 import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.NativeImage
+import com.storybloom.app.ui.components.ReaderWordFlow
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomBlue
 import com.storybloom.app.ui.theme.BloomCoral
 import com.storybloom.app.ui.theme.BloomGreen
 import com.storybloom.app.ui.theme.BloomYellow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -104,6 +109,7 @@ fun ReaderScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val activity = context as Activity
     val scope = rememberCoroutineScope()
     val revision by viewModel.repository.revision.collectAsState()
@@ -113,8 +119,13 @@ fun ReaderScreen(
     var cursorWord by remember { mutableIntStateOf(-1) }
     var listening by remember { mutableStateOf(false) }
     var loadingSpeech by remember { mutableStateOf(false) }
+    var wantsListening by remember(bookId) { mutableStateOf(true) }
+    var autoStartRequested by remember(bookId) { mutableStateOf(false) }
     var finished by remember(bookId) { mutableStateOf(false) }
     var lastPageCommand by remember { mutableLongStateOf(0L) }
+    var cuePlayback by remember(bookId) { mutableStateOf<EffectPlayback?>(null) }
+    var firingWord by remember(bookId) { mutableIntStateOf(-1) }
+    var firingSequence by remember(bookId) { mutableIntStateOf(0) }
     val recognizer = remember { VoskRecognizer(viewModel.modelManager) }
 
     LaunchedEffect(bookId, revision) {
@@ -133,21 +144,39 @@ fun ReaderScreen(
     val currentPageIndex by rememberUpdatedState(pageIndex)
     val currentReadablePages by rememberUpdatedState(readablePages)
 
-    fun playCue(cue: Cue) {
+    fun stopCue() {
+        cuePlayback?.stop()
+        cuePlayback = null
+        firingWord = -1
+        firingSequence += 1
+    }
+
+    fun playCue(cue: Cue, wordIndex: Int) {
         val id = cue.soundId ?: return
+        stopCue()
+        val sequence = firingSequence
+        firingWord = wordIndex
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
         viewModel.audioEngine.duckAmbient()
-        viewModel.audioEngine.playEffect(
+        cuePlayback = viewModel.audioEngine.playExclusiveEffect(
             TrimEnvelope(id, cue.soundStartMs, cue.soundEndMs, cue.fadeInMs, cue.fadeOutMs),
         )
+        scope.launch {
+            delay(180L)
+            if (firingSequence == sequence) firingWord = -1
+        }
     }
 
     fun applyUpdates(updates: List<AlignmentUpdate>) {
         if (updates.isEmpty()) return
         cursorWord = updates.last().wordIndex
-        updates.mapNotNull(AlignmentUpdate::cue).forEach(::playCue)
+        updates.forEach { update ->
+            update.cue?.let { cue -> playCue(cue, update.wordIndex) }
+        }
     }
 
     fun advancePage() {
+        stopCue()
         if (pageIndex < readablePages.lastIndex) {
             pageIndex += 1
             cursorWord = -1
@@ -156,7 +185,7 @@ fun ReaderScreen(
         }
     }
 
-    fun handleNextPagePhrase(text: String): Boolean {
+    fun handleNextPagePhrase(text: String, isFinal: Boolean): Boolean {
         val normalized = text.lowercase()
         val phrase = if (bundle?.book?.language == com.storybloom.app.data.BookLanguage.RUSSIAN) {
             "следующая страница"
@@ -164,6 +193,10 @@ fun ReaderScreen(
             "next page"
         }
         if (!normalized.contains(phrase)) return false
+        // Partials are deliberately excluded from page navigation: Vosk can
+        // revise them. We still consume the phrase so its words are never
+        // mistaken for story text while waiting for the final result.
+        if (!isFinal) return true
         val now = SystemClock.uptimeMillis()
         if (now - lastPageCommand < 1_200L) return true
         lastPageCommand = now
@@ -171,13 +204,16 @@ fun ReaderScreen(
         return true
     }
 
-    fun stopSpeech() {
+    fun stopSpeech(userInitiated: Boolean = true) {
+        if (userInitiated) wantsListening = false
         listening = false
         scope.launch { recognizer.stop() }
     }
 
     fun startSpeech() {
         val loadedBundle = bundle ?: return
+        if (listening || loadingSpeech || finished) return
+        wantsListening = true
         loadingSpeech = true
         val vocabulary = loadedBundle.pages
             .flatMap { speechWords(it.page.ocrText) }
@@ -196,7 +232,7 @@ fun ReaderScreen(
                     callbacks = object : SpeechCallbacks {
                         override fun onPartial(text: String) {
                             activity.runOnUiThread {
-                                if (!handleNextPagePhrase(text)) {
+                                if (!handleNextPagePhrase(text, isFinal = false)) {
                                     currentAligner?.onPartial(text)?.let(::applyUpdates)
                                 }
                             }
@@ -204,7 +240,7 @@ fun ReaderScreen(
 
                         override fun onResult(text: String, words: List<RecognizedWord>) {
                             activity.runOnUiThread {
-                                if (!handleNextPagePhrase(text)) {
+                                if (!handleNextPagePhrase(text, isFinal = true)) {
                                     val updates = if (words.isEmpty()) {
                                         currentAligner?.onFinalText(text)
                                     } else {
@@ -219,6 +255,7 @@ fun ReaderScreen(
                             activity.runOnUiThread {
                                 listening = false
                                 loadingSpeech = false
+                                wantsListening = false
                                 viewModel.notify(message)
                             }
                         }
@@ -234,11 +271,33 @@ fun ReaderScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) startSpeech()
-        else viewModel.notify(locale.text("Microphone permission was denied.", "Нет доступа к микрофону."))
+        else {
+            wantsListening = false
+            viewModel.notify(locale.text("Microphone permission was denied.", "Нет доступа к микрофону."))
+        }
+    }
+
+    LaunchedEffect(bundle?.book?.id, readablePages.size) {
+        if (
+            bundle != null &&
+            readablePages.isNotEmpty() &&
+            !autoStartRequested
+        ) {
+            autoStartRequested = true
+            if (
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                startSpeech()
+            } else {
+                microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
     }
 
     LaunchedEffect(active?.page?.id, finished) {
         cursorWord = -1
+        stopCue()
         viewModel.audioEngine.stopAmbient(immediate = true)
         if (finished) return@LaunchedEffect
         val page = active?.page ?: return@LaunchedEffect
@@ -259,9 +318,21 @@ fun ReaderScreen(
     LaunchedEffect(finished) {
         if (finished) {
             listening = false
+            loadingSpeech = false
             recognizer.stop()
             viewModel.audioEngine.stopAmbient(immediate = true)
+        } else if (
+            autoStartRequested &&
+            wantsListening &&
+            !listening &&
+            !loadingSpeech
+        ) {
+            startSpeech()
         }
+    }
+
+    LaunchedEffect(listening) {
+        viewModel.audioEngine.setAmbientDucked(listening)
     }
 
     DisposableEffect(activity) {
@@ -272,6 +343,8 @@ fun ReaderScreen(
         onDispose {
             controller.show(WindowInsetsCompat.Type.systemBars())
             recognizer.closeNow()
+            cuePlayback?.stop()
+            viewModel.audioEngine.setAmbientDucked(false)
             viewModel.audioEngine.stopAmbient(immediate = true)
         }
     }
@@ -312,6 +385,7 @@ fun ReaderScreen(
             onClose = onClose,
             onPrevious = {
                 if (pageIndex > 0) {
+                    stopCue()
                     pageIndex -= 1
                     cursorWord = -1
                 }
@@ -319,7 +393,7 @@ fun ReaderScreen(
             onNext = ::advancePage,
             onMicrophone = {
                 when {
-                    listening -> stopSpeech()
+                    listening -> stopSpeech(userInitiated = true)
                     ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                         PackageManager.PERMISSION_GRANTED -> startSpeech()
                     else -> microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -328,8 +402,13 @@ fun ReaderScreen(
             onWord = { wordIndex, cue ->
                 aligner.moveManually(wordIndex)
                 cursorWord = wordIndex
-                cue?.let(::playCue)
+                cue?.let { playCue(it, wordIndex) }
             },
+            onBallWord = { wordIndex ->
+                aligner.moveManually(wordIndex)
+                cursorWord = wordIndex
+            },
+            firingWord = firingWord,
         )
     }
 }
@@ -349,6 +428,8 @@ private fun ReaderPage(
     onNext: () -> Unit,
     onMicrophone: () -> Unit,
     onWord: (Int, Cue?) -> Unit,
+    onBallWord: (Int) -> Unit,
+    firingWord: Int,
 ) {
     Box(
         Modifier
@@ -435,17 +516,15 @@ private fun ReaderPage(
                         .verticalScroll(rememberScrollState())
                         .padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 110.dp),
                 ) {
-                    ReaderWords(
+                    ReaderWordFlow(
                         active = active,
-                        aligner = aligner,
+                        script = aligner.script,
                         cursor = cursorWord,
+                        firingWord = firingWord,
                         onWord = onWord,
+                        onBallWord = onBallWord,
                     )
                 }
-                ReadingBall(
-                    currentWord = aligner.script.getOrNull(cursorWord)?.display,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(start = 22.dp, bottom = 88.dp),
-                )
             }
         }
         Row(

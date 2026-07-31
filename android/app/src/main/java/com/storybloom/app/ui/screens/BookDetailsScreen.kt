@@ -3,9 +3,12 @@ package com.storybloom.app.ui.screens
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +35,8 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
@@ -56,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,13 +87,21 @@ import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.BloomPrimaryButton
 import com.storybloom.app.ui.components.EmptyState
 import com.storybloom.app.ui.components.NativeImage
+import com.storybloom.app.ui.components.NativePhotoEditorDialog
+import com.storybloom.app.ui.components.PulsingStoryDot
+import com.storybloom.app.ui.components.ReorderableVerticalItem
 import com.storybloom.app.ui.components.StatusPill
 import com.storybloom.app.ui.components.StoryScaffold
+import com.storybloom.app.ui.components.SwipeRevealRow
+import com.storybloom.app.ui.components.rememberVerticalReorderState
+import com.storybloom.app.ui.mechanics.ReorderMath
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomBlue
 import com.storybloom.app.ui.theme.BloomCoral
 import com.storybloom.app.ui.theme.BloomGreen
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 @Composable
 fun BookDetailsScreen(
@@ -99,6 +113,7 @@ fun BookDetailsScreen(
     onPage: (String) -> Unit,
     onRead: () -> Unit,
 ) {
+    val context = LocalContext.current
     val revision by viewModel.repository.revision.collectAsState()
     var book by remember(bookId) { mutableStateOf<Book?>(null) }
     var pages by remember(bookId) { mutableStateOf<List<Page>>(emptyList()) }
@@ -109,7 +124,16 @@ fun BookDetailsScreen(
     var deleteBookOpen by remember { mutableStateOf(false) }
     var deletePage by remember { mutableStateOf<Page?>(null) }
     var readinessOpen by remember { mutableStateOf(false) }
+    var editorSourcePath by remember { mutableStateOf<String?>(null) }
+    var editorQueue by remember { mutableStateOf<List<String>>(emptyList()) }
+    var editorReady by remember { mutableStateOf<List<String>>(emptyList()) }
+    var editorTotal by remember { mutableStateOf(0) }
+    var importingPhotos by remember { mutableStateOf(false) }
+    var pendingCameraFile by remember { mutableStateOf<File?>(null) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val pageReorderState = rememberVerticalReorderState()
     val scope = rememberCoroutineScope()
+    val currentPendingCameraFile by rememberUpdatedState(pendingCameraFile)
 
     LaunchedEffect(bookId, revision) {
         loading = true
@@ -119,10 +143,101 @@ fun BookDetailsScreen(
         loading = false
     }
 
+    fun openEditorQueue(paths: List<String>) {
+        if (paths.isEmpty()) return
+        editorTotal = paths.size
+        editorReady = emptyList()
+        editorSourcePath = paths.first()
+        editorQueue = paths.drop(1)
+    }
+
+    fun advanceEditor(ready: List<String>) {
+        if (editorQueue.isNotEmpty()) {
+            editorReady = ready
+            editorSourcePath = editorQueue.first()
+            editorQueue = editorQueue.drop(1)
+            return
+        }
+        editorSourcePath = null
+        editorQueue = emptyList()
+        editorReady = emptyList()
+        editorTotal = 0
+        if (ready.isNotEmpty()) {
+            importingPhotos = true
+            scope.launch {
+                viewModel.addPhotoPaths(bookId, ready)
+                importingPhotos = false
+            }
+        }
+    }
+
     val addPhotos = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(60),
     ) { uris ->
-        if (uris.isNotEmpty()) scope.launch { viewModel.addPhotos(bookId, uris) }
+        if (uris.isNotEmpty()) {
+            importingPhotos = true
+            scope.launch {
+                openEditorQueue(viewModel.importImages(uris))
+                importingPhotos = false
+            }
+        }
+    }
+
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val uri = pendingCameraUri
+        val file = pendingCameraFile
+        if (success && uri != null) {
+            importingPhotos = true
+            scope.launch {
+                openEditorQueue(viewModel.importImages(listOf(uri)))
+                importingPhotos = false
+                file?.let(viewModel.imageStore::cleanupCameraFile)
+                pendingCameraFile = null
+                pendingCameraUri = null
+            }
+        } else {
+            file?.let(viewModel.imageStore::cleanupCameraFile)
+            pendingCameraFile = null
+            pendingCameraUri = null
+        }
+    }
+
+    fun openCamera() {
+        val (file, uri) = viewModel.imageStore.createCameraTarget()
+        pendingCameraFile = file
+        pendingCameraUri = uri
+        takePicture.launch(uri)
+    }
+
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            openCamera()
+        } else {
+            viewModel.notify(
+                locale.text(
+                    "Camera permission was denied.",
+                    "Доступ к камере не предоставлен.",
+                ),
+            )
+        }
+    }
+
+    fun launchCamera() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            openCamera()
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            currentPendingCameraFile?.let(viewModel.imageStore::cleanupCameraFile)
+        }
     }
 
     val currentBook = book
@@ -178,11 +293,17 @@ fun BookDetailsScreen(
                 CircularProgressIndicator()
             }
         } else {
-            LazyColumn(
-                Modifier.fillMaxSize().padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp,
+                        top = 16.dp,
+                        end = 16.dp,
+                        bottom = 118.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
                 item {
                     BookSummaryPanel(
                         book = requireNotNull(currentBook),
@@ -250,44 +371,39 @@ fun BookDetailsScreen(
                     }
                 }
                 item {
-                    ReadinessCard(
-                        ready = report.ready,
-                        pages = report.storyPageCount,
-                        sounds = report.soundCount,
-                        ambient = report.ambientPageCount,
-                        warnings = report.warnings.size,
-                        locale = locale,
-                        onClick = { readinessOpen = true },
-                    )
-                }
-                item {
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        BloomPrimaryButton(
-                            text = locale.text("Read", "Читать"),
-                            onClick = {
-                                if (report.ready) onRead() else readinessOpen = true
-                            },
-                            enabled = pages.any { it.pageType.isReadable } &&
-                                currentBook?.prepStatus != PrepStatus.PROCESSING,
-                            modifier = Modifier.weight(1f),
-                            leading = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) },
-                        )
                         OutlinedButton(
                             onClick = {
                                 addPhotos.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                                 )
                             },
+                            enabled = !importingPhotos,
                             modifier = Modifier.height(54.dp),
                             shape = RoundedCornerShape(18.dp),
                         ) {
-                            Icon(Icons.Rounded.AddAPhoto, contentDescription = null)
+                            Icon(
+                                Icons.Rounded.PhotoLibrary,
+                                contentDescription = locale.text("Add pictures", "Добавить снимки"),
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = ::launchCamera,
+                            enabled = !importingPhotos,
+                            modifier = Modifier.height(54.dp),
+                            shape = RoundedCornerShape(18.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.CameraAlt,
+                                contentDescription = locale.text("Take a photo", "Сделать фото"),
+                            )
                         }
                         OutlinedButton(
                             onClick = { dictatedOpen = true },
+                            enabled = !importingPhotos,
                             modifier = Modifier.height(54.dp),
                             shape = RoundedCornerShape(18.dp),
                         ) {
@@ -315,34 +431,79 @@ fun BookDetailsScreen(
                     }
                 } else {
                     itemsIndexed(pages, key = { _, page -> page.id }) { index, page ->
-                        PageRow(
-                            page = page,
-                            locale = locale,
-                            onClick = { onPage(page.id) },
-                            onMoveUp = {
-                                if (index > 0) {
-                                    val reordered = pages.toMutableList()
-                                    val item = reordered.removeAt(index)
-                                    reordered.add(index - 1, item)
-                                    scope.launch { viewModel.repository.reorderPages(reordered.map { it.id }) }
+                        ReorderableVerticalItem(
+                            id = page.id,
+                            index = index,
+                            orderedIds = pages.map { it.id },
+                            state = pageReorderState,
+                            modifier = if (pageReorderState.settlingId == page.id) {
+                                Modifier
+                            } else {
+                                Modifier.animateItem(
+                                    fadeInSpec = null,
+                                    fadeOutSpec = null,
+                                    placementSpec = tween(220, easing = EaseOutCubic),
+                                )
+                            },
+                            onReorder = { from, to ->
+                                val reordered = ReorderMath.moved(pages, from, to)
+                                    .mapIndexed { pageIndex, item ->
+                                        item.copy(pageNumber = pageIndex + 1)
+                                    }
+                                pages = reordered
+                                scope.launch {
+                                    viewModel.repository.reorderPages(reordered.map { it.id })
                                 }
                             },
-                            onMoveDown = {
-                                if (index < pages.lastIndex) {
-                                    val reordered = pages.toMutableList()
-                                    val item = reordered.removeAt(index)
-                                    reordered.add(index + 1, item)
-                                    scope.launch { viewModel.repository.reorderPages(reordered.map { it.id }) }
-                                }
-                            },
-                            onDelete = { deletePage = page },
-                            canMoveUp = index > 0,
-                            canMoveDown = index < pages.lastIndex,
-                        )
+                        ) {
+                            SwipeRevealRow(
+                                onDelete = { deletePage = page },
+                                deleteDescription = locale.text("Delete", "Удалить"),
+                            ) {
+                                PageRow(
+                                    page = page,
+                                    locale = locale,
+                                    onClick = { onPage(page.id) },
+                                )
+                            }
+                        }
                     }
                 }
+                }
+                PinnedReadinessBar(
+                    ready = report.ready,
+                    pages = report.storyPageCount,
+                    sounds = report.soundCount,
+                    warnings = report.warnings.size,
+                    locale = locale,
+                    canRead = pages.any { it.pageType.isReadable } &&
+                        currentBook?.prepStatus != PrepStatus.PROCESSING,
+                    onStatus = { readinessOpen = true },
+                    onRead = onRead,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                )
             }
         }
+    }
+
+    editorSourcePath?.let { sourcePath ->
+        NativePhotoEditorDialog(
+            imageStore = viewModel.imageStore,
+            sourcePath = sourcePath,
+            locale = locale,
+            queueIndex = if (editorTotal > 1) editorTotal - editorQueue.size else null,
+            queueTotal = editorTotal.takeIf { it > 1 },
+            onDismiss = {
+                scope.launch { viewModel.imageStore.delete(sourcePath) }
+                advanceEditor(editorReady)
+            },
+            onSaved = { editedPath, _ ->
+                scope.launch { viewModel.imageStore.delete(sourcePath) }
+                advanceEditor(editorReady + editedPath)
+            },
+        )
     }
 
     if (renameOpen && currentBook != null) {
@@ -407,6 +568,9 @@ fun BookDetailsScreen(
     if (readinessOpen) {
         ReadinessDialog(
             warnings = report.warnings,
+            storyPages = report.storyPageCount,
+            soundCount = report.soundCount,
+            ambientPages = report.ambientPageCount,
             locale = locale,
             onDismiss = { readinessOpen = false },
             onPage = { pageId ->
@@ -468,38 +632,75 @@ private fun BookSummaryPanel(
 }
 
 @Composable
-private fun ReadinessCard(
+private fun PinnedReadinessBar(
     ready: Boolean,
     pages: Int,
     sounds: Int,
-    ambient: Int,
     warnings: Int,
     locale: UiLocale,
-    onClick: () -> Unit,
+    canRead: Boolean,
+    onStatus: () -> Unit,
+    onRead: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (ready) {
-                BloomGreen.copy(alpha = .13f)
-            } else {
-                MaterialTheme.colorScheme.tertiaryContainer
-            },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .98f),
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text(
-                if (ready) locale.text("Ready to read", "Готово к чтению")
-                else locale.text("$warnings things to review", "Нужно проверить: $warnings"),
-                fontWeight = FontWeight.ExtraBold,
-            )
-            Text(
-                locale.text(
-                    "$pages story pages · $sounds cue sounds · $ambient ambient pages",
-                    "$pages страниц · $sounds звуков · $ambient фоновых",
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable(onClick = onStatus)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (ready) "✓" else "!",
+                    color = if (ready) BloomGreen else Color(0xFFE8A33D),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                )
+                Text(
+                    if (ready) {
+                        locale.text(
+                            "Ready · $pages ${if (pages == 1) "page" else "pages"} · $sounds ${if (sounds == 1) "sound" else "sounds"}",
+                            "Готово · страниц: $pages · звуков: $sounds",
+                        )
+                    } else {
+                        locale.text(
+                            "$warnings things to check",
+                            "Нужно проверить: $warnings",
+                        )
+                    },
+                    color = if (ready) BloomGreen else Color(0xFFE8A33D),
+                    fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                )
+            }
+            BloomPrimaryButton(
+                text = locale.text("Read", "Читать"),
+                onClick = onRead,
+                enabled = canRead,
+                leading = {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                modifier = Modifier.height(54.dp),
             )
         }
     }
@@ -510,11 +711,6 @@ private fun PageRow(
     page: Page,
     locale: UiLocale,
     onClick: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onDelete: () -> Unit,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -551,21 +747,6 @@ private fun PageRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            Column {
-                IconButton(onClick = onMoveUp, enabled = canMoveUp) {
-                    Icon(Icons.Rounded.ArrowUpward, locale.text("Move up", "Переместить выше"))
-                }
-                IconButton(onClick = onMoveDown, enabled = canMoveDown) {
-                    Icon(Icons.Rounded.ArrowDownward, locale.text("Move down", "Переместить ниже"))
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        Icons.Rounded.Delete,
-                        locale.text("Delete", "Удалить"),
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                }
             }
         }
     }
@@ -611,18 +792,27 @@ private fun AddDictatedPageDialog(
     val activity = context as Activity
     val scope = rememberCoroutineScope()
     val recognizer = remember { VoskRecognizer(viewModel.modelManager) }
+    val recognitionSession = remember { AtomicInteger(0) }
     var text by remember { mutableStateOf("") }
     var partial by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
 
-    fun stop() {
+    fun stop(commitPartial: Boolean = true) {
+        if (commitPartial && partial.isNotBlank()) {
+            text = listOf(text.trimEnd(), partial.trim())
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+        }
+        recognitionSession.incrementAndGet()
         listening = false
         partial = ""
         scope.launch { recognizer.stop() }
     }
 
     fun start() {
+        if (listening || loading) return
+        val session = recognitionSession.incrementAndGet()
         loading = true
         scope.launch {
             viewModel.runOperation {
@@ -630,33 +820,41 @@ private fun AddDictatedPageDialog(
                     book.language,
                     callbacks = object : SpeechCallbacks {
                         override fun onPartial(value: String) {
-                            activity.runOnUiThread { partial = value }
+                            activity.runOnUiThread {
+                                if (session == recognitionSession.get()) partial = value
+                            }
                         }
 
                         override fun onResult(value: String, words: List<RecognizedWord>) {
                             activity.runOnUiThread {
-                                text = listOf(text.trimEnd(), value).filter(String::isNotBlank).joinToString(" ")
-                                partial = ""
+                                if (session == recognitionSession.get()) {
+                                    text = listOf(text.trimEnd(), value)
+                                        .filter(String::isNotBlank)
+                                        .joinToString(" ")
+                                    partial = ""
+                                }
                             }
                         }
 
                         override fun onError(message: String) {
                             activity.runOnUiThread {
-                                listening = false
-                                loading = false
-                                viewModel.notify(
-                                    locale.text(
-                                        "Voice input stopped. Please try again.",
-                                        "Голосовой ввод остановлен. Попробуйте ещё раз.",
-                                    ),
-                                )
+                                if (session == recognitionSession.get()) {
+                                    listening = false
+                                    loading = false
+                                    viewModel.notify(
+                                        locale.text(
+                                            "Voice input stopped. Please try again.",
+                                            "Голосовой ввод остановлен. Попробуйте ещё раз.",
+                                        ),
+                                    )
+                                }
                             }
                         }
                     },
                 )
-                listening = true
+                if (session == recognitionSession.get()) listening = true
             }
-            loading = false
+            if (session == recognitionSession.get()) loading = false
         }
     }
 
@@ -664,12 +862,15 @@ private fun AddDictatedPageDialog(
         if (it) start() else viewModel.notify(locale.text("Microphone permission was denied.", "Нет доступа к микрофону."))
     }
     DisposableEffect(Unit) {
-        onDispose { recognizer.closeNow() }
+        onDispose {
+            recognitionSession.incrementAndGet()
+            recognizer.closeNow()
+        }
     }
 
     AlertDialog(
         onDismissRequest = {
-            stop()
+            stop(commitPartial = false)
             onDismiss()
         },
         title = { Text(locale.text("Add a dictated page", "Добавить страницу голосом")) },
@@ -694,7 +895,8 @@ private fun AddDictatedPageDialog(
                     enabled = !loading,
                 ) {
                     if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Icon(if (listening) Icons.Rounded.Stop else Icons.Rounded.Mic, contentDescription = null)
+                    else if (listening) PulsingStoryDot(color = BloomCoral, size = 8.dp)
+                    else Icon(Icons.Rounded.Mic, contentDescription = null)
                     Text(
                         if (listening) locale.text("Stop", "Остановить")
                         else locale.text("Dictate", "Диктовать"),
@@ -708,11 +910,13 @@ private fun AddDictatedPageDialog(
                     stop()
                     if (text.isNotBlank()) onSave(text.trim())
                 },
-                enabled = text.isNotBlank(),
+                enabled = text.isNotBlank() || partial.isNotBlank(),
             ) { Text(locale.text("Add page", "Добавить")) }
         },
         dismissButton = {
-            TextButton(onClick = { stop(); onDismiss() }) { Text(locale.text("Cancel", "Отмена")) }
+            TextButton(onClick = { stop(commitPartial = false); onDismiss() }) {
+                Text(locale.text("Cancel", "Отмена"))
+            }
         },
     )
 }
@@ -720,6 +924,9 @@ private fun AddDictatedPageDialog(
 @Composable
 private fun ReadinessDialog(
     warnings: List<ReadinessWarning>,
+    storyPages: Int,
+    soundCount: Int,
+    ambientPages: Int,
     locale: UiLocale,
     onDismiss: () -> Unit,
     onPage: (String) -> Unit,
@@ -735,7 +942,36 @@ private fun ReadinessDialog(
         },
         text = {
             if (warnings.isEmpty()) {
-                Text(locale.text("Every story page has text and sound.", "На каждой странице есть текст и звук."))
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        locale.text(
+                            "Everything is prepared for story time.",
+                            "Всё готово к чтению.",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        locale.text(
+                            "✓ $storyPages story ${if (storyPages == 1) "page" else "pages"} with recognized text",
+                            "✓ Страниц с распознанным текстом: $storyPages",
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        locale.text(
+                            "✓ $soundCount keyword and character ${if (soundCount == 1) "sound" else "sounds"} matched",
+                            "✓ Звуков для слов и персонажей: $soundCount",
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        locale.text(
+                            "✓ $ambientPages ${if (ambientPages == 1) "page" else "pages"} with ambience",
+                            "✓ Страниц с фоновым звуком: $ambientPages",
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.height(320.dp),

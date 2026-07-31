@@ -18,7 +18,6 @@ data class SceneFrame(
  */
 class SceneTransformState {
     private var frame = SceneFrame()
-    private var yawBeforeFollow = frame.cameraYaw
     private var pitchBeforeFollow = frame.cameraPitch
     private var distanceBeforeFollow = frame.cameraDistance
 
@@ -32,9 +31,19 @@ class SceneTransformState {
     }
 
     @Synchronized
+    fun setCameraYaw(yawDegrees: Float) {
+        frame = frame.copy(cameraYaw = yawDegrees % 360f)
+    }
+
+    @Synchronized
     fun zoomBy(scale: Float) {
+        val minimumDistance = if (frame.followKolobok) {
+            FOLLOW_CAMERA_MIN_DISTANCE
+        } else {
+            MIN_CAMERA_DISTANCE
+        }
         frame = frame.copy(
-            cameraDistance = (frame.cameraDistance * scale).coerceIn(5.8f, 18f),
+            cameraDistance = (frame.cameraDistance * scale).coerceIn(minimumDistance, 18f),
         )
     }
 
@@ -42,8 +51,23 @@ class SceneTransformState {
     fun resetCamera() {
         frame = frame.copy(
             cameraYaw = 180f,
-            cameraPitch = if (frame.followKolobok) FOLLOW_CAMERA_PITCH else 24f,
+            cameraPitch = if (frame.followKolobok) FOLLOW_CAMERA_PITCH else REST_CAMERA_PITCH,
             cameraDistance = if (frame.followKolobok) FOLLOW_CAMERA_DISTANCE else 13.2f,
+        )
+    }
+
+    /**
+     * Vertical free-look is intentionally temporary in the predecessor.
+     * Releasing the gesture eases back to the current framing pitch while
+     * horizontal orbit and fling remain untouched.
+     */
+    @Synchronized
+    fun settlePitch(deltaSeconds: Float) {
+        val target = if (frame.followKolobok) FOLLOW_CAMERA_PITCH else REST_CAMERA_PITCH
+        val amount = (PITCH_SNAP_RATE * deltaSeconds.coerceIn(0f, .25f)).coerceIn(0f, 1f)
+        val next = frame.cameraPitch + (target - frame.cameraPitch) * amount
+        frame = frame.copy(
+            cameraPitch = if (kotlin.math.abs(next - target) < .01f) target else next,
         )
     }
 
@@ -51,19 +75,16 @@ class SceneTransformState {
     fun setFollowKolobok(enabled: Boolean) {
         if (frame.followKolobok == enabled) return
         if (enabled) {
-            yawBeforeFollow = frame.cameraYaw
             pitchBeforeFollow = frame.cameraPitch
             distanceBeforeFollow = frame.cameraDistance
             frame = frame.copy(
                 followKolobok = true,
-                cameraYaw = 180f,
                 cameraPitch = maxOf(frame.cameraPitch, FOLLOW_CAMERA_PITCH),
                 cameraDistance = minOf(frame.cameraDistance, FOLLOW_CAMERA_DISTANCE),
             )
         } else {
             frame = frame.copy(
                 followKolobok = false,
-                cameraYaw = yawBeforeFollow,
                 cameraPitch = pitchBeforeFollow,
                 cameraDistance = distanceBeforeFollow,
             )
@@ -121,7 +142,16 @@ class SceneTransformState {
     private companion object {
         const val MIN_CAMERA_PITCH = 14f
         const val MAX_CAMERA_PITCH = 62f
-        const val FOLLOW_CAMERA_PITCH = 34f
-        const val FOLLOW_CAMERA_DISTANCE = 9.4f
+        const val REST_CAMERA_PITCH = 24f
+        // The predecessor's inspection camera is 5.5 world units away
+        // horizontally at height 3.2, looking at y=.8. In the spherical
+        // camera used here that is almost exactly a 6-unit boom at 24°.
+        const val FOLLOW_CAMERA_PITCH = 24f
+        // The eye control is a close character-inspection orbit in the
+        // predecessor, not a slightly tighter island survey.
+        const val FOLLOW_CAMERA_DISTANCE = 6f
+        const val FOLLOW_CAMERA_MIN_DISTANCE = 5.8f
+        const val MIN_CAMERA_DISTANCE = 5.2f
+        const val PITCH_SNAP_RATE = 3f
     }
 }

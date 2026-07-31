@@ -6,15 +6,19 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -68,11 +72,16 @@ import com.storybloom.app.ui.StorybloomViewModel
 import com.storybloom.app.ui.UiLocale
 import com.storybloom.app.ui.components.BloomPrimaryButton
 import com.storybloom.app.ui.components.NativeImage
+import com.storybloom.app.ui.components.NativePhotoEditorDialog
+import com.storybloom.app.ui.components.ReorderableGridItem
 import com.storybloom.app.ui.components.StoryScaffold
+import com.storybloom.app.ui.components.rememberGridReorderState
+import com.storybloom.app.ui.mechanics.ReorderMath
 import com.storybloom.app.ui.text
 import com.storybloom.app.ui.theme.BloomBlue
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.floor
 
 @Composable
 fun AddBookScreen(
@@ -85,7 +94,10 @@ fun AddBookScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val imagePaths = remember { mutableStateListOf<String>() }
-    var selectedIndex by remember { mutableIntStateOf(-1) }
+    var editorSourcePath by remember { mutableStateOf<String?>(null) }
+    var editorQueue by remember { mutableStateOf<List<String>>(emptyList()) }
+    var editorTotal by remember { mutableIntStateOf(0) }
+    var editorExistingIndex by remember { mutableIntStateOf(-1) }
     var title by remember { mutableStateOf("") }
     var language by remember { mutableStateOf(BookLanguage.ENGLISH) }
     var showBookDetails by remember { mutableStateOf(false) }
@@ -93,13 +105,26 @@ fun AddBookScreen(
     var creating by remember { mutableStateOf(false) }
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val gridReorderState = rememberGridReorderState()
     val currentPendingCameraFile by rememberUpdatedState(pendingCameraFile)
 
-    fun appendImported(paths: List<String>) {
+    fun openNextEditor(queue: List<String>) {
+        if (queue.isEmpty()) {
+            editorSourcePath = null
+            editorQueue = emptyList()
+            editorTotal = 0
+            editorExistingIndex = -1
+            return
+        }
+        editorSourcePath = queue.first()
+        editorQueue = queue.drop(1)
+        editorExistingIndex = -1
+    }
+
+    fun editImported(paths: List<String>) {
         if (paths.isEmpty()) return
-        val firstNewIndex = imagePaths.size
-        imagePaths += paths
-        selectedIndex = firstNewIndex
+        editorTotal = paths.size
+        openNextEditor(paths)
     }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
@@ -108,7 +133,7 @@ fun AddBookScreen(
         if (success && uri != null) {
             importing = true
             scope.launch {
-                appendImported(viewModel.importImages(listOf(uri)))
+                editImported(viewModel.importImages(listOf(uri)))
                 importing = false
                 file?.let(viewModel.imageStore::cleanupCameraFile)
                 pendingCameraFile = null
@@ -149,7 +174,7 @@ fun AddBookScreen(
         if (uris.isNotEmpty()) {
             importing = true
             scope.launch {
-                appendImported(viewModel.importImages(uris))
+                editImported(viewModel.importImages(uris))
                 importing = false
             }
         }
@@ -213,56 +238,78 @@ fun AddBookScreen(
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(132.dp),
+                BoxWithConstraints(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        bottom = 12.dp,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    itemsIndexed(
-                        items = imagePaths,
-                        key = { _, path -> path },
-                    ) { index, path ->
-                        PageThumbnail(
-                            path = path,
-                            index = index,
-                            selected = index == selectedIndex,
-                            locale = locale,
-                            onSelect = { selectedIndex = index },
-                            onRemove = {
-                                val removed = imagePaths.removeAt(index)
-                                selectedIndex = when {
-                                    imagePaths.isEmpty() -> -1
-                                    selectedIndex > imagePaths.lastIndex -> imagePaths.lastIndex
-                                    selectedIndex > index -> selectedIndex - 1
-                                    else -> selectedIndex
-                                }
-                                scope.launch { viewModel.imageStore.delete(removed) }
-                            },
-                            onMoveEarlier = {
-                                if (index > 0) {
-                                    val page = imagePaths.removeAt(index)
-                                    imagePaths.add(index - 1, page)
-                                    selectedIndex = index - 1
-                                }
-                            },
-                            onMoveLater = {
-                                if (index < imagePaths.lastIndex) {
-                                    val page = imagePaths.removeAt(index)
-                                    imagePaths.add(index + 1, page)
-                                    selectedIndex = index + 1
-                                }
-                            },
-                            canMoveEarlier = index > 0,
-                            canMoveLater = index < imagePaths.lastIndex,
-                        )
+                    val columns = maxOf(
+                        1,
+                        floor(
+                            (maxWidth.value - 32f + ReorderMath.GridGap) /
+                                (ReorderMath.ThumbnailSize + ReorderMath.GridGap),
+                        ).toInt(),
+                    )
+                    val gridWidth =
+                        columns * ReorderMath.ThumbnailSize +
+                            (columns - 1) * ReorderMath.GridGap
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp)
+                            .width(gridWidth.dp)
+                            .fillMaxHeight(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            bottom = 12.dp,
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(ReorderMath.GridGap.dp),
+                        verticalArrangement = Arrangement.spacedBy(ReorderMath.GridGap.dp),
+                    ) {
+                        itemsIndexed(
+                            items = imagePaths,
+                            key = { _, path -> path },
+                        ) { index, path ->
+                            ReorderableGridItem(
+                                id = path,
+                                index = index,
+                                columns = columns,
+                                totalCount = imagePaths.size,
+                                horizontalSlot =
+                                    ReorderMath.ThumbnailSize + ReorderMath.GridGap,
+                                verticalSlot =
+                                    ReorderMath.ThumbnailSize + ReorderMath.GridGap,
+                                state = gridReorderState,
+                                modifier = if (gridReorderState.settlingId == path) {
+                                    Modifier
+                                } else {
+                                    Modifier.animateItem(
+                                        fadeInSpec = null,
+                                        fadeOutSpec = null,
+                                        placementSpec = tween(220, easing = EaseOutCubic),
+                                    )
+                                },
+                                onReorder = { from, to ->
+                                    val page = imagePaths.removeAt(from)
+                                    imagePaths.add(to, page)
+                                },
+                            ) {
+                                PageThumbnail(
+                                    path = path,
+                                    index = index,
+                                    locale = locale,
+                                    onSelect = {
+                                        editorTotal = 0
+                                        editorQueue = emptyList()
+                                        editorExistingIndex = index
+                                        editorSourcePath = path
+                                    },
+                                    onRemove = {
+                                        val removed = imagePaths.removeAt(index)
+                                        scope.launch { viewModel.imageStore.delete(removed) }
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -323,6 +370,30 @@ fun AddBookScreen(
                     creating = false
                     if (created != null) showBookDetails = false
                 }
+            },
+        )
+    }
+    editorSourcePath?.let { sourcePath ->
+        NativePhotoEditorDialog(
+            imageStore = viewModel.imageStore,
+            sourcePath = sourcePath,
+            locale = locale,
+            queueIndex = if (editorTotal > 1) editorTotal - editorQueue.size else null,
+            queueTotal = editorTotal.takeIf { it > 1 },
+            onDismiss = {
+                if (editorExistingIndex < 0) {
+                    scope.launch { viewModel.imageStore.delete(sourcePath) }
+                }
+                openNextEditor(editorQueue)
+            },
+            onSaved = { editedPath, _ ->
+                if (editorExistingIndex >= 0) {
+                    imagePaths[editorExistingIndex] = editedPath
+                } else {
+                    imagePaths += editedPath
+                }
+                scope.launch { viewModel.imageStore.delete(sourcePath) }
+                openNextEditor(editorQueue)
             },
         )
     }
@@ -518,28 +589,22 @@ private fun CaptureAction(
 private fun PageThumbnail(
     path: String,
     index: Int,
-    selected: Boolean,
     locale: UiLocale,
     onSelect: () -> Unit,
     onRemove: () -> Unit,
-    onMoveEarlier: () -> Unit,
-    onMoveLater: () -> Unit,
-    canMoveEarlier: Boolean,
-    canMoveLater: Boolean,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.width(ReorderMath.ThumbnailSize.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         val shape = RoundedCornerShape(12.dp)
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(.76f)
+                .size(ReorderMath.ThumbnailSize.dp)
                 .clip(shape)
                 .border(
-                    width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) BloomBlue else MaterialTheme.colorScheme.outline.copy(alpha = .55f),
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = .55f),
                     shape = shape,
                 )
                 .clickable(onClick = onSelect),
@@ -579,6 +644,7 @@ private fun PageThumbnail(
                 )
             }
         }
+        /*
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -602,6 +668,13 @@ private fun PageThumbnail(
                 )
             }
         }
+        */
+        Text(
+            text = (index + 1).toString(),
+            modifier = Modifier.padding(top = 4.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+        )
     }
 }
 
