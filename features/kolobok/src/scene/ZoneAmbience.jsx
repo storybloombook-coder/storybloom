@@ -61,13 +61,15 @@ const SMOKE_FADE_S = 0.5;
 // up, but instead sits down on the stool by the window and knits" -- the
 // old "crosses the window every 20-35s" idle only ever ran while
 // isActiveZone anyway, so most of the time Kolobok was actually visiting,
-// she simply wasn't there. Replaced with an always-visible seated pose
-// (gated the same way, isActiveZone) instead of a rare random walk-by.
+// she simply wasn't there. Replaced with an always-visible seated pose.
 // Live feedback (round 2): the window sits on the wall the default camera
 // angle never actually shows (it faces the door side instead), so a spot
 // "by the window" was never visible from a normal visit -- "just position
 // her in the middle of the house" instead, dead center of the wall
-// footprint, camera-angle-agnostic.
+// footprint, camera-angle-agnostic. Live feedback (round 3): "she should
+// knit ALWAYS when not cooking Kolobok, in story mode and non-story mode"
+// -- this is now unconditional (see the frame loop below), no longer
+// gated on isActiveZone/story state at all.
 const STOOL_X = 0;
 const STOOL_Z = 0;
 const STOOL_SEAT_H = 0.16;
@@ -306,29 +308,19 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       return;
     }
 
-    // --- Live feedback: "make sure grandma doesn't disappear when Kolobok
-    // shows up, but instead sits down on the stool by the window and
-    // knits" -- always visible (not a rare timed event) whenever Kolobok is
-    // actually at the izba. Checks storyMotion.izbaVisit TOO, not just
-    // isActiveZone -- live feedback (round 2): "I don't see Grandma
-    // knitting" during the birth/rebirth beats turned out to be because
-    // CameraRig's idle auto-follow eases the camera toward kolobokAngle
-    // MINUS its look-ahead lead, and BIRTH_STAGE pins kolobokAngle +30deg
-    // for framing while Kolobok sits on the sill -- the lead-adjusted
-    // angle lands past the izba/hare midpoint, so activeZone misreports
-    // 'hare' for nearly the whole chapter even though Kolobok is plainly
-    // still at the izba (see storyMotion.izbaVisit's own comment). A
-    // gentle rocking sway (slower/calmer than the kneading above) reads as
-    // repetitive needle-work. ---
-    const grandmaShouldShow = isActiveZone || storyMotion.izbaVisit;
+    // --- Live feedback (round 3): "grandma should knit always when not
+    // cooking Kolobok -- in story mode and non-story mode. This is her
+    // idle state when not cooking." -- unconditional now, not gated on
+    // isActiveZone/story state at all; the cooking branch above already
+    // takes priority via its own early return. A gentle rocking sway
+    // (slower/calmer than the kneading above) reads as repetitive
+    // needle-work. ---
     if (grandmaRef.current) {
-      grandmaRef.current.visible = grandmaShouldShow;
-      if (grandmaShouldShow) {
-        grandmaRef.current.position.x = STOOL_X;
-        grandmaRef.current.position.y = STOOL_SEAT_H;
-        grandmaRef.current.position.z = STOOL_Z;
-        grandmaRef.current.rotation.z = Math.sin(now / 500) * rad(3);
-      }
+      grandmaRef.current.visible = true;
+      grandmaRef.current.position.x = STOOL_X;
+      grandmaRef.current.position.y = STOOL_SEAT_H;
+      grandmaRef.current.position.z = STOOL_Z;
+      grandmaRef.current.rotation.z = Math.sin(now / 500) * rad(3);
     }
 
     // --- Active-only: ridge bird lands, pecks x3, flies off, every ~15s ---

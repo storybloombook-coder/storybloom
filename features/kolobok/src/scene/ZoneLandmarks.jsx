@@ -615,8 +615,8 @@ const WINDOW_TRIM_COLOR = '#5a4530';
 const SHUTTER_W = WINDOW_W / 2; // "half the width of the window"
 const SHUTTER_H = WINDOW_H;
 const SHUTTER_THICK = 0.03;
-const SHUTTER_LEFT_OPEN_DEG = 30;
-const SHUTTER_RIGHT_OPEN_DEG = 35;
+const SHUTTER_LEFT_OPEN_DEG = 37;
+const SHUTTER_RIGHT_OPEN_DEG = 39;
 
 /** The frame (4 trim pieces along the log-wall opening's true perimeter)
  *  plus the two open shutters. Each shutter's geometry is built HINGE-

@@ -90,18 +90,7 @@ export const storyMotion = {
   kolobokSinging: false, // mirrored out by Kolobok so the note pool can see it
   kolobokSpeed: 0,       // 0..1 roll speed, written by Kolobok each frame (POLISH_SPEC §4 dust kick)
   teleportAngle: null,   // consume-once hard reset of Kolobok's path angle (finale black)
-  grandmaCooking: false, // birth chapter: Grandma's window silhouette kneads/shapes instead of her ambient crossing
-  // Live feedback: "I don't see Grandma knitting by the window" during the
-  // birth/rebirth beats -- CameraRig's idle auto-follow eases orbit.angle
-  // toward kolobokAngle-KOLOBOK_LEAD (a look-AHEAD offset), and BIRTH_STAGE
-  // (storyChapters.js) pins kolobokAngle at +30deg for camera-framing
-  // reasons while Kolobok sits on the sill, so the LEAD-adjusted angle
-  // lands past the izba/hare territory midpoint -- activeZone misreports
-  // 'hare' for nearly the whole birth chapter even though Kolobok is
-  // visibly still at the izba. True exactly while the birth/rebirth
-  // timelines have him staged at the sill (see SILL_POS's own usage in
-  // storyChapters.js), independent of that misreporting activeZone.
-  izbaVisit: false,
+  grandmaCooking: false, // birth chapter: Grandma's window silhouette kneads/shapes instead of her knitting idle
 };
 
 // Phase 6 (WEATHER_SPEC): the live, already-BLENDED atmosphere values every
