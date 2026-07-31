@@ -12,7 +12,7 @@ import { makeToonMaterial } from './materials/toonMaterial';
 import { makeNoiseGrain } from './textures/proceduralTextures';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeRng } from './prng';
-import { BlobShadow } from './BlobShadow';
+import { BlobShadow, getSharedTexture } from './BlobShadow';
 import { Hare } from './characters/Hare';
 import { Wolf } from './characters/Wolf';
 import { Bear } from './characters/Bear';
@@ -83,6 +83,14 @@ const ROOF_BASE_COLOR = '#a5602f';
 // IzbaLogWalls) reach the apex with no leftover gap.
 const GABLE_LOG_ROWS = 4;
 const GABLE_LOG_R = (ROOF_RIDGE_Y - WALL_TOP_Y) / (GABLE_LOG_ROWS * 2);
+// Live feedback: "put those [gable panels] behind the triangle logs /
+// inside the house, now logs are not visible" -- the flat backing panel
+// used to sit AT the same z the logs' own outer surface reaches (GABLE_Z),
+// coincident with it, so the two flat/round surfaces z-fought and the
+// panel (drawn as its own separate mesh) won, hiding the logs entirely.
+// Recessed well past the logs' own INNER surface (GABLE_Z - 2*GABLE_LOG_R)
+// so it's unambiguously behind them.
+const GABLE_PANEL_INSET = GABLE_LOG_R * 2.5;
 // Small ridge log covering the seam where the two slabs/tile courses meet.
 const ROOF_RIDGE_CAP_R = 0.08;
 const ROOF_RIDGE_CAP_LEN = ROOF_RIDGE_HALF_LEN * 2 + 0.1; // small butt-end overhang past the rake ends
@@ -97,9 +105,11 @@ const ROOF_RIDGE_CAP_COLOR = '#8f4f26';
 // the roof's own true edges instead of past them.
 const ROOF_TILE_COLS = 6; // across the ridge-direction width
 const ROOF_TILE_ROWS = 6; // up the slope, eave to ridge
-const ROOF_TILE_THICK = 0.02;
-const ROOF_TILE_COLOR_A = '#a5602f';
-const ROOF_TILE_COLOR_B = '#8f4f26';
+// Live feedback: "try using hay bales instead of roof tiles... same number
+// of them... three-dimensional... orientation slightly random, 0-10deg."
+const HAY_BALE_COLOR_A = '#d4b06a';
+const HAY_BALE_COLOR_B = '#c19a4f';
+const HAY_JITTER_MAX_DEG = 10;
 
 /** ART_SPEC §4's own log-wall design: 4 walls x 5 stacked cylinders, all one
  *  instancedMesh (one draw call) since every log shares the same radius --
@@ -250,7 +260,7 @@ function makeIzbaRoofBase() {
     parts.push({
       geometry: makeTriangleGeometry(GABLE_WIDTH, ROOF_RIDGE_Y - WALL_TOP_Y),
       color: ROOF_BASE_COLOR,
-      position: [0, WALL_TOP_Y, side * GABLE_Z],
+      position: [0, WALL_TOP_Y, side * (GABLE_Z - GABLE_PANEL_INSET)],
     });
   });
   parts.push({
@@ -265,41 +275,44 @@ function makeIzbaRoofBase() {
   return mergeColoredParts(parts);
 }
 
-/** "Make the roof look like it's made of 3D tile elements... tiles should
- *  lie on the sides, overlapping and aligned with the sides... no gaps
- *  between tiles... tiles should not overlap each other... shouldn't extend
- *  beyond the edges of the roof" -- an EXACT abutting grid rather than a
- *  spaced-out shingle course: tile width/height are DERIVED from the roof's
- *  own true dimensions divided by ROOF_TILE_COLS/ROWS, so COLS*colWidth and
- *  ROWS*rowHeight equal the slab's true ridge-length and slope-length
- *  exactly -- every tile touches its neighbors with zero gap/overlap, and
- *  the outermost tiles' outer edges land exactly on the roof's own true
- *  edges (eave, ridge, and the two rake ends) instead of past them. Each
- *  tile shares its slab's own +/-ROOF_PITCH tilt (rotation.z, matching
- *  makeIzbaRoofBase). Alternating tiles get a slightly darker shade for a
- *  less mechanically regular look. Static, one draw call. */
+/** "Try using hay bales instead of roof tiles -- same number of them, three-
+ *  dimensional, orientation slightly random (0-10deg)" -- same exact grid
+ *  the tiles used (COLS*ROWS*2, positions/cell-size derived from the roof's
+ *  own true dimensions), but each cell now gets a round hay-bale cylinder
+ *  instead of a flat box. A cylinder's own length runs along local Y by
+ *  default; rotation.x=PI/2 pre-aligns that axis to Z (matching the ridge
+ *  cap's own idiom), then rotation.z=-side*ROOF_PITCH tilts it flush with
+ *  the slab, same as the tiles did. The random tilt sits in the MIDDLE
+ *  Euler slot (rotation.y) -- applied between those two, it reads as a
+ *  small extrinsic tip of the roll axis itself (each bale's own ends dip
+ *  slightly out of true alignment), rather than a spin around the bale's
+ *  own axis (invisible on a plain cylinder). Static, one draw call. */
 function makeIzbaRoofTiles() {
   const parts = [];
   const colWidth = (ROOF_RIDGE_HALF_LEN * 2) / ROOF_TILE_COLS;
   const rowHeight = ROOF_SLOPE_LEN / ROOF_TILE_ROWS;
+  const baleR = rowHeight / 2;
+  const rng = makeRng(913);
   for (let row = 0; row < ROOF_TILE_ROWS; row += 1) {
     // t=0 at the eave, t=1 at the ridge -- this row's own center, exactly.
     const t = (row + 0.5) / ROOF_TILE_ROWS;
     const y = ROOF_EAVE_Y + (ROOF_RIDGE_Y - ROOF_EAVE_Y) * t;
     const xMag = ROOF_HALF_SPAN_X * (1 - t); // distance from the ridge (x=0) toward the eave
     [1, -1].forEach((side) => {
-      // Outward normal of this slab, used to lift tiles just proud of the
+      // Outward normal of this slab, used to lift bales just proud of the
       // backing slab's own surface instead of embedding into it.
-      const liftX = side * Math.sin(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
-      const liftY = Math.cos(ROOF_PITCH) * (ROOF_SLAB_THICK / 2 + ROOF_TILE_THICK / 2);
+      const liftDist = ROOF_SLAB_THICK / 2 + baleR;
+      const liftX = side * Math.sin(ROOF_PITCH) * liftDist;
+      const liftY = Math.cos(ROOF_PITCH) * liftDist;
       const x = side * xMag + liftX;
       for (let col = 0; col < ROOF_TILE_COLS; col += 1) {
         const z = -ROOF_RIDGE_HALF_LEN + (col + 0.5) * colWidth;
+        const jitter = (rng() * 2 - 1) * rad(HAY_JITTER_MAX_DEG);
         parts.push({
-          geometry: new BoxGeometry(rowHeight, ROOF_TILE_THICK, colWidth),
-          color: (row + col) % 2 === 0 ? ROOF_TILE_COLOR_A : ROOF_TILE_COLOR_B,
+          geometry: new CylinderGeometry(baleR, baleR, colWidth, 8),
+          color: (row + col) % 2 === 0 ? HAY_BALE_COLOR_A : HAY_BALE_COLOR_B,
           position: [x, y + liftY, z],
-          rotation: [0, 0, -side * ROOF_PITCH],
+          rotation: [Math.PI / 2, jitter, -side * ROOF_PITCH],
         });
       }
     });
@@ -451,13 +464,33 @@ function IzbaDoor() {
   );
 }
 
+// Live feedback: "make the house window twice bigger and put it in the
+// middle of the wall. Make a small windowsill. Let the window be 70 percent
+// transparent, and let there be fog inside the house" -- WINDOW_Y centers
+// it on the wall's own height range (WALL_TOP_Y=1.10), replacing the old
+// near-the-top y=1.0; size doubled from the old 0.34x0.3.
+const WINDOW_W = 0.68;
+const WINDOW_H = 0.6;
+const WINDOW_Y = WALL_TOP_Y / 2;
+const WINDOW_Z = 0.66;
+const WINDOW_SILL_W = WINDOW_W + 0.1;
+const WINDOW_SILL_THICK = 0.05;
+const WINDOW_SILL_DEPTH = 0.12;
+const WINDOW_SILL_COLOR = '#5a4530';
+const WINDOW_FOG_COLOR = '#d9d6cc';
+
 /** The izba's window pane, on the CENTER-facing wall (local +z after the
  *  landmark group's a+PI yaw): the story camera watches the birth/rebirth
  *  beats from KOLOBOK_LEAD around the ring, which sees this side. Emissive
  *  intensity rides storyMotion.windowGlow (birth pulse / rebirth glow,
- *  STORY_SPEC §3); ANIMATION_SPEC §6's time-of-day glow joins in Phase 6. */
+ *  STORY_SPEC §3); ANIMATION_SPEC §6's time-of-day glow joins in Phase 6.
+ *  Now 3 pieces: a soft foggy haze recessed just inside the glass (reusing
+ *  BlobShadow's own shared radial-alpha texture as a plain white falloff,
+ *  tinted light here instead of shadow-dark), the glass itself (now
+ *  transparent), and a small sill box protruding from the wall below it. */
 function IzbaWindow() {
   const materialRef = useRef();
+  const fogTexture = useMemo(() => getSharedTexture(), []);
   useFrame(() => {
     if (materialRef.current) {
       // Time-of-day glow (ART_SPEC §8 `window` column, blended) with the
@@ -469,16 +502,35 @@ function IzbaWindow() {
     }
   });
   return (
-    <mesh position={[0, 1.0, 0.66]}>
-      <planeGeometry args={[0.34, 0.3]} />
-      <meshStandardMaterial
-        ref={materialRef}
-        color="#3a3229"
-        emissive="#ffb84d"
-        emissiveIntensity={0}
-        roughness={0.6}
-      />
-    </mesh>
+    <group>
+      <mesh position={[0, WINDOW_Y, WINDOW_Z - 0.16]}>
+        <planeGeometry args={[WINDOW_W * 1.1, WINDOW_H * 1.1]} />
+        <meshBasicMaterial
+          map={fogTexture}
+          color={WINDOW_FOG_COLOR}
+          transparent
+          opacity={0.55}
+          depthWrite={false}
+          side={DoubleSide}
+        />
+      </mesh>
+      <mesh position={[0, WINDOW_Y, WINDOW_Z]}>
+        <planeGeometry args={[WINDOW_W, WINDOW_H]} />
+        <meshStandardMaterial
+          ref={materialRef}
+          color="#3a3229"
+          emissive="#ffb84d"
+          emissiveIntensity={0}
+          roughness={0.6}
+          transparent
+          opacity={0.3}
+        />
+      </mesh>
+      <mesh position={[0, WINDOW_Y - WINDOW_H / 2 - WINDOW_SILL_THICK / 2, WINDOW_Z + WINDOW_SILL_DEPTH / 2]}>
+        <boxGeometry args={[WINDOW_SILL_W, WINDOW_SILL_THICK, WINDOW_SILL_DEPTH]} />
+        <meshStandardMaterial color={WINDOW_SILL_COLOR} roughness={0.75} />
+      </mesh>
+    </group>
   );
 }
 

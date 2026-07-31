@@ -8,8 +8,11 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
 import { eggMotion } from './easterEggs';
+import { makeToonMaterial } from './materials/toonMaterial';
+import { getSharedTexture } from './BlobShadow';
 
 const dummy = new Object3D();
+const shadowDummy = new Object3D();
 
 // ============================================================ Izba ========
 // ART_SPEC §11 + ANIMATION_SPEC §9. Chimney smoke is always-on (a Points
@@ -30,6 +33,13 @@ const PUFF_BASE_R = CHIMNEY_PIPE_TOP_R * 2; // sphere diameter = 2x pipe diamete
 const PUFF_SIZE_VARIANCE = 0.2;
 const PUFF_GAP_S = 0.3;
 const PUFF_RISE_S = 3;
+// Live feedback: "bubbles coming from the pipe should have shadows and
+// light effects as cloud spheres" -- PUFF_SHADOW_Y is a fixed height near
+// the roof surface below the chimney (ZoneLandmarks.jsx's CHIMNEY_LOCAL/
+// makeIzbaRoofBase put the surface there at ~1.41; chimneyPos[1] below is
+// the pipe's own TOP at 1.65), tracking each puff's own sway/wind but
+// pinned to that one height rather than following the puff's own rise.
+const PUFF_SHADOW_Y_OFFSET = -0.24;
 // Live feedback: "the default smoke disappears and bubbles rise; after 6
 // seconds, the smoke continues to billow" -- the normal ambient puffs pause
 // (hidden, not reset -- its own simulation keeps advancing underneath so it
@@ -60,6 +70,22 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
   );
 
   const puffRef = useRef();
+  const puffShadowRef = useRef();
+  // Live feedback: "shadows and light effects as cloud spheres" -- same
+  // toon material + rimStrength=0.35 treatment Sky.jsx's own clouds use
+  // ("apply the same lighting effect to the clouds as on the characters"),
+  // instead of the old bare unlit meshBasicMaterial.
+  const puffMaterial = useMemo(() => {
+    const m = makeToonMaterial({ color: '#7a756c', rimStrength: 0.35 });
+    m.transparent = true;
+    m.opacity = 0.55;
+    m.fog = false;
+    return m;
+  }, []);
+  // Reuses BlobShadow's own shared radial-alpha texture/tint (same "flat
+  // radial-falloff plane, dark center fading to nothing" every other
+  // shadow in this codebase uses) rather than allocating a new one.
+  const puffShadowTexture = useMemo(() => getSharedTexture(), []);
   // seen: burst-counter edge-detect, seeded from the counter's CURRENT value
   // at mount (same anti-replay pattern as every other burst tracker in this
   // codebase -- see KolobokParticles.jsx's own catchBurstWas for the full
@@ -126,16 +152,16 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
         // just freeze it floating in place.
         if (!eggMotion.chimneyHeld && p.t < 1) p.t += dt / PUFF_RISE_S;
         const rising = !eggMotion.chimneyHeld && p.t >= 0 && p.t < 1;
+        let px = chimneyPos[0];
+        let pz = chimneyPos[2];
         if (rising) {
           const rise = p.t * 1.5;
           const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
           const windDriftX = wind.direction[0] * wind.strength * p.t * 0.5;
           const windDriftZ = wind.direction[2] * wind.strength * p.t * 0.5;
-          dummy.position.set(
-            chimneyPos[0] + sway + windDriftX,
-            chimneyPos[1] + rise,
-            chimneyPos[2] + sway * 0.6 + windDriftZ,
-          );
+          px = chimneyPos[0] + sway + windDriftX;
+          pz = chimneyPos[2] + sway * 0.6 + windDriftZ;
+          dummy.position.set(px, chimneyPos[1] + rise, pz);
           dummy.scale.setScalar(p.radius);
         } else {
           // Still waiting its own stagger delay, or already done -- parked
@@ -146,8 +172,26 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         puffRef.current.setMatrixAt(i, dummy.matrix);
+
+        // Live feedback: "bubbles... should have shadows... as cloud
+        // spheres" -- same technique Sky.jsx's cloudShadowRef uses, tracking
+        // this same puff's own sway/wind but pinned to a fixed height near
+        // the roof surface instead of following its rise.
+        if (puffShadowRef.current) {
+          if (rising) {
+            shadowDummy.position.set(px, chimneyPos[1] + PUFF_SHADOW_Y_OFFSET, pz);
+            shadowDummy.scale.setScalar(p.radius * 2.2);
+          } else {
+            shadowDummy.position.set(chimneyPos[0], -5, chimneyPos[2]);
+            shadowDummy.scale.setScalar(0.001);
+          }
+          shadowDummy.rotation.set(-Math.PI / 2, 0, 0);
+          shadowDummy.updateMatrix();
+          puffShadowRef.current.setMatrixAt(i, shadowDummy.matrix);
+        }
       });
       puffRef.current.instanceMatrix.needsUpdate = true;
+      if (puffShadowRef.current) puffShadowRef.current.instanceMatrix.needsUpdate = true;
     }
 
     // Live feedback: "the default smoke disappears... after 6 seconds, the
@@ -274,13 +318,19 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.65, 0.15] }) 
           depthWrite={false}
         />
       </points>
+      {/* Live feedback: "bubbles... should have shadows... as cloud
+          spheres" -- same flat radial-falloff shadow plane Sky.jsx's own
+          cloudShadowRef uses. */}
+      <instancedMesh ref={puffShadowRef} args={[undefined, undefined, PUFF_COUNT]} renderOrder={1}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial map={puffShadowTexture} color="#1e1a14" transparent opacity={0.28} depthWrite={false} fog={false} />
+      </instancedMesh>
       {/* Chimney smoke spheres (live feedback, reworked): actual sphere
           meshes now (not Points) since each one needs its own independent
           size -- a PointsMaterial's `size` is one shared value for the
           whole pool, which can't express "vary by +/-20% each". */}
-      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]}>
+      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]} material={puffMaterial}>
         <sphereGeometry args={[1, 10, 8]} />
-        <meshBasicMaterial color="#7a756c" transparent opacity={0.55} depthWrite={false} fog={false} />
       </instancedMesh>
       <mesh ref={grandmaRef} geometry={grandmaGeometry} position={[0, 0, 0]} visible={false}>
         <meshBasicMaterial vertexColors />
