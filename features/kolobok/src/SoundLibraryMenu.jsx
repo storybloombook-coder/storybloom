@@ -23,7 +23,7 @@ import {
   Modal, View, Text, Pressable, ScrollView, StyleSheet,
 } from 'react-native';
 import Animated, {
-  useSharedValue, useAnimatedStyle, withRepeat, withSequence, withTiming, interpolate, interpolateColor,
+  useSharedValue, useAnimatedStyle, withRepeat, withSequence, withTiming, interpolate,
 } from 'react-native-reanimated';
 import {
   useAudioRecorder,
@@ -67,34 +67,39 @@ function SlotRow({
   const slot = getSlotDefinition(slotId);
   const labelKey = getSlotLabelKey(slotId);
   const label = t(labelKey, locale);
-  const durationLabel = `${formatSeconds(slot.durationMs)}${t('sound.unit.seconds', locale)}`;
+  // Live feedback: "no need for a prompt regarding sound duration" for
+  // unlimited (My Ambience) slots -- durationMs there is only the
+  // procedural default's own loop length, not a recording target, so
+  // showing it here would read as a duration limit that doesn't exist.
+  const durationLabel = slot.unlimited ? null : `${formatSeconds(slot.durationMs)}${t('sound.unit.seconds', locale)}`;
 
-  const glow = useSharedValue(0);
+  // Live feedback: "when recording finishes, the record button should be
+  // back to idle -- now it's red after recording." Rebuilt as a pulse
+  // overlay that only MOUNTS while `recording` is true (rather than a
+  // static-vs-animated style swap on the button's own fill/shadow) so
+  // there's no way for a stale animated value to leave it looking "stuck" --
+  // when recording ends the overlay is simply removed from the tree.
+  const pulse = useSharedValue(0);
   useEffect(() => {
     if (!recording) {
-      glow.value = 0;
+      pulse.value = 0;
       return;
     }
-    glow.value = withRepeat(
+    pulse.value = withRepeat(
       withSequence(withTiming(1, { duration: GLOW_HALF_MS }), withTiming(0, { duration: GLOW_HALF_MS })),
       -1,
       false,
     );
-  }, [recording, glow]);
-  const glowOuterStyle = useAnimatedStyle(() => ({
-    elevation: interpolate(glow.value, [0, 1], [4, 14]),
-    shadowOpacity: interpolate(glow.value, [0, 1], [0.5, 1]),
-    shadowRadius: interpolate(glow.value, [0, 1], [4, 14]),
-  }));
-  const glowInnerStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(glow.value, [0, 1], ['#c0392b', '#ff6b5b']),
+  }, [recording, pulse]);
+  const pulseStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(pulse.value, [0, 1], [0.35, 0.85]),
   }));
 
   return (
     <View style={styles.row}>
       <View style={styles.rowLabelWrap}>
         <Text style={styles.rowLabel} numberOfLines={1}>{label}</Text>
-        <Text style={styles.rowDuration}>{durationLabel}</Text>
+        {durationLabel && <Text style={styles.rowDuration}>{durationLabel}</Text>}
         <View style={[styles.badge, overridden && styles.badgeCustom]}>
           <Text style={[styles.badgeText, overridden && styles.badgeTextCustom]}>
             {t(overridden ? 'sound.badge.custom' : 'sound.badge.default', locale)}
@@ -106,8 +111,8 @@ function SlotRow({
           accessibilityRole="button"
           accessibilityLabel={`${t(muted ? 'sound.action.unmute' : 'sound.action.mute', locale)}: ${label}`}
           hitSlop={8}
-          style={styles.actionBtnOuter}
-          innerStyle={[styles.actionBtnInner, !muted && styles.muteBtnActiveInner]}
+          style={[styles.actionBtnOuter, !muted && styles.muteBtnActiveOuter]}
+          innerStyle={styles.actionBtnInner}
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
@@ -128,12 +133,15 @@ function SlotRow({
           accessibilityRole="button"
           accessibilityLabel={`${t('sound.action.record', locale)}: ${label}`}
           hitSlop={8}
-          style={[styles.actionBtnOuter, recording && styles.recordGlowBase, recording && glowOuterStyle]}
-          innerStyle={[styles.actionBtnInner, recording ? glowInnerStyle : styles.recordBtnInner]}
+          style={[styles.actionBtnOuter, styles.recordBtnOuter]}
+          innerStyle={styles.actionBtnInner}
           disabled={busy}
           onPress={() => onRecord(slotId)}
         >
-          <Text style={[styles.actionIcon, recording ? styles.recordIconActive : styles.recordIcon]}>●</Text>
+          <Text style={[styles.actionIcon, styles.recordIcon]}>●</Text>
+          {recording && (
+            <Animated.View pointerEvents="none" style={[styles.recordPulseOverlay, pulseStyle]} />
+          )}
         </TactileButton>
         {overridden && (
           <TactileButton
@@ -432,11 +440,12 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   {flowSlot.unlimited && (
                     <TactileButton
                       accessibilityRole="button"
+                      accessibilityLabel={t('sound.recording.stopRecording', locale)}
                       style={styles.stopBtnOuter}
                       innerStyle={styles.stopBtnInner}
                       onPress={handleManualStop}
                     >
-                      <Text style={styles.stopBtnText}>{t('sound.recording.stopRecording', locale)}</Text>
+                      <Text style={styles.stopBtnIcon}>⏹</Text>
                     </TactileButton>
                   )}
                 </>
@@ -533,17 +542,20 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '700', color: '#6b6558' },
   badgeTextCustom: { color: '#8a5a2b' },
   rowActions: { flexDirection: 'row', gap: 6 },
-  // Two-layer button (live feedback: "should not be polygonal, should be
-  // round with a shadow" -- Android's elevation shadow didn't reliably
-  // follow borderRadius on a single unclipped layer). Outer carries
-  // position/size/shadow with NO overflow:hidden (so the shadow isn't
-  // clipped away); TactileButton's own inner View carries the fill and
-  // clips to the SAME radius.
+  // Two-layer button (live feedback: "surrounded by a hexagon, should be a
+  // circle" -- Android's elevation shadow/outline doesn't reliably compute a
+  // round shape for a view with NO backgroundColor of its own (transparent),
+  // falling back to a low-poly approximation instead. The FILL color now
+  // lives on the OUTER view (the one that actually casts the shadow and
+  // needs a real background for Android to derive a correct round outline);
+  // the inner View (TactileButton's own, already overflow:hidden) only
+  // centers content and clips it to the same radius. 37x37 -- 15% larger
+  // than the previous 32x32, per live feedback.
   actionBtnOuter: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'transparent',
+    width: 37,
+    height: 37,
+    borderRadius: 18.5,
+    backgroundColor: 'rgba(46,42,34,0.06)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
@@ -551,17 +563,21 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   actionBtnInner: {
-    borderRadius: 16,
-    backgroundColor: 'rgba(46,42,34,0.06)',
+    borderRadius: 18.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   actionIcon: { fontSize: 14, color: '#2e2a22' },
-  muteBtnActiveInner: { backgroundColor: 'rgba(46,42,34,0.14)' },
-  recordBtnInner: { backgroundColor: 'rgba(192,57,43,0.14)' },
-  recordGlowBase: { shadowColor: '#ff3b30' },
+  muteBtnActiveOuter: { backgroundColor: 'rgba(46,42,34,0.14)' },
+  recordBtnOuter: { backgroundColor: 'rgba(192,57,43,0.14)' },
   recordIcon: { color: '#c0392b' },
-  recordIconActive: { color: '#fff' },
+  // Only mounted while actively recording (see SlotRow) -- pulses opacity
+  // over the button's existing round shape, clipped by the SAME inner
+  // overflow:hidden view since it's rendered as a child inside TactileButton.
+  recordPulseOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#ff3b30',
+  },
   recordOverlay: {
     position: 'absolute',
     left: 0,
@@ -598,14 +614,29 @@ const styles = StyleSheet.create({
   recordBody: { fontSize: 12, color: '#7a3350', textAlign: 'center', marginTop: 2, opacity: 0.85 },
   dismissBtn: { marginTop: 10, paddingHorizontal: 16, paddingVertical: 8 },
   dismissText: { fontSize: 14, fontWeight: '600', color: '#7a3350' },
-  stopBtnOuter: { marginTop: 6, borderRadius: 18 },
-  stopBtnInner: {
-    borderRadius: 18,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
+  // Round icon-only Stop button (live feedback: the old pill-with-text
+  // "looked strange" -- a round button with a stop glyph inside, matching
+  // every other action button's own round-with-shadow treatment + the
+  // press-scale/haptic TactileButton already gives every button here).
+  // backgroundColor lives on the outer layer for the same reason as
+  // actionBtnOuter above (Android's elevation outline needs a real
+  // background to compute a round shape, not a transparent one).
+  stopBtnOuter: {
+    marginTop: 6,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: '#7a3350',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  stopBtnInner: {
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stopBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  stopBtnIcon: { fontSize: 26, color: '#fff' },
 });

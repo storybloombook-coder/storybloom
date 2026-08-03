@@ -589,7 +589,7 @@ const styles = StyleSheet.create({
   soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)
   muteButton: { bottom: 240 }, // stacked directly above soundButton (192 + 40 + 8 gap)
   soundButtonIcon: {
-    fontSize: 39, // triple storyButtonText's 13px, this glyph only
+    fontSize: 25, // live feedback: 35% smaller than the previous 39
     // Live feedback: still read too low after the first attempt --
     // textAlignVertical only centers within an EXPLICIT height, and without
     // one Text just sizes to its own intrinsic (baseline-anchored) content,
