@@ -19,6 +19,11 @@ const PATH_TRUNK_KEEP_CLEAR = PATH_HALF_WIDTH + 0.15;
 // around it, so keep tree TRUNKS clear of a generous circle around the
 // pond's world position too.
 const POND_POS = pointOnCircle(POND_RADIUS, rad(POND_ANGLE_DEG));
+// Hand-tuned against the pond's CURRENT size/position (water rim ~1.98 +
+// willow/reeds/beach margin) -- unlike PATH_TRUNK_KEEP_CLEAR above, this
+// isn't derived from a zones.js constant, so it won't auto-adjust if the
+// pond is ever resized/repositioned. Revisit this value if POND_RADIUS or
+// the pond's visual footprint changes.
 const POND_TREE_KEEP_CLEAR = 2.6;
 
 /**
