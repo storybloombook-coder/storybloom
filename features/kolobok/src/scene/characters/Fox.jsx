@@ -134,7 +134,17 @@ export function Fox({ mode, isActiveZone }) {
       // approach left it (normally 0.5) fixes that.
       if (encounterMotion.phase === 'approach') s.approachZ = 0.5 * encounterMotion.phaseT;
     } else if (!isMine) {
-      s.approachZ = 0;
+      // Live feedback: "after saying hello, the fox jumps/teleports back to
+      // its idle spot -- should return smoothly instead." Root cause: the
+      // 'retreat' branch above eases approachZ toward 0 over the timeline's
+      // own duration, but EncounterDirector.jsx clears encounterMotion.
+      // zoneId (making isMine false) the instant its retreat timeline
+      // reports done -- which can land in the same frame Fox's own retreat
+      // math hasn't quite reached exactly 0 yet. Hard-setting 0 here turned
+      // that last sliver into a snap. Easing it out instead (same
+      // exponential-lag idiom the tail tip uses above) closes the gap
+      // smoothly however small it is, with no visible jump either way.
+      s.approachZ += (0 - s.approachZ) * (1 - Math.exp(-dt / 0.15));
     }
     // Lean 8deg toward Kolobok then spring back (encounterMotion.leanSpringT
     // eases 0->1 via easeOutBack, so reading it directly as a lean-then-
