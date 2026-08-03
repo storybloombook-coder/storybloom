@@ -116,7 +116,7 @@ function SlotRow({
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
-          <Text style={styles.actionIcon}>{muted ? '⊘' : '♪'}</Text>
+          <Text style={styles.actionIcon}>{muted ? '🔇' : '🔊'}</Text>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -553,19 +553,16 @@ const styles = StyleSheet.create({
   // than the previous 32x32, per live feedback.
   //
   // Live feedback: "style fixed partially and not consistent" -- every
-  // action button (mute/play/record/reset) now shares this EXACT SAME
-  // outer/inner pair with no per-button background override; only the
-  // icon glyph (and, for record, the pulse overlay while actually
-  // capturing) differs. The mute icon was also swapped from the color
-  // emoji (🔇/🔊 render with their own baked-in colors/shape on Android,
-  // ignoring actionIcon's color entirely -- the actual source of the
-  // inconsistency) to plain text glyphs that behave like every other icon
-  // here.
+  // action button (mute/play/record/reset) shares this EXACT SAME
+  // outer/inner pair with no per-button background override at all; only
+  // the icon glyph (and, for record, the pulse overlay while actually
+  // capturing) differs. Fill brightened from the original 6% opacity
+  // (read as washed-out/barely visible) to a clearly visible solid tone.
   actionBtnOuter: {
     width: 37,
     height: 37,
     borderRadius: 18.5,
-    backgroundColor: 'rgba(46,42,34,0.06)',
+    backgroundColor: 'rgba(46,42,34,0.32)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
