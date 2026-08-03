@@ -821,7 +821,18 @@ function Landmark({ zone }) {
         <Character mode={mode} isActiveZone={isActive} />
       )}
       {Ambience && <Ambience isActiveZone={isActive} />}
-      {/* Generous invisible hitbox so taps land easily on mobile */}
+      {/* Generous invisible hitbox so taps land easily on mobile.
+          WARNING for future additions: this sphere fully encloses everything
+          in this zone group (chimney included), and a raycast always hits an
+          enclosing sphere's surface before anything nested inside it -- so
+          a NEW small tap target added inside this group (as its own nested
+          hitbox mesh with onClick) can NEVER actually be reached; this
+          sphere's own onTap always wins the race first. That was the
+          chimney's exact bug across three rounds of live-feedback fixes (see
+          IzbaChimney's comment) before landing on the current fix: a new
+          nested target must do its own proximity check (e.ray.distanceToPoint
+          against a known world position, see onZonePointerDown/onTap above)
+          from THIS group's own onTap/onPointerDown, not a nested hitbox. */}
       <mesh position={[0, 1, 0]} visible={false}>
         <sphereGeometry args={[1.7, 8, 8]} />
         <meshBasicMaterial transparent opacity={0} />
