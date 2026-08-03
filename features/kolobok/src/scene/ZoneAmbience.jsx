@@ -586,7 +586,14 @@ export function BearAmbience({ isActiveZone }) {
     geo.setAttribute('position', new BufferAttribute(new Float32Array(BEE_MAX * 3), 3));
     return geo;
   }, []);
-  const beeState = useRef(new Array(BEE_MAX).fill(0).map((_, i) => ({ angle: (i / BEE_MAX) * Math.PI * 2, r: 0.2 + Math.random() * 0.1 })));
+  // Live feedback: "wider arcs -- right now they're hiding in the bear."
+  // The orbit was centered on [0,0,0] (this zone group's own origin, i.e.
+  // exactly where the Bear character itself stands) with a tiny 0.2-0.3
+  // radius -- easily occluded by the bear's own body. Recentered on the
+  // honey log's position (see logRef's own [0.5,0.12,0.3] below, lifted a
+  // bit above it) and widened well past the bear's silhouette.
+  const BEE_ORBIT_CENTER = [0.5, 0.3, 0.3];
+  const beeState = useRef(new Array(BEE_MAX).fill(0).map((_, i) => ({ angle: (i / BEE_MAX) * Math.PI * 2, r: 0.5 + Math.random() * 0.3 })));
 
   const logGeometry = useMemo(() => mergeColoredParts([
     { geometry: new CylinderGeometry(0.12, 0.12, 0.7, 8), color: '#6b4c33', rotation: [0, 0, Math.PI / 2] },
@@ -619,7 +626,12 @@ export function BearAmbience({ isActiveZone }) {
         }
         b.angle += dt * 1.2;
         const wobble = Math.sin(Date.now() / 300 + i) * 0.05;
-        positions.setXYZ(i, Math.sin(b.angle) * b.r, 0.15 + wobble, Math.cos(b.angle) * b.r);
+        positions.setXYZ(
+          i,
+          BEE_ORBIT_CENTER[0] + Math.sin(b.angle) * b.r,
+          BEE_ORBIT_CENTER[1] + wobble,
+          BEE_ORBIT_CENTER[2] + Math.cos(b.angle) * b.r,
+        );
       });
       positions.needsUpdate = true;
       beeGeometry.computeBoundingSphere();
