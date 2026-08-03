@@ -9,6 +9,7 @@ import {
   buildSharedBeat, buildFoxBeat, buildIzbaBeat, resetEncounterMotion,
   currentApproachFraction, buildForcedRetreat,
 } from './encounterBeats';
+import { playSlot } from '../services/soundLibrary';
 
 // Inverse of Scene3D's SWIPE_SENSITIVITY (px -> radians), so orbit.angle's
 // own frame-to-frame delta can be read back out as an approximate pixel
@@ -31,6 +32,21 @@ const LINE_KEY = {
   wolf: { eat: 'line.eat.wolf', song: 'song.full' },
   bear: { eat: 'line.eat.bear', song: 'song.full' },
   fox: { flatter: 'line.fox.flatter', song: 'song.full' },
+};
+
+// Live feedback: "a separate section for all the lines in the fairy tale,
+// so the entire story can be voiced." 'song.full' is deliberately absent --
+// Kolobok.jsx already plays dialogue.kolobokSong on the encounterMotion.
+// singing edge (buildSharedBeat's own 'song' step sets both together), so
+// mapping it here too would double-fire it. Fox's own beat never sets that
+// flag (no singing bob during that encounter, existing behavior), so its
+// 'song' step -- like this map -- has nothing to add here either.
+const LINE_SOUND_SLOT = {
+  'line.eat.hare': 'dialogue.hareEat',
+  'line.eat.wolf': 'dialogue.wolfEat',
+  'line.eat.bear': 'dialogue.bearEat',
+  'line.fox.flatter': 'dialogue.foxFlatter',
+  'line.grandma.tap': 'dialogue.grandmaTap',
 };
 
 /** Owns every INTERACTIVE zone-tap encounter beat (ANIMATION_SPEC §4/§5/§9):
@@ -81,7 +97,12 @@ export function EncounterDirector() {
     // all should show once the tale's finished -- so this simply never
     // publishes a line in either case.
     const setLine = (name) => {
-      if (story.mode !== 'playing' && !storyCompleted) setEncounterLine(lineKeys[name]);
+      if (story.mode !== 'playing' && !storyCompleted) {
+        const lineKey = lineKeys[name];
+        setEncounterLine(lineKey);
+        const soundSlot = LINE_SOUND_SLOT[lineKey];
+        if (soundSlot) playSlot(soundSlot);
+      }
     };
     return BEAT_BUILDERS[zoneId]({ setPhase: setEncounterPhase, setLine });
   };

@@ -283,20 +283,22 @@ const loopPlayers = new Map(); // slotId -> { player, uri, wantsPlaying }
  *  masterEnabled -- while muted this still records the request but leaves
  *  the underlying player paused, so setMasterEnabled(true) above knows
  *  which loops to actually resume. */
-export function startLoop(slotId, uri) {
+export function startLoop(slotId, uri, { preview = false } = {}) {
   if (!uri) return;
+  const audible = preview || masterEnabled;
   const existing = loopPlayers.get(slotId);
   if (existing && existing.uri === uri) {
     existing.wantsPlaying = true;
-    if (masterEnabled && !existing.player.playing) existing.player.play();
+    existing.player.volume = preview ? 1 : masterVolume;
+    if (audible && !existing.player.playing) existing.player.play();
     return;
   }
   if (existing) existing.player.remove();
   const player = createAudioPlayer(uri);
   player.loop = true;
-  player.volume = masterVolume;
+  player.volume = preview ? 1 : masterVolume;
   loopPlayers.set(slotId, { player, uri, wantsPlaying: true });
-  if (masterEnabled) player.play();
+  if (audible) player.play();
 }
 
 export function setLoopVolume(slotId, volume) {

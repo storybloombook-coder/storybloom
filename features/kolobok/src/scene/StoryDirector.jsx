@@ -7,9 +7,38 @@ import {
 } from '../state/sceneStore';
 import { resetEncounterMotion } from './encounterBeats';
 import { CHAPTERS, buildRebirthResume } from './storyChapters';
+import { playSlot } from '../services/soundLibrary';
 
 const LAUNCH_IDLE_MS = 1500;  // STORY_SPEC §1: sceneReady + 1.5s of no input
 const RESUME_IDLE_MS = 8000;  // §1: 8s idle in free mode resumes the story
+
+// Live feedback: "a separate section for all the lines in the fairy tale,
+// so the entire story can be voiced." Every chapter builder calls
+// ctx.setNarration(lineKey) already -- wrapping that ONE function here
+// (rather than touching every call site in storyChapters.js) plays the
+// matching dialogue slot alongside it. 'song.full' is deliberately absent,
+// same reasoning as EncounterDirector.jsx's own LINE_SOUND_SLOT: Kolobok.jsx
+// already plays dialogue.kolobokSong on the encounterMotion.singing edge,
+// which buildSharedBeat sets in the very same step as this 'song' line --
+// mapping it here too would double-fire it.
+const NARRATION_SOUND_SLOT = {
+  'line.eat.hare': 'dialogue.hareEat',
+  'line.eat.wolf': 'dialogue.wolfEat',
+  'line.eat.bear': 'dialogue.bearEat',
+  'line.fox.flatter': 'dialogue.foxFlatter',
+  'line.grandma.tap': 'dialogue.grandmaTap',
+  'story.bake1': 'dialogue.bake1',
+  'story.bake1b': 'dialogue.bake1b',
+  'story.bake2': 'dialogue.bake2',
+  'story.brag.grandma': 'dialogue.bragGrandma',
+  'story.brag.hare': 'dialogue.bragHare',
+  'story.brag.wolf': 'dialogue.bragWolf',
+  'story.brag.bear': 'dialogue.bragBear',
+  'story.fox.intro': 'dialogue.foxIntro',
+  'story.fox.closer': 'dialogue.foxCloser',
+  'story.snap': 'dialogue.snap',
+  'story.rebirth': 'dialogue.rebirth',
+};
 
 // Live-review feedback (2026-07-19): the spec's ~64s loop pacing read too
 // fast on device -- run every chapter at half speed (~128s loop) by scaling
@@ -61,7 +90,11 @@ export function StoryDirector() {
   if (!ctxRef.current) {
     const s = useSceneStore.getState();
     ctxRef.current = {
-      setNarration: s.setNarration,
+      setNarration: (lineKey, speaker) => {
+        s.setNarration(lineKey, speaker);
+        const soundSlot = lineKey ? NARRATION_SOUND_SLOT[lineKey] : null;
+        if (soundSlot) playSlot(soundSlot);
+      },
       setStoryEncounter: s.setStoryEncounter,
       setStoryEncounterPhase: s.setStoryEncounterPhase,
       setFadeBlack: s.setFadeBlack,

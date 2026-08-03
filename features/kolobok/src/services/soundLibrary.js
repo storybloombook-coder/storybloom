@@ -38,6 +38,15 @@ export const CATEGORIES = [
   { id: 'interactions', labelKey: 'sound.category.interactions' },
   { id: 'ui', labelKey: 'sound.category.ui' },
   { id: 'story', labelKey: 'sound.category.story' },
+  // Live feedback: "a separate section for all the lines in the fairy tale,
+  // so the entire story can be voiced" -- every quoted/narrated line in the
+  // tale (STRINGS.md's song/line/story keys), one recordable slot each.
+  { id: 'dialogue', labelKey: 'sound.category.dialogue' },
+  // Live feedback: "record and play ambient sound -- no recording limits...
+  // two sounds, day and night... should loop." User-recordable, NOT
+  // procedurally defaulted the way every other category is -- see the
+  // `unlimited` flag and myAmbienceDefault() below.
+  { id: 'myAmbience', labelKey: 'sound.category.myAmbience' },
 ];
 
 // ---------------------------------------------------------- recipe helpers
@@ -272,27 +281,6 @@ const KOLOBOK_SLOTS = [
     ]),
   },
   {
-    // Live feedback: the popup bubble text ("I ran away from Grandma...")
-    // is Kolobok's one actual line of dialogue -- unlike the other Kolobok
-    // slots (non-verbal reactions), this is meant to be RE-RECORDED with
-    // spoken words. The procedural default is a wordless instrumental
-    // preview of the same tune (reusing the note1-5 pitches) so the slot
-    // still has a sensible out-of-the-box sound before anyone records over
-    // it. Duration matches the interactive encounter beat's own "singing"
-    // window (encounterBeats.js: s(1300)->s(2000), 700ms at timeScale 1).
-    id: 'kolobok.songLine',
-    category: 'kolobok',
-    durationMs: 700,
-    loop: false,
-    synthesize: () => mixLayers(0.7, [
-      { buf: triangleTone(0.12, 440), atS: 0, gain: 0.5 },
-      { buf: triangleTone(0.12, 494), atS: 0.13, gain: 0.5 },
-      { buf: triangleTone(0.12, 554), atS: 0.26, gain: 0.5 },
-      { buf: triangleTone(0.12, 659), atS: 0.39, gain: 0.5 },
-      { buf: triangleTone(0.12, 740), atS: 0.52, gain: 0.5 },
-    ]),
-  },
-  {
     id: 'kolobok.giggle',
     category: 'kolobok',
     durationMs: 400,
@@ -466,7 +454,79 @@ const STORY_SLOTS = [
   { id: 'story.loopTransition', category: 'story', durationMs: 200, loop: false, synthesize: () => blip(0.2, 600, 750, 30) },
 ];
 
-const SLOTS = [...KOLOBOK_SLOTS, ...ANIMAL_SLOTS, ...NATURE_SLOTS, ...INTERACTION_SLOTS, ...UI_SLOTS, ...STORY_SLOTS];
+// ---------------------------------------------------------- Dialogue /
+// story-lines slots. Live feedback: "a separate section for all the lines
+// in the fairy tale, so the entire story can be voiced by the user, just as
+// the characters say" -- one recordable slot per quoted/narrated line in
+// STRINGS.md's song/line/story keys (distinct from Â§4.6's story SOUND-
+// EFFECT beats above, which have no words). Procedural default is a generic
+// "talking cadence" placeholder, not an attempt at synthesized speech --
+// these are the slots most worth actually recording over.
+function speechPlaceholder(durationS) {
+  const wordMs = 220;
+  const n = Math.max(1, Math.round((durationS * 1000) / wordMs));
+  const layers = [];
+  for (let i = 0; i < n; i += 1) {
+    const freq = 300 + Math.random() * 120;
+    layers.push({ buf: expDecay(triangleTone(0.14, freq), 12), atS: i * (wordMs / 1000), gain: 0.4 });
+  }
+  return mixLayers(durationS, layers);
+}
+
+const DIALOGUE_SLOTS = [
+  { id: 'dialogue.kolobokSong', category: 'dialogue', durationMs: 4500, loop: false, synthesize: () => speechPlaceholder(4.5) },
+  { id: 'dialogue.hareEat', category: 'dialogue', durationMs: 2200, loop: false, synthesize: () => speechPlaceholder(2.2) },
+  { id: 'dialogue.wolfEat', category: 'dialogue', durationMs: 2200, loop: false, synthesize: () => speechPlaceholder(2.2) },
+  { id: 'dialogue.bearEat', category: 'dialogue', durationMs: 2200, loop: false, synthesize: () => speechPlaceholder(2.2) },
+  { id: 'dialogue.foxFlatter', category: 'dialogue', durationMs: 3200, loop: false, synthesize: () => speechPlaceholder(3.2) },
+  { id: 'dialogue.foxCloser', category: 'dialogue', durationMs: 2800, loop: false, synthesize: () => speechPlaceholder(2.8) },
+  { id: 'dialogue.grandmaTap', category: 'dialogue', durationMs: 2500, loop: false, synthesize: () => speechPlaceholder(2.5) },
+  { id: 'dialogue.bake1', category: 'dialogue', durationMs: 3000, loop: false, synthesize: () => speechPlaceholder(3.0) },
+  { id: 'dialogue.bake1b', category: 'dialogue', durationMs: 2800, loop: false, synthesize: () => speechPlaceholder(2.8) },
+  { id: 'dialogue.bake2', category: 'dialogue', durationMs: 3800, loop: false, synthesize: () => speechPlaceholder(3.8) },
+  { id: 'dialogue.bragGrandma', category: 'dialogue', durationMs: 3200, loop: false, synthesize: () => speechPlaceholder(3.2) },
+  { id: 'dialogue.bragHare', category: 'dialogue', durationMs: 3000, loop: false, synthesize: () => speechPlaceholder(3.0) },
+  { id: 'dialogue.bragWolf', category: 'dialogue', durationMs: 3000, loop: false, synthesize: () => speechPlaceholder(3.0) },
+  { id: 'dialogue.bragBear', category: 'dialogue', durationMs: 3000, loop: false, synthesize: () => speechPlaceholder(3.0) },
+  { id: 'dialogue.foxIntro', category: 'dialogue', durationMs: 2800, loop: false, synthesize: () => speechPlaceholder(2.8) },
+  { id: 'dialogue.snap', category: 'dialogue', durationMs: 2500, loop: false, synthesize: () => speechPlaceholder(2.5) },
+  { id: 'dialogue.rebirth', category: 'dialogue', durationMs: 2500, loop: false, synthesize: () => speechPlaceholder(2.5) },
+  { id: 'dialogue.eggRebirth', category: 'dialogue', durationMs: 2000, loop: false, synthesize: () => speechPlaceholder(2.0) },
+];
+
+// ---------------------------------------------------------- My Ambience
+// slots. Live feedback: a user-recordable day/night ambient loop with NO
+// recording-duration limit, unlike every slot above -- `unlimited: true`
+// tells the recording UI (SoundLibraryMenu.jsx) to skip the hard auto-stop
+// and show a manual Stop button instead. `durationMs` here only sizes the
+// PROCEDURAL DEFAULT's own loop length, not any recording cap.
+function ambiencePlaceholder(durationS, { cutoffHz, lfoHz }) {
+  return ampLfo(lowpass(whiteNoise(durationS), cutoffHz), lfoHz, 0.3);
+}
+
+const MY_AMBIENCE_SLOTS = [
+  {
+    id: 'myAmbience.day',
+    category: 'myAmbience',
+    durationMs: 6000,
+    loop: true,
+    unlimited: true,
+    synthesize: () => ambiencePlaceholder(6, { cutoffHz: 2200, lfoHz: 0.4 }),
+  },
+  {
+    id: 'myAmbience.night',
+    category: 'myAmbience',
+    durationMs: 6000,
+    loop: true,
+    unlimited: true,
+    synthesize: () => ambiencePlaceholder(6, { cutoffHz: 500, lfoHz: 0.15 }),
+  },
+];
+
+const SLOTS = [
+  ...KOLOBOK_SLOTS, ...ANIMAL_SLOTS, ...NATURE_SLOTS, ...INTERACTION_SLOTS, ...UI_SLOTS, ...STORY_SLOTS,
+  ...DIALOGUE_SLOTS, ...MY_AMBIENCE_SLOTS,
+];
 const SLOTS_BY_ID = Object.fromEntries(SLOTS.map((s) => [s.id, s]));
 
 export function getSlotsByCategory(categoryId) {
@@ -627,5 +687,17 @@ export function updateSlotLoopVolume(slotId, volume) {
 }
 
 export function stopSlotLoop(slotId) {
+  stopLoop(slotId);
+}
+
+/** Menu-only loop preview -- bypasses per-slot mute the same way
+ *  previewSlot bypasses it for one-shots (every slot starts muted, so
+ *  without this a fresh "My Ambience" recording could never be auditioned).
+ *  soundEngine's own {preview:true} additionally bypasses master mute. */
+export function previewSlotLoop(slotId) {
+  startLoop(slotId, getSlotUri(slotId), { preview: true });
+}
+
+export function stopPreviewSlotLoop(slotId) {
   stopLoop(slotId);
 }

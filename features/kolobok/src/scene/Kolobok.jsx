@@ -347,10 +347,11 @@ export function Kolobok() {
     // and keeps running its own full timer untouched.
     if (encounterMotion.singing && !s.wasSinging) {
       startSing(s);
-      // kolobok.songLine (SOUND_SPEC.md Â§4.1): Kolobok's one actual line of
-      // dialogue, played right as the bubble shows it -- separate from the
-      // wordless songNote pips below, and recordable with real spoken words.
-      playSlot('kolobok.songLine');
+      // dialogue.kolobokSong: Kolobok's one actual line of dialogue, played
+      // right as the bubble shows it -- separate from the wordless songNote
+      // pips below, and lives in the dialogue category (SOUND_SPEC.md Â§4.7)
+      // alongside every other spoken/narrated line in the tale.
+      playSlot('dialogue.kolobokSong');
     }
     if (!encounterMotion.singing && s.wasSinging && encounterMotion.zoneId) s.singing = false;
     s.wasSinging = encounterMotion.singing;
