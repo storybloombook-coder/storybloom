@@ -116,7 +116,9 @@ function SlotRow({
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
-          <Text style={styles.actionIcon}>{muted ? '🔇' : '🔊'}</Text>
+          <View style={styles.actionBadge}>
+            <Text style={styles.actionIcon}>{muted ? '×' : '♪'}</Text>
+          </View>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -127,7 +129,9 @@ function SlotRow({
           disabled={busy}
           onPress={() => onPlay(slotId)}
         >
-          <Text style={styles.actionIcon}>{previewing ? '⏹' : '▶'}</Text>
+          <View style={styles.actionBadge}>
+            <Text style={styles.actionIcon}>{previewing ? '⏹' : '▶'}</Text>
+          </View>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -138,10 +142,12 @@ function SlotRow({
           disabled={busy}
           onPress={() => onRecord(slotId)}
         >
-          <Text style={[styles.actionIcon, styles.recordIcon]}>●</Text>
-          {recording && (
-            <Animated.View pointerEvents="none" style={[styles.recordPulseOverlay, pulseStyle]} />
-          )}
+          <View style={styles.actionBadge}>
+            {recording && (
+              <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.recordPulseOverlay, pulseStyle]} />
+            )}
+            <Text style={styles.actionIcon}>●</Text>
+          </View>
         </TactileButton>
         {overridden && (
           <TactileButton
@@ -153,7 +159,9 @@ function SlotRow({
             disabled={busy}
             onPress={() => onReset(slotId)}
           >
-            <Text style={styles.actionIcon}>↺</Text>
+            <View style={styles.actionBadge}>
+              <Text style={styles.actionIcon}>↺</Text>
+            </View>
           </TactileButton>
         )}
       </View>
@@ -445,7 +453,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       innerStyle={styles.stopBtnInner}
                       onPress={handleManualStop}
                     >
-                      <Text style={styles.stopBtnIcon}>⏹</Text>
+                      <View style={styles.stopBtnBadge}>
+                        <Text style={styles.stopBtnIcon}>⏹</Text>
+                      </View>
                     </TactileButton>
                   )}
                 </>
@@ -542,27 +552,24 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '700', color: '#6b6558' },
   badgeTextCustom: { color: '#8a5a2b' },
   rowActions: { flexDirection: 'row', gap: 6 },
-  // Two-layer button (live feedback: "surrounded by a hexagon, should be a
-  // circle" -- Android's elevation shadow/outline doesn't reliably compute a
-  // round shape for a view with NO backgroundColor of its own (transparent),
-  // falling back to a low-poly approximation instead. The FILL color now
-  // lives on the OUTER view (the one that actually casts the shadow and
-  // needs a real background for Android to derive a correct round outline);
-  // the inner View (TactileButton's own, already overflow:hidden) only
-  // centers content and clips it to the same radius. 37x37 -- 15% larger
-  // than the previous 32x32, per live feedback.
-  //
-  // Live feedback: "style fixed partially and not consistent" -- every
-  // action button (mute/play/record/reset) shares this EXACT SAME
-  // outer/inner pair with no per-button background override at all; only
-  // the icon glyph (and, for record, the pulse overlay while actually
-  // capturing) differs. Fill brightened from the original 6% opacity
-  // (read as washed-out/barely visible) to a clearly visible solid tone.
+  // Live feedback: "make all the buttons look like [the reference
+  // screenshot] -- no other styles." That reference was the mute icon's own
+  // emoji, which happens to render as a neutral gray circle with a small
+  // colored circular badge inside it on this device -- rather than depend
+  // on emoji rendering (the actual source of the earlier "hexagon"/
+  // inconsistency bugs: color emoji bring their own baked-in shape/colors
+  // and ignore text styling), that exact two-tone look is now built
+  // explicitly with plain Views: a neutral gray outer circle (also the
+  // shadow-caster -- Android's elevation/outline needs a real background to
+  // compute a round shape, not a transparent one) containing a smaller
+  // solid-colored badge circle, with a plain white glyph on top. EVERY
+  // button (mute/play/record/reset) shares the exact same outer + badge
+  // styling with no per-button override -- only the glyph differs.
   actionBtnOuter: {
     width: 37,
     height: 37,
     borderRadius: 18.5,
-    backgroundColor: 'rgba(46,42,34,0.32)',
+    backgroundColor: '#b7b2a9',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
@@ -574,13 +581,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionIcon: { fontSize: 14, color: '#2e2a22' },
-  recordIcon: { color: '#c0392b' },
+  actionBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#7a3030',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  actionIcon: { fontSize: 13, fontWeight: '700', color: '#fff' },
   // Only mounted while actively recording (see SlotRow) -- pulses opacity
-  // over the button's existing round shape, clipped by the SAME inner
-  // overflow:hidden view since it's rendered as a child inside TactileButton.
+  // over the badge, clipped to it by the badge's own overflow:hidden.
+  // Rendered BEFORE the icon Text in JSX so the icon still paints on top.
   recordPulseOverlay: {
-    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#ff3b30',
   },
   recordOverlay: {
@@ -619,19 +633,14 @@ const styles = StyleSheet.create({
   recordBody: { fontSize: 12, color: '#7a3350', textAlign: 'center', marginTop: 2, opacity: 0.85 },
   dismissBtn: { marginTop: 10, paddingHorizontal: 16, paddingVertical: 8 },
   dismissText: { fontSize: 14, fontWeight: '600', color: '#7a3350' },
-  // Round icon-only Stop button (live feedback: the old pill-with-text
-  // "looked strange" -- a round button with a stop glyph inside, matching
-  // every other action button's own round-with-shadow treatment + the
-  // press-scale/haptic TactileButton already gives every button here).
-  // backgroundColor lives on the outer layer for the same reason as
-  // actionBtnOuter above (Android's elevation outline needs a real
-  // background to compute a round shape, not a transparent one).
+  // Round icon-only Stop button -- same gray-outer-circle + colored-badge
+  // treatment as every actionBtn above, just bigger (primary popup action).
   stopBtnOuter: {
     marginTop: 6,
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#7a3350',
+    backgroundColor: '#b7b2a9',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
@@ -643,5 +652,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stopBtnIcon: { fontSize: 26, color: '#fff' },
+  stopBtnBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#7a3030',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stopBtnIcon: { fontSize: 20, color: '#fff' },
 });
