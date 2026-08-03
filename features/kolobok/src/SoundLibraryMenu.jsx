@@ -2,16 +2,29 @@
 // musical-note button (SOUND_SPEC.md §2). Lists every fixed sound slot
 // grouped by category (collapsed by default, tap a category to expand);
 // MUTE toggles whether this slot ever plays in the scene (every slot starts
-// muted), PLAY always previews audibly regardless of that mute state,
-// RECORD runs the mandatory 3-2-1 countdown then hard-stops at that slot's
-// own durationMs (SOUND_SPEC.md §3), RESET drops the user's recording back
-// to the procedural default. The list itself is read-only structure: no
-// add/remove, ever.
+// muted), PLAY always previews audibly regardless of that mute state (loop
+// slots toggle a real looping preview, one-shots just play once), RECORD
+// runs the mandatory 3-2-1 countdown then hard-stops at that slot's own
+// durationMs (SOUND_SPEC.md §3) -- except `unlimited` slots (My Ambience),
+// which show a manual Stop button instead. RESET drops the user's recording
+// back to the procedural default. The list itself is read-only structure:
+// no add/remove, ever.
+//
+// Every action button is a TactileButton (round, shadowed, press-scale +
+// haptic) rather than a plain Pressable -- live feedback: the old flat
+// Pressable circles read as polygonal (Android's elevation shadow doesn't
+// reliably follow borderRadius on a single unclipped layer) and had no
+// click feedback. TactileButton's own two-layer structure (an unclipped
+// outer Pressable carrying the shadow, an overflow:hidden inner View
+// carrying the fill) fixes both at once.
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Modal, View, Text, Pressable, ScrollView, StyleSheet, Animated,
+  Modal, View, Text, Pressable, ScrollView, StyleSheet,
 } from 'react-native';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withRepeat, withSequence, withTiming, interpolate, interpolateColor,
+} from 'react-native-reanimated';
 import {
   useAudioRecorder,
   RecordingPresets,
@@ -27,19 +40,23 @@ import {
   isSlotMuted,
   setSlotMuted,
   previewSlot,
+  previewSlotLoop,
+  stopPreviewSlotLoop,
   resetSlotToDefault,
   saveRecordingForSlot,
 } from './services/soundLibrary';
+import { TactileButton } from './TactileButton';
 import { t } from './config/strings';
 
 const COUNTDOWN_START = 3;
+const GLOW_HALF_MS = 400;
 
 function formatSeconds(ms) {
   return (ms / 1000).toFixed(2);
 }
 
 function SlotRow({
-  slotId, locale, onPlay, onRecord, onReset, onToggleMute, busy, recording, refreshTick,
+  slotId, locale, onPlay, onRecord, onReset, onToggleMute, busy, recording, previewing, refreshTick,
 }) {
   // refreshTick is unused directly -- its only job is to be a changing prop
   // so this row re-renders (and re-reads the manifest) after a save/reset/
@@ -52,32 +69,26 @@ function SlotRow({
   const label = t(labelKey, locale);
   const durationLabel = `${formatSeconds(slot.durationMs)}${t('sound.unit.seconds', locale)}`;
 
-  // useState's lazy initializer (not useRef().current) -- same "created
-  // once, stable across renders" Animated.Value idiom, but reading it in
-  // render doesn't trip react-hooks/refs the way a bare ref access does.
-  const [glow] = useState(() => new Animated.Value(0));
+  const glow = useSharedValue(0);
   useEffect(() => {
     if (!recording) {
-      glow.setValue(0);
-      return undefined;
+      glow.value = 0;
+      return;
     }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(glow, { toValue: 1, duration: 400, useNativeDriver: false }),
-        Animated.timing(glow, { toValue: 0, duration: 400, useNativeDriver: false }),
-      ]),
+    glow.value = withRepeat(
+      withSequence(withTiming(1, { duration: GLOW_HALF_MS }), withTiming(0, { duration: GLOW_HALF_MS })),
+      -1,
+      false,
     );
-    loop.start();
-    return () => loop.stop();
   }, [recording, glow]);
-  // Both an Android cue (elevation/backgroundColor -- shadowRadius/
-  // shadowOpacity are iOS-only and silently do nothing on Android, the
-  // primary target platform per CLAUDE.md) and an iOS one (the shadow
-  // props), so the pulse actually reads on-device either way.
-  const glowShadowRadius = glow.interpolate({ inputRange: [0, 1], outputRange: [4, 14] });
-  const glowOpacity = glow.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] });
-  const glowElevation = glow.interpolate({ inputRange: [0, 1], outputRange: [4, 14] });
-  const glowColor = glow.interpolate({ inputRange: [0, 1], outputRange: ['#c0392b', '#ff6b5b'] });
+  const glowOuterStyle = useAnimatedStyle(() => ({
+    elevation: interpolate(glow.value, [0, 1], [4, 14]),
+    shadowOpacity: interpolate(glow.value, [0, 1], [0.5, 1]),
+    shadowRadius: interpolate(glow.value, [0, 1], [4, 14]),
+  }));
+  const glowInnerStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(glow.value, [0, 1], ['#c0392b', '#ff6b5b']),
+  }));
 
   return (
     <View style={styles.row}>
@@ -91,62 +102,51 @@ function SlotRow({
         </View>
       </View>
       <View style={styles.rowActions}>
-        <Pressable
+        <TactileButton
           accessibilityRole="button"
           accessibilityLabel={`${t(muted ? 'sound.action.unmute' : 'sound.action.mute', locale)}: ${label}`}
           hitSlop={8}
-          style={[styles.actionBtn, !muted && styles.muteBtnActive]}
+          style={styles.actionBtnOuter}
+          innerStyle={[styles.actionBtnInner, !muted && styles.muteBtnActiveInner]}
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
           <Text style={styles.actionIcon}>{muted ? '🔇' : '🔊'}</Text>
-        </Pressable>
-        <Pressable
+        </TactileButton>
+        <TactileButton
           accessibilityRole="button"
           accessibilityLabel={`${t('sound.action.play', locale)}: ${label}`}
           hitSlop={8}
-          style={styles.actionBtn}
+          style={styles.actionBtnOuter}
+          innerStyle={styles.actionBtnInner}
           disabled={busy}
           onPress={() => onPlay(slotId)}
         >
-          <Text style={styles.actionIcon}>▶</Text>
-        </Pressable>
-        <Animated.View
-          style={[
-            styles.actionBtn,
-            styles.recordBtn,
-            recording && {
-              backgroundColor: glowColor,
-              elevation: glowElevation,
-              shadowColor: '#ff3b30',
-              shadowRadius: glowShadowRadius,
-              shadowOpacity: glowOpacity,
-              shadowOffset: { width: 0, height: 0 },
-            },
-          ]}
+          <Text style={styles.actionIcon}>{previewing ? '⏹' : '▶'}</Text>
+        </TactileButton>
+        <TactileButton
+          accessibilityRole="button"
+          accessibilityLabel={`${t('sound.action.record', locale)}: ${label}`}
+          hitSlop={8}
+          style={[styles.actionBtnOuter, recording && styles.recordGlowBase, recording && glowOuterStyle]}
+          innerStyle={[styles.actionBtnInner, recording ? glowInnerStyle : styles.recordBtnInner]}
+          disabled={busy}
+          onPress={() => onRecord(slotId)}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${t('sound.action.record', locale)}: ${label}`}
-            hitSlop={8}
-            style={styles.actionBtnFill}
-            disabled={busy}
-            onPress={() => onRecord(slotId)}
-          >
-            <Text style={[styles.actionIcon, recording ? styles.recordIconActive : styles.recordIcon]}>●</Text>
-          </Pressable>
-        </Animated.View>
+          <Text style={[styles.actionIcon, recording ? styles.recordIconActive : styles.recordIcon]}>●</Text>
+        </TactileButton>
         {overridden && (
-          <Pressable
+          <TactileButton
             accessibilityRole="button"
             accessibilityLabel={`${t('sound.action.reset', locale)}: ${label}`}
             hitSlop={8}
-            style={styles.actionBtn}
+            style={styles.actionBtnOuter}
+            innerStyle={styles.actionBtnInner}
             disabled={busy}
             onPress={() => onReset(slotId)}
           >
             <Text style={styles.actionIcon}>↺</Text>
-          </Pressable>
+          </TactileButton>
         )}
       </View>
     </View>
@@ -164,20 +164,38 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [refreshTick, setRefreshTick] = useState(0);
   // Collapsed by default -- tap a category header to expand it.
   const [expanded, setExpanded] = useState({});
+  // Which loop slot (if any) is currently toggled on for an audible preview
+  // (PLAY on a loop slot starts/stops a real loop instead of a one-shot).
+  const [previewingLoopId, setPreviewingLoopId] = useState(null);
   const recordStartRef = useRef(0);
+  const isMountedRef = useRef(true);
+  // Holds the in-flight (or already-resolved) session-setup promise kicked
+  // off by handleRecord, awaited once the countdown reaches zero -- see its
+  // own comment below for why this can't just run sequentially after.
+  const prepareRef = useRef(Promise.resolve());
 
   const busy = phase !== 'idle';
   const canClose = phase !== 'countdown' && phase !== 'recording';
+  const flowSlot = flowSlotId ? getSlotDefinition(flowSlotId) : null;
 
-  // Countdown ticker: 3 -> 2 -> 1 -> start the real recording.
+  useEffect(() => () => { isMountedRef.current = false; }, []);
+
+  // Countdown ticker: 3 -> 2 -> 1 -> start the real recording. Live
+  // feedback: "the countdown feels like more than 3 seconds" -- it was:
+  // setAudioModeAsync + recorder.prepareToRecordAsync used to run AFTER the
+  // countdown finished (sequentially), and that native setup's own latency
+  // (mic session init, first-recording-of-the-session overhead) added
+  // unpredictable extra wait on top of the visual 3s. Now handleRecord
+  // kicks that prep off immediately, in PARALLEL with the countdown ticking
+  // (prepareRef); by the time countdown reaches zero it's normally already
+  // resolved, so recorder.record() fires with no perceptible extra delay.
   useEffect(() => {
     if (phase !== 'countdown') return undefined;
     if (countdown <= 0) {
       let cancelled = false;
       (async () => {
-        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-        await recorder.prepareToRecordAsync();
-        if (cancelled) return;
+        await prepareRef.current;
+        if (cancelled || !isMountedRef.current) return;
         recorder.record();
         recordStartRef.current = Date.now();
         setElapsedMs(0);
@@ -190,25 +208,37 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, countdown]);
 
-  // Live hundredths-of-a-second timer while actually capturing.
+  // Live timer while actually capturing (30ms resolution).
   useEffect(() => {
     if (phase !== 'recording') return undefined;
     const interval = setInterval(() => setElapsedMs(Date.now() - recordStartRef.current), 30);
     return () => clearInterval(interval);
   }, [phase]);
 
+  const finishRecording = async () => {
+    try {
+      await recorder.stop();
+    } catch {
+      // Same released-shared-object hazard as the unmount cleanup below --
+      // if it's already gone there's nothing left to save.
+      return;
+    }
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    if (!isMountedRef.current || !flowSlotId) return;
+    if (recorder.uri) saveRecordingForSlot(flowSlotId, recorder.uri);
+    setRefreshTick((v) => v + 1);
+    setPhase('saved');
+  };
+
   // Hard auto-stop at THIS slot's own target duration -- one-shots and
-  // ambient loops alike (SOUND_SPEC.md §3's "hard cap, every slot" rule).
+  // ambient loops alike (SOUND_SPEC.md §3's "hard cap, every slot" rule) --
+  // except `unlimited` slots (My Ambience), which skip this entirely and
+  // stop only via the manual Stop button (handleManualStop).
   useEffect(() => {
     if (phase !== 'recording' || !flowSlotId) return undefined;
     const slot = getSlotDefinition(flowSlotId);
-    const timer = setTimeout(async () => {
-      await recorder.stop();
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
-      if (recorder.uri) saveRecordingForSlot(flowSlotId, recorder.uri);
-      setRefreshTick((v) => v + 1);
-      setPhase('saved');
-    }, slot.durationMs);
+    if (slot.unlimited) return undefined;
+    const timer = setTimeout(() => finishRecording(), slot.durationMs);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, flowSlotId]);
@@ -224,11 +254,41 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   }, [phase]);
 
   // Don't leave a live recording running if the menu unmounts mid-flow.
+  // Live feedback: crashed on some 3D->2D transitions with "Cannot use
+  // shared object that was already released" sourced to this exact effect
+  // -- recorder's own native object can already be torn down by the time
+  // this cleanup runs (the ordering between this plain passive effect and
+  // whatever internal mechanism useAudioRecorder uses to release its native
+  // handle isn't guaranteed), so touching it here must never throw
+  // synchronously during unmount.
   useEffect(() => () => {
-    if (recorder.isRecording) recorder.stop().catch(() => {});
+    try {
+      if (recorder.isRecording) recorder.stop().catch(() => {});
+    } catch {
+      // Already released -- nothing to stop.
+    }
   }, [recorder]);
 
-  const handlePlay = (slotId) => previewSlot(slotId);
+  // Don't leave a preview loop playing after the menu closes/unmounts.
+  useEffect(() => () => {
+    if (previewingLoopId) stopPreviewSlotLoop(previewingLoopId);
+  }, [previewingLoopId]);
+
+  const handlePlay = (slotId) => {
+    const slot = getSlotDefinition(slotId);
+    if (slot?.loop) {
+      if (previewingLoopId === slotId) {
+        stopPreviewSlotLoop(slotId);
+        setPreviewingLoopId(null);
+      } else {
+        if (previewingLoopId) stopPreviewSlotLoop(previewingLoopId);
+        previewSlotLoop(slotId);
+        setPreviewingLoopId(slotId);
+      }
+      return;
+    }
+    previewSlot(slotId);
+  };
 
   const handleToggleMute = (slotId) => {
     setSlotMuted(slotId, !isSlotMuted(slotId));
@@ -242,15 +302,25 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       setPhase('denied');
       return;
     }
+    if (previewingLoopId) {
+      stopPreviewSlotLoop(previewingLoopId);
+      setPreviewingLoopId(null);
+    }
     setFlowSlotId(slotId);
     setCountdown(COUNTDOWN_START);
     setPhase('countdown');
+    prepareRef.current = (async () => {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+    })();
   };
 
   const handleReset = (slotId) => {
     resetSlotToDefault(slotId);
     setRefreshTick((v) => v + 1);
   };
+
+  const handleManualStop = () => finishRecording();
 
   const dismissFlow = () => {
     setPhase('idle');
@@ -261,9 +331,29 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setExpanded((prev) => ({ ...prev, [catId]: !prev[catId] }));
   };
 
-  const flowSlot = flowSlotId ? getSlotDefinition(flowSlotId) : null;
   const flowLabel = flowSlot ? t(getSlotLabelKey(flowSlot.id), locale) : '';
   const flowTargetLabel = flowSlot ? `${formatSeconds(flowSlot.durationMs)}${t('sound.unit.seconds', locale)}` : '';
+  const remainingLabel = flowSlot
+    ? `${formatSeconds(Math.max(0, flowSlot.durationMs - elapsedMs))}${t('sound.unit.seconds', locale)}`
+    : '';
+  const elapsedLabel = `${formatSeconds(elapsedMs)}${t('sound.unit.seconds', locale)}`;
+
+  const popupPulse = useSharedValue(0);
+  useEffect(() => {
+    if (phase !== 'recording') {
+      popupPulse.value = 0;
+      return;
+    }
+    popupPulse.value = withRepeat(
+      withSequence(withTiming(1, { duration: GLOW_HALF_MS }), withTiming(0, { duration: GLOW_HALF_MS })),
+      -1,
+      false,
+    );
+  }, [phase, popupPulse]);
+  const pulsingDotStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(popupPulse.value, [0, 1], [0.4, 1]),
+    transform: [{ scale: interpolate(popupPulse.value, [0, 1], [0.85, 1.15]) }],
+  }));
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => canClose && onClose?.()}>
@@ -298,6 +388,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   <Text style={styles.categoryTitle}>{t(cat.labelKey, locale)}</Text>
                   <Text style={styles.categoryChevron}>{isOpen ? '▾' : '▸'}</Text>
                 </Pressable>
+                {isOpen && cat.id === 'myAmbience' && (
+                  <Text style={styles.categoryTooltip}>{t('sound.myAmbienceTooltip', locale)}</Text>
+                )}
                 {isOpen && slots.map((slot) => (
                   <SlotRow
                     key={slot.id}
@@ -305,6 +398,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                     locale={locale}
                     busy={busy}
                     recording={phase === 'recording' && flowSlotId === slot.id}
+                    previewing={previewingLoopId === slot.id}
                     refreshTick={refreshTick}
                     onPlay={handlePlay}
                     onRecord={handleRecord}
@@ -321,7 +415,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
           <View style={styles.recordOverlay} pointerEvents="auto">
             <View style={styles.recordCard}>
               <Text style={styles.recordSlotLabel} numberOfLines={2}>{flowLabel}</Text>
-              <Text style={styles.recordTarget}>{t('sound.recording.target', locale)}: {flowTargetLabel}</Text>
+              {!flowSlot.unlimited && (
+                <Text style={styles.recordTarget}>{t('sound.recording.target', locale)}: {flowTargetLabel}</Text>
+              )}
               {phase === 'countdown' && (
                 <>
                   <Text style={styles.recordBig}>{countdown > 0 ? countdown : '●'}</Text>
@@ -330,8 +426,19 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               )}
               {phase === 'recording' && (
                 <>
-                  <Text style={styles.recordTimer}>{formatSeconds(elapsedMs)}{t('sound.unit.seconds', locale)}</Text>
+                  <Animated.View style={[styles.recordingDot, pulsingDotStyle]} />
+                  <Text style={styles.recordTimer}>{flowSlot.unlimited ? elapsedLabel : remainingLabel}</Text>
                   <Text style={styles.recordStatus}>{t('sound.recording.recording', locale)}</Text>
+                  {flowSlot.unlimited && (
+                    <TactileButton
+                      accessibilityRole="button"
+                      style={styles.stopBtnOuter}
+                      innerStyle={styles.stopBtnInner}
+                      onPress={handleManualStop}
+                    >
+                      <Text style={styles.stopBtnText}>{t('sound.recording.stopRecording', locale)}</Text>
+                    </TactileButton>
+                  )}
                 </>
               )}
               {phase === 'saved' && (
@@ -399,6 +506,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   categoryChevron: { fontSize: 13, color: '#8a5a2b', fontWeight: '700' },
+  categoryTooltip: {
+    fontSize: 12,
+    color: '#6b6558',
+    fontStyle: 'italic',
+    marginBottom: 6,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -420,28 +533,33 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '700', color: '#6b6558' },
   badgeTextCustom: { color: '#8a5a2b' },
   rowActions: { flexDirection: 'row', gap: 6 },
-  // Explicit shadow/elevation -- live feedback: the row buttons read as
-  // flat tinted circles with no visual affordance that they're tappable.
-  actionBtn: {
+  // Two-layer button (live feedback: "should not be polygonal, should be
+  // round with a shadow" -- Android's elevation shadow didn't reliably
+  // follow borderRadius on a single unclipped layer). Outer carries
+  // position/size/shadow with NO overflow:hidden (so the shadow isn't
+  // clipped away); TactileButton's own inner View carries the fill and
+  // clips to the SAME radius.
+  actionBtnOuter: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(46,42,34,0.06)',
+    backgroundColor: 'transparent',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.25,
     shadowRadius: 2,
     elevation: 3,
   },
-  // recordBtn is an Animated.View wrapper (so its own shadow can pulse while
-  // recording) with a plain Pressable filling it -- actionBtn's shadow
-  // above still applies to the wrapper at rest.
-  actionBtnFill: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  actionBtnInner: {
+    borderRadius: 16,
+    backgroundColor: 'rgba(46,42,34,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   actionIcon: { fontSize: 14, color: '#2e2a22' },
-  muteBtnActive: { backgroundColor: 'rgba(46,42,34,0.14)' },
-  recordBtn: { backgroundColor: 'rgba(192,57,43,0.14)', padding: 0 },
+  muteBtnActiveInner: { backgroundColor: 'rgba(46,42,34,0.14)' },
+  recordBtnInner: { backgroundColor: 'rgba(192,57,43,0.14)' },
+  recordGlowBase: { shadowColor: '#ff3b30' },
   recordIcon: { color: '#c0392b' },
   recordIconActive: { color: '#fff' },
   recordOverlay: {
@@ -475,8 +593,19 @@ const styles = StyleSheet.create({
   recordTarget: { fontSize: 12, color: '#7a3350', opacity: 0.8, marginBottom: 4 },
   recordBig: { fontSize: 48, fontWeight: '800', color: '#7a3350' },
   recordTimer: { fontSize: 40, fontWeight: '800', color: '#7a3350', fontVariant: ['tabular-nums'] },
+  recordingDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#ff3b30' },
   recordStatus: { fontSize: 14, color: '#7a3350', textAlign: 'center' },
   recordBody: { fontSize: 12, color: '#7a3350', textAlign: 'center', marginTop: 2, opacity: 0.85 },
   dismissBtn: { marginTop: 10, paddingHorizontal: 16, paddingVertical: 8 },
   dismissText: { fontSize: 14, fontWeight: '600', color: '#7a3350' },
+  stopBtnOuter: { marginTop: 6, borderRadius: 18 },
+  stopBtnInner: {
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    backgroundColor: '#7a3350',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stopBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });
