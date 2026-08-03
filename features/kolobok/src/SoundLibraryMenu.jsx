@@ -74,11 +74,12 @@ function SlotRow({
   const durationLabel = slot.unlimited ? null : `${formatSeconds(slot.durationMs)}${t('sound.unit.seconds', locale)}`;
 
   // Live feedback: "when recording finishes, the record button should be
-  // back to idle -- now it's red after recording." Rebuilt as a pulse
-  // overlay that only MOUNTS while `recording` is true (rather than a
-  // static-vs-animated style swap on the button's own fill/shadow) so
-  // there's no way for a stale animated value to leave it looking "stuck" --
-  // when recording ends the overlay is simply removed from the tree.
+  // back to idle -- now it's red after recording." Pulses the dot's own
+  // opacity while capturing -- the animated style is only ever IN the style
+  // array while `recording` is true (`recording && pulseStyle`), so there's
+  // no static-vs-animated swap that could leave a stale value looking
+  // "stuck"; once recording ends the array entry is simply gone and the
+  // icon's normal, fully-opaque color applies again.
   const pulse = useSharedValue(0);
   useEffect(() => {
     if (!recording) {
@@ -116,9 +117,7 @@ function SlotRow({
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
-          <View style={styles.actionBadge}>
-            <Text style={styles.actionIcon}>{muted ? '×' : '♪'}</Text>
-          </View>
+          <Text style={styles.actionIcon}>{muted ? '🔇' : '🔊'}</Text>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -129,9 +128,7 @@ function SlotRow({
           disabled={busy}
           onPress={() => onPlay(slotId)}
         >
-          <View style={styles.actionBadge}>
-            <Text style={styles.actionIcon}>{previewing ? '⏹' : '▶'}</Text>
-          </View>
+          <Text style={styles.actionIcon}>{previewing ? '⏹' : '▶'}</Text>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -142,12 +139,7 @@ function SlotRow({
           disabled={busy}
           onPress={() => onRecord(slotId)}
         >
-          <View style={styles.actionBadge}>
-            {recording && (
-              <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.recordPulseOverlay, pulseStyle]} />
-            )}
-            <Text style={styles.actionIcon}>●</Text>
-          </View>
+          <Animated.Text style={[styles.actionIcon, styles.recordIcon, recording && pulseStyle]}>●</Animated.Text>
         </TactileButton>
         {overridden && (
           <TactileButton
@@ -159,9 +151,7 @@ function SlotRow({
             disabled={busy}
             onPress={() => onReset(slotId)}
           >
-            <View style={styles.actionBadge}>
-              <Text style={styles.actionIcon}>↺</Text>
-            </View>
+            <Text style={styles.actionIcon}>↺</Text>
           </TactileButton>
         )}
       </View>
@@ -453,9 +443,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       innerStyle={styles.stopBtnInner}
                       onPress={handleManualStop}
                     >
-                      <View style={styles.stopBtnBadge}>
-                        <Text style={styles.stopBtnIcon}>⏹</Text>
-                      </View>
+                      <Text style={styles.stopBtnIcon}>⏹</Text>
                     </TactileButton>
                   )}
                 </>
@@ -552,19 +540,14 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '700', color: '#6b6558' },
   badgeTextCustom: { color: '#8a5a2b' },
   rowActions: { flexDirection: 'row', gap: 6 },
-  // Live feedback: "make all the buttons look like [the reference
-  // screenshot] -- no other styles." That reference was the mute icon's own
-  // emoji, which happens to render as a neutral gray circle with a small
-  // colored circular badge inside it on this device -- rather than depend
-  // on emoji rendering (the actual source of the earlier "hexagon"/
-  // inconsistency bugs: color emoji bring their own baked-in shape/colors
-  // and ignore text styling), that exact two-tone look is now built
-  // explicitly with plain Views: a neutral gray outer circle (also the
-  // shadow-caster -- Android's elevation/outline needs a real background to
-  // compute a round shape, not a transparent one) containing a smaller
-  // solid-colored badge circle, with a plain white glyph on top. EVERY
-  // button (mute/play/record/reset) shares the exact same outer + badge
-  // styling with no per-button override -- only the glyph differs.
+  // Live feedback (confirmed against a reference screenshot): a plain
+  // neutral gray circle with the icon glyph sitting directly on it -- NO
+  // separate badge/colored shape behind it. Gray outer circle is also the
+  // shadow-caster (Android's elevation/outline needs a real background to
+  // compute a round shape, not a transparent one). Every button
+  // (mute/play/record/reset) shares this exact same outer/inner pair with
+  // no per-button override -- only the glyph (and its color, for record)
+  // differs.
   actionBtnOuter: {
     width: 37,
     height: 37,
@@ -581,22 +564,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#7a3030',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  actionIcon: { fontSize: 13, fontWeight: '700', color: '#fff' },
-  // Only mounted while actively recording (see SlotRow) -- pulses opacity
-  // over the badge, clipped to it by the badge's own overflow:hidden.
-  // Rendered BEFORE the icon Text in JSX so the icon still paints on top.
-  recordPulseOverlay: {
-    backgroundColor: '#ff3b30',
-  },
+  actionIcon: { fontSize: 15, color: '#2e2a22' },
+  recordIcon: { color: '#c0392b' },
   recordOverlay: {
     position: 'absolute',
     left: 0,
@@ -633,14 +602,15 @@ const styles = StyleSheet.create({
   recordBody: { fontSize: 12, color: '#7a3350', textAlign: 'center', marginTop: 2, opacity: 0.85 },
   dismissBtn: { marginTop: 10, paddingHorizontal: 16, paddingVertical: 8 },
   dismissText: { fontSize: 14, fontWeight: '600', color: '#7a3350' },
-  // Round icon-only Stop button -- same gray-outer-circle + colored-badge
-  // treatment as every actionBtn above, just bigger (primary popup action).
+  // Round icon-only Stop button -- solid color circle + icon directly on
+  // it, same plain treatment as every actionBtn above, just bigger and
+  // colored (primary popup action) instead of neutral gray.
   stopBtnOuter: {
     marginTop: 6,
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#b7b2a9',
+    backgroundColor: '#7a3350',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
@@ -652,13 +622,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stopBtnBadge: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#7a3030',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stopBtnIcon: { fontSize: 20, color: '#fff' },
+  stopBtnIcon: { fontSize: 26, color: '#fff' },
 });
