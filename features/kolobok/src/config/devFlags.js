@@ -11,11 +11,10 @@ export const quality = { toon: true, fillLight: true };
 
 // VISUAL_QUALITY_SPEC §4: the adaptive-dpr chosen value logs here once it
 // settles (ship-readiness gate's FPS histogram reads this same flag family).
-// Live feedback: "very laggy now" -- turned on temporarily so the adaptive-
-// DPR settle log (features/kolobok/src/scene/AdaptiveQuality.jsx) shows up
-// in logcat with real frame-time numbers instead of guessing. Flip back to
-// false once the actual bottleneck is found.
-export const perf = { hud: true };
+// Was left `true` after a "very laggy now" debugging session (see
+// AdaptiveQuality.jsx) -- flipped back off per its own note now that it's
+// no longer needed; flip back to true again if that investigation reopens.
+export const perf = { hud: false };
 
 // POLISH_SPEC §7: one kill-switch per Phase 8 feature, for the ship-
 // readiness audit ("each §5 feature has a dev kill-switch").
