@@ -122,12 +122,17 @@ export function ampLfo(buf, lfoHz, depth = 1) {
   return out;
 }
 
-/** Linear fade in/out over the given lengths (seconds), so short one-shots
- *  don't click at their hard start/end edges. */
-export function fadeInOut(buf, inS = 0.005, outS = 0.02) {
+/** Linear fade in/out over the given lengths (seconds) -- default 0.5s/0.5s
+ *  per live feedback, applied to every procedural default. Each ramp is
+ *  independently clamped to at most HALF the buffer's own length (not just
+ *  the buffer's full length), so on a sound shorter than inS+outS the two
+ *  ramps can never fully overlap and erase the sound's own peak entirely --
+ *  there's always at least a brief moment at full volume in the middle. */
+export function fadeInOut(buf, inS = 0.5, outS = 0.5) {
   const out = Float32Array.from(buf);
-  const inN = Math.min(out.length, samplesFor(inS));
-  const outN = Math.min(out.length, samplesFor(outS));
+  const half = Math.floor(out.length / 2);
+  const inN = Math.min(half, samplesFor(inS));
+  const outN = Math.min(half, samplesFor(outS));
   for (let i = 0; i < inN; i += 1) out[i] *= i / inN;
   for (let i = 0; i < outN; i += 1) out[out.length - 1 - i] *= i / outN;
   return out;
@@ -230,7 +235,21 @@ function getPool() {
 let masterEnabled = true; // toggled by Scene3D.jsx's own mute button (stacked above the sound-library button)
 let masterVolume = 0.35;
 
-export function setMasterEnabled(enabled) { masterEnabled = enabled; }
+/** Live feedback: muting didn't actually silence anything already looping
+ *  (ambient beds like kolobok.roll) -- playOneShot checked masterEnabled,
+ *  but startLoop never did, and flipping the flag never touched players
+ *  already playing. Now every loop player is paused the instant mute turns
+ *  on, and resumed on unmute -- but only the ones that were actually
+ *  "wanted playing" at the time (see loopPlayers' own wantsPlaying below),
+ *  not ones a caller had already stopped for unrelated reasons. */
+export function setMasterEnabled(enabled) {
+  masterEnabled = enabled;
+  if (!enabled) {
+    loopPlayers.forEach(({ player }) => player.pause());
+  } else {
+    loopPlayers.forEach(({ player, wantsPlaying }) => { if (wantsPlaying) player.play(); });
+  }
+}
 export function setMasterVolume(volume) { masterVolume = volume; }
 export function isMasterEnabled() { return masterEnabled; }
 
@@ -253,26 +272,31 @@ export function playOneShot(uri, { volume = 1, rate = 1, preview = false } = {})
   player.play();
 }
 
-const loopPlayers = new Map(); // slotId -> { player, uri }
+const loopPlayers = new Map(); // slotId -> { player, uri, wantsPlaying }
 
 /** Starts (or re-targets) a looping ambience player for `slotId`. Re-uses
  *  the existing player instance across calls so re-recording an ambient
  *  slot mid-playback just swaps the source instead of tearing anything
  *  down. `volumeRef` is a () => number getter, re-read every ~250ms by
- *  soundLibrary.js's own ambience ticker (SOUND_SPEC.md §1). */
+ *  soundLibrary.js's own ambience ticker (SOUND_SPEC.md §1).
+ *  `wantsPlaying` tracks the CALLER's own intent independent of
+ *  masterEnabled -- while muted this still records the request but leaves
+ *  the underlying player paused, so setMasterEnabled(true) above knows
+ *  which loops to actually resume. */
 export function startLoop(slotId, uri) {
   if (!uri) return;
   const existing = loopPlayers.get(slotId);
   if (existing && existing.uri === uri) {
-    if (!existing.player.playing) existing.player.play();
+    existing.wantsPlaying = true;
+    if (masterEnabled && !existing.player.playing) existing.player.play();
     return;
   }
   if (existing) existing.player.remove();
   const player = createAudioPlayer(uri);
   player.loop = true;
   player.volume = masterVolume;
-  player.play();
-  loopPlayers.set(slotId, { player, uri });
+  loopPlayers.set(slotId, { player, uri, wantsPlaying: true });
+  if (masterEnabled) player.play();
 }
 
 export function setLoopVolume(slotId, volume) {
@@ -283,6 +307,7 @@ export function setLoopVolume(slotId, volume) {
 export function stopLoop(slotId) {
   const existing = loopPlayers.get(slotId);
   if (!existing) return;
+  existing.wantsPlaying = false;
   existing.player.pause();
 }
 

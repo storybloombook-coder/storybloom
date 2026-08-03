@@ -590,11 +590,16 @@ const styles = StyleSheet.create({
   muteButton: { bottom: 240 }, // stacked directly above soundButton (192 + 40 + 8 gap)
   soundButtonIcon: {
     fontSize: 39, // triple storyButtonText's 13px, this glyph only
-    // Live feedback: the glyph read off-center in its circle -- RN Text on
-    // Android pads for ascenders/descenders the ♪ glyph doesn't use, which
-    // visually pushes it up/left of the button's true center. These two
-    // (Android-only) props strip that padding and re-center it vertically;
-    // textAlign handles the horizontal half.
+    // Live feedback: still read too low after the first attempt --
+    // textAlignVertical only centers within an EXPLICIT height, and without
+    // one Text just sizes to its own intrinsic (baseline-anchored) content,
+    // so it had nothing to center against. Giving it the button's own 40x40
+    // box + matching lineHeight gives Android real vertical space to center
+    // the glyph in, with includeFontPadding stripping the ascender/descender
+    // padding that was skewing it before.
+    width: 40,
+    height: 40,
+    lineHeight: 40,
     textAlign: 'center',
     includeFontPadding: false,
     textAlignVertical: 'center',

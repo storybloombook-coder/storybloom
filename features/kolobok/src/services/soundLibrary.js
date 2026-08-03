@@ -506,17 +506,26 @@ function manifestFile() {
 // re-written (and kept in sync) whenever save/reset actually change it.
 let manifestCache = null;
 
+// { overrides: { slotId: {recordedAt} }, muted: { slotId: bool } } -- two
+// separate top-level buckets so muting a slot (very common: live feedback
+// wants every slot to START muted) can never be confused with "has a user
+// recording" (isSlotOverridden below only ever looks at .overrides).
+function emptyManifest() {
+  return { overrides: {}, muted: {} };
+}
+
 function loadManifest() {
   if (manifestCache) return manifestCache;
   const file = manifestFile();
   if (!file.exists) {
-    manifestCache = {};
+    manifestCache = emptyManifest();
     return manifestCache;
   }
   try {
-    manifestCache = JSON.parse(file.textSync());
+    const parsed = JSON.parse(file.textSync());
+    manifestCache = { overrides: parsed.overrides ?? {}, muted: parsed.muted ?? {} };
   } catch {
-    manifestCache = {};
+    manifestCache = emptyManifest();
   }
   return manifestCache;
 }
@@ -524,11 +533,31 @@ function loadManifest() {
 function persistManifest() {
   const file = manifestFile();
   if (!file.exists) file.create();
-  file.write(JSON.stringify(manifestCache ?? {}));
+  file.write(JSON.stringify(manifestCache ?? emptyManifest()));
 }
 
 export function isSlotOverridden(slotId) {
-  return Boolean(loadManifest()[slotId]);
+  return Boolean(loadManifest().overrides[slotId]);
+}
+
+/** Live feedback: every slot starts MUTED -- nothing plays in the scene
+ *  until a parent explicitly un-mutes the specific sounds they want active.
+ *  Absence from the manifest (a slot never touched) means muted=true, not
+ *  false, so this can't be conflated with isSlotOverridden's "has a
+ *  recording" question -- a slot can be muted+default, muted+yours,
+ *  unmuted+default, or unmuted+yours, independently. */
+export function isSlotMuted(slotId) {
+  const v = loadManifest().muted[slotId];
+  return v === undefined ? true : v;
+}
+
+export function setSlotMuted(slotId, muted) {
+  const manifest = loadManifest();
+  manifest.muted[slotId] = muted;
+  persistManifest();
+  // If this happens to be a currently-running loop, silence it immediately
+  // rather than waiting for its next natural start/stop edge.
+  if (muted) stopLoop(slotId);
 }
 
 function recordingFile(slotId) {
@@ -559,7 +588,7 @@ export function saveRecordingForSlot(slotId, recordedUri) {
   const src = new File(recordedUri);
   src.copySync(dest);
   const manifest = loadManifest();
-  manifest[slotId] = { recordedAt: Date.now() };
+  manifest.overrides[slotId] = { recordedAt: Date.now() };
   persistManifest();
   return dest.uri;
 }
@@ -568,14 +597,19 @@ export function resetSlotToDefault(slotId) {
   const file = recordingFile(slotId);
   if (file.exists) file.delete();
   const manifest = loadManifest();
-  delete manifest[slotId];
+  delete manifest.overrides[slotId];
   persistManifest();
 }
 
 // ---------------------------------------------------------- playback (what
 // scene code actually calls)
 
+// playSlot/startSlotLoop respect the per-slot mute (default: muted);
+// previewSlot/getSlotUri intentionally do NOT -- the menu's own PLAY button
+// always previews audibly regardless of that slot's mute state, same as it
+// already bypasses the master mute (soundEngine's own preview:true).
 export function playSlot(slotId, opts) {
+  if (isSlotMuted(slotId)) return;
   playOneShot(getSlotUri(slotId), opts);
 }
 
@@ -584,6 +618,7 @@ export function previewSlot(slotId) {
 }
 
 export function startSlotLoop(slotId) {
+  if (isSlotMuted(slotId)) return;
   startLoop(slotId, getSlotUri(slotId));
 }
 
