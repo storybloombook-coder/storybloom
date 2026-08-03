@@ -111,12 +111,12 @@ function SlotRow({
           accessibilityRole="button"
           accessibilityLabel={`${t(muted ? 'sound.action.unmute' : 'sound.action.mute', locale)}: ${label}`}
           hitSlop={8}
-          style={[styles.actionBtnOuter, !muted && styles.muteBtnActiveOuter]}
+          style={styles.actionBtnOuter}
           innerStyle={styles.actionBtnInner}
           disabled={busy}
           onPress={() => onToggleMute(slotId)}
         >
-          <Text style={styles.actionIcon}>{muted ? '🔇' : '🔊'}</Text>
+          <Text style={styles.actionIcon}>{muted ? '⊘' : '♪'}</Text>
         </TactileButton>
         <TactileButton
           accessibilityRole="button"
@@ -133,7 +133,7 @@ function SlotRow({
           accessibilityRole="button"
           accessibilityLabel={`${t('sound.action.record', locale)}: ${label}`}
           hitSlop={8}
-          style={[styles.actionBtnOuter, styles.recordBtnOuter]}
+          style={styles.actionBtnOuter}
           innerStyle={styles.actionBtnInner}
           disabled={busy}
           onPress={() => onRecord(slotId)}
@@ -551,6 +551,16 @@ const styles = StyleSheet.create({
   // the inner View (TactileButton's own, already overflow:hidden) only
   // centers content and clips it to the same radius. 37x37 -- 15% larger
   // than the previous 32x32, per live feedback.
+  //
+  // Live feedback: "style fixed partially and not consistent" -- every
+  // action button (mute/play/record/reset) now shares this EXACT SAME
+  // outer/inner pair with no per-button background override; only the
+  // icon glyph (and, for record, the pulse overlay while actually
+  // capturing) differs. The mute icon was also swapped from the color
+  // emoji (🔇/🔊 render with their own baked-in colors/shape on Android,
+  // ignoring actionIcon's color entirely -- the actual source of the
+  // inconsistency) to plain text glyphs that behave like every other icon
+  // here.
   actionBtnOuter: {
     width: 37,
     height: 37,
@@ -568,8 +578,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionIcon: { fontSize: 14, color: '#2e2a22' },
-  muteBtnActiveOuter: { backgroundColor: 'rgba(46,42,34,0.14)' },
-  recordBtnOuter: { backgroundColor: 'rgba(192,57,43,0.14)' },
   recordIcon: { color: '#c0392b' },
   // Only mounted while actively recording (see SlotRow) -- pulses opacity
   // over the button's existing round shape, clipped by the SAME inner
