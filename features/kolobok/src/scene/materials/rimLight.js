@@ -5,6 +5,7 @@
 // -- this is what ties rim color to time-of-day/weather without each
 // character file running its own frame loop for it.
 
+import { useEffect } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import { Color } from 'three';
 import { atmosphereLive } from '../../state/sceneStore';
@@ -22,8 +23,21 @@ export function registerRimUniforms(uniforms, strength) {
 
 const warm = (c, amt) => Math.min(1, c + (1 - c) * amt);
 
-/** Mount ONCE in KolobokScene. Not a visual component -- renders nothing. */
+/** Mount ONCE in KolobokScene. Not a visual component -- renders nothing.
+ *
+ *  Pass 3 audit fix: registerRimUniforms had no matching unregister, so
+ *  every full remount of the scene (leaving/re-entering 3D mode, or an
+ *  ErrorBoundary rescue) permanently appended that mount's materials on top
+ *  of the previous mount's now-orphaned ones -- registry only ever grew,
+ *  and the useFrame below walked the whole thing every frame forever.
+ *  Clearing on THIS component's own unmount is safe: RimLightSync and every
+ *  material-registering sibling belong to the same Scene3D subtree and
+ *  unmount together, so by the time this cleanup runs, nothing still
+ *  mounted depends on the entries being removed -- they belonged to the
+ *  instance that's finishing torn-down right now, not a live one. */
 export function RimLightSync() {
+  useEffect(() => () => { registry.length = 0; }, []);
+
   useFrame(() => {
     const [hr, hg, hb] = atmosphereLive.horizon;
     // "warmed 20%": nudge each channel 20% of the way toward 1 after
