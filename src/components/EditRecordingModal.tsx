@@ -7,14 +7,16 @@
 // on Save, copies it in as the recording's new permanent file — see
 // pendingUri below).
 //
-// The waveform bars for the ORIGINAL clip are a flat placeholder, not real
-// amplitude — unlike a fresh recording (where each bar is a live metering
-// sample captured while recording), there's no cheap way to pull amplitude
-// back out of an already-encoded m4a file without a PCM decode step this app
-// doesn't have. The trim handles and preview playback work exactly the same
-// either way; only the visual peaks are honest-but-flat instead of real.
-// (Re-recording via the ↻ button DOES get a real waveform, same as a fresh
-// recording, since it's captured live from that point on.)
+// The waveform for the ORIGINAL clip: there's no cheap way to pull amplitude
+// back out of an already-encoded m4a file directly (no PCM decode step this
+// app has), so instead of a flat placeholder we do a silent background pass
+// over the file with a dedicated, muted `scanPlayer` -- expo-audio's
+// useAudioSampleListener gives real PCM frames from an AudioPlayer while it
+// plays, so playing the file once at volume 0 (sped up 2x to shorten the
+// wait) and bucketing the collected peaks produces a real waveform without
+// any new dependency. See the scanPlayer effects below. (Re-recording via
+// the ↻ button still gets its own real waveform the original way, captured
+// live from that point on -- the scan is only for the pre-existing file.)
 
 import * as Haptics from 'expo-haptics';
 import {
@@ -22,8 +24,11 @@ import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
+  useAudioPlayerStatus,
   useAudioRecorder,
   useAudioRecorderState,
+  useAudioSampleListener,
+  type AudioSample,
 } from 'expo-audio';
 import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { useEffect, useRef, useState } from 'react';
@@ -100,6 +105,39 @@ export default function EditRecordingModal({
   // for why the ORIGINAL clip can't get the same treatment).
   const [rawWaveform, setRawWaveform] = useState<number[]>([]);
   const [displayWaveform, setDisplayWaveform] = useState<number[]>(PLACEHOLDER_WAVEFORM);
+  // Silent background scan of the ORIGINAL file (see header comment) --
+  // separate from previewPlayerRef, which is the audible trim-preview player.
+  const [isScanningWaveform, setIsScanningWaveform] = useState(false);
+  const rawScanSamplesRef = useRef<number[]>([]);
+  // A ref (not state) -- this instance is mutated imperatively (volume,
+  // replace, play) throughout, same convention as previewPlayerRef above;
+  // holding it in state would make those mutations read as "modifying state
+  // after render" to the lint rules that police that. Lazily constructed
+  // once on first render (React's own documented pattern for a ref that
+  // needs a non-trivial initial value) rather than every render.
+  const scanPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  if (scanPlayerRef.current === null) {
+    scanPlayerRef.current = createAudioPlayer(null, { updateInterval: 100 });
+  }
+  // useAudioSampleListener/useAudioPlayerStatus need the actual player value
+  // at call time (that's just how hook arguments work) -- the lint rule
+  // below is written for refs that stand in for UI-relevant state, not for
+  // an escape-hatch native handle that's read here and mutated imperatively
+  // elsewhere (same instance every render either way, since the guard above
+  // only constructs it once).
+  // eslint-disable-next-line react-hooks/refs
+  const scanPlayer = scanPlayerRef.current;
+  const scanStatus = useAudioPlayerStatus(scanPlayer);
+  useAudioSampleListener(scanPlayer, (sample: AudioSample) => {
+    let peak = 0;
+    for (const channel of sample.channels) {
+      for (const frame of channel.frames) {
+        const abs = Math.abs(frame);
+        if (abs > peak) peak = abs;
+      }
+    }
+    rawScanSamplesRef.current.push(peak);
+  });
 
   const startHandleX = useSharedValue(0);
   const endHandleX = useSharedValue(0);
@@ -149,6 +187,45 @@ export default function EditRecordingModal({
     setFadeOutOn((recording.fadeOutMs ?? 0) > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, recording?.id]);
+
+  // Silent background waveform scan of the ORIGINAL file (see header
+  // comment) -- muted, 2x speed to halve the wait. Skipped once pendingUri
+  // is set (a re-record already gets its own real, live-captured waveform).
+  useEffect(() => {
+    if (!visible || !recording || pendingUri) return undefined;
+    rawScanSamplesRef.current = [];
+    // This state purely mirrors "a scan just started" for the UI hint text;
+    // the effect's real job (kicking off silent playback on the player, an
+    // external system) is what actually requires being here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsScanningWaveform(true);
+    scanPlayer.loop = false;
+    scanPlayer.volume = 0;
+    scanPlayer.replace(recording.fileUri);
+    scanPlayer.setPlaybackRate(2);
+    scanPlayer.play();
+    return () => { scanPlayer.pause(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, recording?.id]);
+
+  // Detects the scan reaching the end of the file. Guarded on pendingUri
+  // still being null: if the user tapped re-record while this silent pass
+  // was still running, stopReRecording() already installed a real, live
+  // waveform -- this stale result must NOT overwrite it.
+  useEffect(() => {
+    if (!isScanningWaveform || !scanStatus.didJustFinish) return;
+    // Mirrors the player's own didJustFinish status (an external system),
+    // which is exactly the "subscribe to updates from outside" case the
+    // effect docs call out as fine to setState from.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsScanningWaveform(false);
+    if (pendingUri) return;
+    setDisplayWaveform(bucketWaveform(rawScanSamplesRef.current, WAVEFORM_BARS));
+  }, [scanStatus.didJustFinish, isScanningWaveform, pendingUri]);
+
+  useEffect(() => () => {
+    try { scanPlayer.remove(); } catch {}
+  }, [scanPlayer]);
 
   // One amplitude sample per poll while actively re-recording, from the
   // recorder's own metering — becomes the waveform with no need to decode
@@ -220,6 +297,13 @@ export default function EditRecordingModal({
       return;
     }
     stopPreview();
+    // Don't let the silent background scan (if still mid-pass) fight the
+    // mic for the audio session, and don't let its later completion
+    // overwrite the real waveform this re-recording is about to capture
+    // (the completion effect also guards on pendingUri, but stopping the
+    // player outright here avoids the session conflict too).
+    scanPlayer.pause();
+    setIsScanningWaveform(false);
     setRawWaveform([]);
     await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
     await recorder.prepareToRecordAsync();
@@ -367,7 +451,9 @@ export default function EditRecordingModal({
               ) : (
                 <>
               <Text style={[styles.recordHint, { color: subColor }]}>
-                {t('recordings.trimHintLong', locale, trimStart.toFixed(1), trimEnd.toFixed(1), recordingDuration.toFixed(1))}
+                {isScanningWaveform
+                  ? t('recordings.analyzingWaveform', locale)
+                  : t('recordings.trimHintLong', locale, trimStart.toFixed(1), trimEnd.toFixed(1), recordingDuration.toFixed(1))}
               </Text>
 
               <View style={styles.waveformRow}>
