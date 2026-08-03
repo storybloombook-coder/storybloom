@@ -23,11 +23,12 @@ const DUST_LIFE = 0.5;
 // (same burst-counter convention as notes/dust above) right at the gulp.
 // Live feedback: rays now radiate in EVERY direction (the old version only
 // ever rotated around Y, so every ray sat flat in the horizontal plane --
-// never up or down) out to 135% of Kolobok's own length (diameter), exactly
-// 40 of them, evenly distributed so none of them bunch up near each other.
+// never up or down), exactly 40 of them, evenly distributed so none of them
+// bunch up near each other. Length was 135% of Kolobok's own diameter,
+// shortened 20% per live feedback (135% * 0.8 = 108%).
 const RAY_COUNT = 40;
 const RAY_CAPACITY = RAY_COUNT;
-const RAY_LENGTH = KOLOBOK_RADIUS * 2 * 1.35; // "exceeds kolobok's length by 35%"
+const RAY_LENGTH = KOLOBOK_RADIUS * 2 * 1.08; // "exceeds kolobok's length by 8%" (was 35%, -20%)
 const RAY_GROW_S = 0.15;
 const RAY_LIFE = 0.5;
 const CATCH_SMOKE_COUNT = 16;
