@@ -6,6 +6,12 @@ const PRESS_SCALE = 0.88;
 const PRESS_IN_MS = 80;
 const PRESS_OUT_MS = 120;
 
+// Animated-capable outer Pressable -- lets callers pass a useAnimatedStyle()
+// result (e.g. a pulsing shadow) straight into `style` alongside plain
+// objects, same as any other Reanimated-wrapped component. A plain
+// Pressable can't consume a shared-value-backed style directly.
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 /** A circular icon button (the 3D scene's story/eye/menu/locale controls)
  *  with tactile feedback on every tap: a haptic tick, a quick scale-down/up
  *  press animation, and a subtle darken overlay while held -- mirroring the
@@ -19,9 +25,13 @@ const PRESS_OUT_MS = 120;
  *  must own that box, or the touch target ends up at the wrong place/size).
  *  `innerStyle` carries the visual look (background/border-radius) on the
  *  inner Animated.View that actually scales/darkens on press, so the two
- *  concerns don't fight each other. */
+ *  concerns don't fight each other.
+ *
+ *  `disabled` forwards straight to the underlying Pressable, which already
+ *  skips onPressIn/onPressOut/onPress entirely while disabled -- no extra
+ *  guarding needed here for the tactile feedback to correctly not fire. */
 export function TactileButton({
-  onPress, style, innerStyle, children, accessibilityRole, accessibilityLabel, hitSlop,
+  onPress, style, innerStyle, children, accessibilityRole, accessibilityLabel, hitSlop, disabled,
 }) {
   const scale = useSharedValue(1);
   const pressDarken = useSharedValue(0);
@@ -29,10 +39,11 @@ export function TactileButton({
   const darkenStyle = useAnimatedStyle(() => ({ opacity: pressDarken.value }));
 
   return (
-    <Pressable
+    <AnimatedPressable
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       hitSlop={hitSlop}
+      disabled={disabled}
       style={style}
       onPressIn={() => {
         scale.value = withTiming(PRESS_SCALE, { duration: PRESS_IN_MS });
@@ -51,7 +62,7 @@ export function TactileButton({
         {children}
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.darken, darkenStyle]} />
       </Animated.View>
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
