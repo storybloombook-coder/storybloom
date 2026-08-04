@@ -311,7 +311,15 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
         const result = await prepareRef.current;
         if (cancelled || !isMountedRef.current) return;
         if (!result?.granted) {
-          setPhase('denied');
+          // `failed` is a genuine setup error, not a refused permission --
+          // showing the "microphone access needed" card there would be
+          // actively misleading, so just drop back to the list.
+          if (result?.failed) {
+            setPhase('idle');
+            setFlowSlotId(null);
+          } else {
+            setPhase('denied');
+          }
           return;
         }
         recorder.record();
@@ -427,10 +435,29 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // above, which does it once for the whole time the menu is open --
     // leaving only prepareToRecordAsync() (cheap) in this per-tap path.
     prepareRef.current = (async () => {
-      const { granted } = await requestRecordingPermissionsAsync();
-      if (!granted) return { granted: false };
-      await recorder.prepareToRecordAsync();
-      return { granted: true };
+      try {
+        const { granted } = await requestRecordingPermissionsAsync();
+        if (!granted) return { granted: false };
+        // expo-audio REJECTS prepareToRecordAsync outright if the recorder
+        // is still prepared from a previous take ("AudioRecorder has
+        // already been prepared. Stop or release the current session before
+        // preparing again"). That never surfaced while the audio-mode
+        // switch still ran per-tap -- it was implicitly resetting the
+        // session each time -- so hoisting that to menu-open exposed it on
+        // the SECOND recording. RecorderState.canRecord ("whether the
+        // recorder is ready and able to record") is that prepared flag, so
+        // only prepare when it isn't already usable. Cancelling mid-
+        // countdown leaves it prepared-but-unused, which this also covers.
+        if (!recorder.getStatus().canRecord) {
+          await recorder.prepareToRecordAsync();
+        }
+        return { granted: true };
+      } catch {
+        // Never let this promise reject: on a cancelled or superseded flow
+        // nothing is left awaiting it, and an unhandled rejection surfaces
+        // as a red LogBox error over the whole scene.
+        return { granted: false, failed: true };
+      }
     })();
   };
 
