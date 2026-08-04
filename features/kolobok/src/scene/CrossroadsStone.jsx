@@ -315,6 +315,13 @@ function Plaque({
     if (s.timeline && !s.timeline.done) return; // already mid-beat
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     onDust(index);
+    // Camera-lock mode ("so a kid can tap everywhere on the screen and not
+    // be interrupted"): the plaque still presses in, glows, kicks up dust
+    // and buzzes exactly as always -- it just doesn't navigate away. Read
+    // once here rather than inside the timeline's own call, so a tap's
+    // outcome is decided by the state at the moment it was made, not by
+    // whatever the lock happens to be ~300ms later.
+    const navigates = !orbit.rotationLocked;
     s.timeline = createTimeline([
       { at: 0, dur: PRESS_MS, ease: 'easeOutCubic', update: (v) => { s.press = v * PRESS_DEPTH; } },
       {
@@ -323,7 +330,7 @@ function Plaque({
         update: (v) => { s.press = PRESS_DEPTH * (1 - v); },
       },
       { at: 0, dur: NAV_AT_MS, update: (v) => { s.emissive = EMISSIVE_IDLE + (EMISSIVE_PEAK - EMISSIVE_IDLE) * Math.sin(v * Math.PI); } },
-      { at: NAV_AT_MS, call: () => { requestNavigation(item.route); } },
+      ...(navigates ? [{ at: NAV_AT_MS, call: () => { requestNavigation(item.route); } }] : []),
     ]);
   };
 

@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
+import * as Haptics from 'expo-haptics';
 import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide, Object3D, SphereGeometry,
 } from 'three';
@@ -27,7 +28,17 @@ const SMOKE_COUNT = 24;
 // pipe's own geometry knowledge" precedent as the chimneyPos prop's default
 // just below), individually varied +/-20% in size, staggered by a small gap
 // so they emerge as a visible sequence rather than one clump.
-const PUFF_COUNT = 3;
+const PUFF_PER_BURST = 3;
+// Live feedback: "when tapped again on the pipe, the bubbles already in
+// progress shouldn't disappear -- they should just be added to the new
+// ones." The pool used to be exactly PUFF_PER_BURST, so a second tap had
+// nowhere to put new bubbles and re-seeded the same three mid-flight. A
+// deeper pool lets bursts overlap; a new burst claims whichever slots are
+// free and leaves anything still rising alone. Four bursts' worth is
+// comfortably more than the ~3.6s rise+stagger can consume at tap speed,
+// and if a child does out-tap it the oldest simply isn't replaced (nothing
+// visibly resets, the extra tap just adds no new bubble).
+const PUFF_POOL = PUFF_PER_BURST * 4;
 // Live feedback: "make the pipe twice as tall and twice as wide" -- doubled
 // to match ZoneLandmarks.jsx's own IzbaChimney cylinder top radius.
 const CHIMNEY_PIPE_TOP_R = 0.11;
@@ -64,6 +75,19 @@ const SMOKE_SUPPRESS_S = 6;
 const SMOKE_BASE_OPACITY = 0.55;
 const SMOKE_FADE_S = 0.5;
 
+// Live feedback: "when you tap a bubble, it should pop with a dust
+// animation and a vibration feedback." Motes fly outward from where the
+// bubble was and shrink to nothing over POP_DUST_S. Shrinking (not fading)
+// carries the dissipation because these share one instanced material, so
+// per-instance opacity isn't available -- the same trick the puffs' own
+// shrink tail already uses.
+const POP_DUST_PER_POP = 8;
+const POP_DUST_POOL = POP_DUST_PER_POP * 3;
+const POP_DUST_S = 0.55;
+const POP_DUST_SPREAD = 0.26;
+const POP_DUST_RISE = 0.1;
+const POP_DUST_R = 0.05;
+
 // Live feedback: "make sure grandma doesn't disappear when Kolobok shows
 // up, but instead sits down on the stool by the window and knits" -- the
 // old "crosses the window every 20-35s" idle only ever ran while
@@ -99,6 +123,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
 
   const puffRef = useRef();
   const puffShadowRef = useRef();
+  const popDustRef = useRef();
   // Live feedback: "shadows and light effects as cloud spheres" -- same
   // toon material + rimStrength=0.35 treatment Sky.jsx's own clouds use
   // ("apply the same lighting effect to the clouds as on the characters"),
@@ -141,12 +166,54 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
   // >= 1 = parked/done.
   const puffState = useRef({
     seen: eggMotion.chimneySmokeBurst,
-    puffs: new Array(PUFF_COUNT).fill(0).map(() => ({ t: 1, radius: PUFF_BASE_R, drift: 0 })),
+    // px/py/pz cache each puff's live world position every frame, so popping
+    // one can spawn its dust exactly where the bubble was without recomputing
+    // the sway/wind/rise chain outside the frame loop.
+    puffs: new Array(PUFF_POOL).fill(0).map(() => ({
+      t: 1 + PUFF_SHRINK_FRAC, radius: PUFF_BASE_R, drift: 0, px: 0, py: 0, pz: 0,
+    })),
+    dust: new Array(POP_DUST_POOL).fill(0).map(() => ({
+      t: 1, x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 0,
+    })),
     // -1 = normal smoke showing as usual; 0..SMOKE_SUPPRESS_S seconds =
     // counting up while normal smoke stays hidden.
     smokeSuppressS: -1,
     smokeOpacity: SMOKE_BASE_OPACITY,
   });
+
+  /** Live feedback: "when you tap a bubble, it should pop with a dust
+   *  animation and a vibration feedback." e.instanceId identifies which
+   *  bubble in the instanced pool was hit. Guarded on the puff actually
+   *  being mid-rise: parked slots sit at y=-5 at ~zero scale, and a stray
+   *  ray shouldn't be able to "pop" one that isn't on screen. */
+  const popPuff = (e) => {
+    const i = e.instanceId;
+    const pu = puffState.current;
+    const p = pu.puffs[i];
+    if (!p || p.t < 0 || p.t >= 1 + PUFF_SHRINK_FRAC || eggMotion.chimneyHeld) return;
+    e.stopPropagation();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Retire the bubble instantly -- past the shrink tail, so the shared
+    // loop parks it this frame AND the slot reads as free for the next
+    // burst to claim.
+    p.t = 1 + PUFF_SHRINK_FRAC;
+    let spawned = 0;
+    for (let d = 0; d < pu.dust.length && spawned < POP_DUST_PER_POP; d += 1) {
+      const mote = pu.dust[d];
+      if (mote.t < 1) continue;
+      // Random point on a sphere, biased outward from where the bubble was.
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      mote.dx = Math.sin(phi) * Math.cos(theta);
+      mote.dy = Math.cos(phi);
+      mote.dz = Math.sin(phi) * Math.sin(theta);
+      mote.x = p.px;
+      mote.y = p.py;
+      mote.z = p.pz;
+      mote.t = 0;
+      spawned += 1;
+    }
+  };
 
   const grandmaGeometry = useMemo(() => mergeColoredParts([
     { geometry: new SphereGeometry(0.09, 8, 6), color: '#3a3229', position: [0, 0.62, 0] },
@@ -203,11 +270,18 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     if (eggMotion.chimneySmokeBurst !== pu.seen) {
       pu.seen = eggMotion.chimneySmokeBurst;
       pu.smokeSuppressS = 0;
-      pu.puffs.forEach((p, i) => {
-        p.t = -i * PUFF_GAP_S;
+      // Claim only FREE slots (finished, or never started) -- anything still
+      // rising from an earlier tap keeps its own t and carries on untouched,
+      // so bursts stack instead of replacing each other.
+      let started = 0;
+      for (let i = 0; i < pu.puffs.length && started < PUFF_PER_BURST; i += 1) {
+        const p = pu.puffs[i];
+        if (p.t < 1 + PUFF_SHRINK_FRAC) continue;
+        p.t = -started * PUFF_GAP_S;
         p.radius = PUFF_BASE_R * (1 + (Math.random() * 2 - 1) * PUFF_SIZE_VARIANCE);
         p.drift = Math.random() * Math.PI * 2;
-      });
+        started += 1;
+      }
     }
     if (puffRef.current) {
       pu.puffs.forEach((p, i) => {
@@ -242,6 +316,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
           pz = chimneyPos[2] + sway * 0.6 + windDriftZ;
           dummy.position.set(px, chimneyPos[1] + rise, pz);
           dummy.scale.setScalar(scale);
+          // Remembered for popPuff, which runs outside this loop.
+          p.px = px;
+          p.py = chimneyPos[1] + rise;
+          p.pz = pz;
         } else {
           // Still waiting its own stagger delay, or already done -- parked
           // well below the ground either way.
@@ -272,6 +350,30 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       });
       puffRef.current.instanceMatrix.needsUpdate = true;
       if (puffShadowRef.current) puffShadowRef.current.instanceMatrix.needsUpdate = true;
+    }
+
+    // Pop dust: motes fly outward from the popped bubble on an easeOut arc
+    // (fast spray, quick settle) while shrinking to nothing.
+    if (popDustRef.current) {
+      pu.dust.forEach((d, i) => {
+        if (d.t < 1) d.t += dt / POP_DUST_S;
+        if (d.t < 1) {
+          const ease = 1 - (1 - d.t) * (1 - d.t);
+          dummy.position.set(
+            d.x + d.dx * POP_DUST_SPREAD * ease,
+            d.y + d.dy * POP_DUST_SPREAD * ease + POP_DUST_RISE * ease,
+            d.z + d.dz * POP_DUST_SPREAD * ease,
+          );
+          dummy.scale.setScalar(POP_DUST_R * (1 - d.t));
+        } else {
+          dummy.position.set(0, -5, 0);
+          dummy.scale.setScalar(0.001);
+        }
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        popDustRef.current.setMatrixAt(i, dummy.matrix);
+      });
+      popDustRef.current.instanceMatrix.needsUpdate = true;
     }
 
     // Live feedback: "the default smoke disappears... after 6 seconds, the
@@ -401,15 +503,28 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       {/* Live feedback: "bubbles... should have shadows... as cloud
           spheres" -- same flat radial-falloff shadow plane Sky.jsx's own
           cloudShadowRef uses. */}
-      <instancedMesh ref={puffShadowRef} args={[undefined, undefined, PUFF_COUNT]} renderOrder={1}>
+      <instancedMesh ref={puffShadowRef} args={[undefined, undefined, PUFF_POOL]} renderOrder={1}>
         <planeGeometry args={[1, 1]} />
         <meshBasicMaterial map={puffShadowTexture} color="#1e1a14" transparent opacity={0.28} depthWrite={false} fog={false} />
+      </instancedMesh>
+      {/* Pop dust (live feedback): sits in the same never-occluded layer as
+          the bubbles themselves, so a pop right in front of the roof reads
+          as clearly as one against the sky. */}
+      <instancedMesh ref={popDustRef} args={[undefined, undefined, POP_DUST_POOL]} renderOrder={3}>
+        <sphereGeometry args={[1, 6, 5]} />
+        <meshBasicMaterial color="#cfc6b6" transparent opacity={0.75} depthWrite={false} depthTest={false} fog={false} />
       </instancedMesh>
       {/* Chimney smoke spheres (live feedback, reworked): actual sphere
           meshes now (not Points) since each one needs its own independent
           size -- a PointsMaterial's `size` is one shared value for the
           whole pool, which can't express "vary by +/-20% each". */}
-      <instancedMesh ref={puffRef} args={[undefined, undefined, PUFF_COUNT]} material={puffMaterial} renderOrder={2}>
+      <instancedMesh
+        ref={puffRef}
+        args={[undefined, undefined, PUFF_POOL]}
+        material={puffMaterial}
+        renderOrder={2}
+        onClick={popPuff}
+      >
         <sphereGeometry args={[1, 10, 8]} />
       </instancedMesh>
       {/* Live feedback: "sits down on the stool by the window and knits" --
