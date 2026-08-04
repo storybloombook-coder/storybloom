@@ -17,7 +17,7 @@ import { AtmosphereDirector } from './AtmosphereDirector';
 import { WeatherSystems } from './WeatherSystems';
 import { PondAndGrandpa } from './PondAndGrandpa';
 import { RimLightSync } from './materials/rimLight';
-import { AdaptiveQuality } from './AdaptiveQuality';
+import { FrameTimeProbe } from './FrameTimeProbe';
 import { DustTrail } from './DustTrail';
 import { GoldenHourExtras } from './GoldenHourExtras';
 import { BubbleAnchor } from './BubbleAnchor';
@@ -29,7 +29,7 @@ import { CameraDragShield } from './CameraDragShield';
 export function KolobokScene({ dragController }) {
   return (
     <>
-      <AdaptiveQuality />
+      <FrameTimeProbe />
       <RimLightSync />
       <AtmosphereDirector />
       <Sky />

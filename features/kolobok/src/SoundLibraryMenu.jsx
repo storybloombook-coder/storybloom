@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, Pressable, ScrollView, StyleSheet,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue, useAnimatedStyle, withRepeat, withSequence, withTiming, interpolate,
 } from 'react-native-reanimated';
@@ -559,8 +560,18 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               <View key={cat.id} style={styles.categorySection}>
                 <Pressable
                   accessibilityRole="button"
-                  style={styles.categoryHeader}
-                  onPress={() => toggleCategory(cat.id)}
+                  accessibilityState={{ expanded: isOpen }}
+                  style={({ pressed }) => [styles.categoryHeader, pressed && styles.categoryHeaderPressed]}
+                  // Haptic on onPress, NOT onPressIn: these headers live in a
+                  // ScrollView, and onPressIn fires the moment a finger lands
+                  // -- including when that finger is starting a scroll -- so
+                  // tying feedback to it would buzz on every drag. onPress
+                  // only fires on a real tap. Same Light impact TactileButton
+                  // uses, so every control in the scene feels the same.
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    toggleCategory(cat.id);
+                  }}
                 >
                   <Text style={styles.categoryTitle}>{t(cat.labelKey, locale)}</Text>
                   <Text style={styles.categoryChevron}>{isOpen ? '▾' : '▸'}</Text>
@@ -713,7 +724,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  categoryChevron: { fontSize: 13, color: '#8a5a2b', fontWeight: '700' },
+  // 2x the old 13 -- the chevron is the only thing signalling these rows are
+  // expandable at all, and at 13 it read as decoration next to the label.
+  categoryChevron: { fontSize: 26, color: '#8a5a2b', fontWeight: '700' },
+  categoryHeaderPressed: { backgroundColor: 'rgba(138,90,43,0.12)', borderRadius: 8 },
   categoryTooltip: {
     fontSize: 12,
     color: '#6b6558',

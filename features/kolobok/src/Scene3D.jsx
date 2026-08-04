@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Animated, AppState, StyleSheet, View, Text, Pressable,
+  Animated, AppState, PixelRatio, StyleSheet, View, Text, Pressable,
 } from 'react-native';
 import { Canvas } from '@react-three/fiber/native';
 import { KolobokScene } from './scene/KolobokScene';
@@ -30,6 +30,27 @@ const TOTAL_EGGS = 7;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
+
+// Render resolution, decided ONCE per process and never touched again.
+//
+// Live feedback: "I see how the resolution switches sometimes and this is
+// not good at all -- idle time passes, resolution shrinks then stretches
+// back... and with the resolution change the tap area shrinks and there are
+// missclicks." That was a regression from making AdaptiveQuality re-measure
+// continuously: every switch reallocates the GL drawing buffer, which pops
+// visibly AND reprojects the scene's raycast targets, so taps landed off
+// their intended object. Runtime dpr changes are simply not worth that --
+// the scene now picks one value and stays there for the whole session.
+//
+// min(density, 2): never render ABOVE the panel's real pixel density (pure
+// waste on low-density devices), and never above 2 regardless. On a ~2.6x
+// flagship this lands at 2 -- below native, so slightly soft but cheap;
+// CLAUDE.md's "cap dpr at 1.5" predates the toon/rim-light pass and would
+// be visibly mushy on a screen this dense, so the cap lives here instead.
+// `antialias` is off on the Canvas to pay for it: MSAA is a heavy per-
+// fragment cost on mobile GPUs and buys little at this density, and
+// rendering more pixels without it beats fewer pixels with it.
+const RENDER_DPR = Math.min(PixelRatio.get(), 2);
 
 function createCameraDragController() {
   return createSinglePointerDrag({
@@ -304,8 +325,8 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         {canvasSize ? (
           <Canvas
             style={{ width: canvasSize.width, height: canvasSize.height }}
-            dpr={2}
-            gl={{ antialias: true }}
+            dpr={RENDER_DPR}
+            gl={{ antialias: false }}
             frameloop={frameloop}
             camera={{ fov: 45, near: 0.5, far: 60 }}
           >
