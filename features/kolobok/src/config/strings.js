@@ -92,6 +92,8 @@ export const STRINGS = {
         reset: 'Reset',
         mute: 'Mute this sound',
         unmute: 'Unmute this sound',
+        readFullPhrase: 'Read the full phrase',
+        closeHint: 'Tap anywhere to close',
       },
       unit: {
         seconds: 's',
@@ -102,6 +104,7 @@ export const STRINGS = {
         saved: 'Saved!',
         target: 'Target length',
         stopRecording: '⏹ Stop recording',
+        cancel: 'Cancel recording',
         permissionTitle: 'Microphone access needed',
         permissionBody: 'Allow microphone access to record your own sound for this slot. You can keep using the default sound without it.',
       },
@@ -341,6 +344,8 @@ export const STRINGS = {
         reset: 'Сбросить',
         mute: 'Выключить этот звук',
         unmute: 'Включить этот звук',
+        readFullPhrase: 'Прочитать фразу целиком',
+        closeHint: 'Нажмите в любом месте, чтобы закрыть',
       },
       unit: {
         seconds: 'с',
@@ -351,6 +356,7 @@ export const STRINGS = {
         saved: 'Сохранено!',
         target: 'Целевая длительность',
         stopRecording: '⏹ Остановить запись',
+        cancel: 'Отменить запись',
         permissionTitle: 'Нужен доступ к микрофону',
         permissionBody: 'Разрешите доступ к микрофону, чтобы записать свой звук для этого действия. Без этого будет использоваться звук по умолчанию.',
       },

@@ -140,7 +140,19 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // user is on another screen, then visibly "catches up" on return instead
   // of resuming from where they left it. Same frameloop knob as the AppState
   // pause above, just gated on a second condition.
-  const frameloop = (appActive && focused) ? 'always' : 'never';
+  //
+  // Sound-library menu (SOUND_SPEC.md §2): declared up here rather than next
+  // to its own handler below because the frameloop gate needs it. Live
+  // feedback: "the recording timer is lagging" / "the 3-2-1 countdown
+  // doesn't take 3 seconds." Both are JS-thread starvation, not audio bugs
+  // -- the menu is a translucent modal, so the whole 3D scene kept
+  // rendering at full rate behind it and every setTimeout/setInterval the
+  // recorder UI depends on landed late. The scene is almost entirely
+  // occluded while the menu is open (full-width panel over a 45%-dark
+  // backdrop), so freezing it there costs nearly nothing visually and hands
+  // the entire frame budget to the recording UI.
+  const [soundMenuOpen, setSoundMenuOpen] = useState(false);
+  const frameloop = (appActive && focused && !soundMenuOpen) ? 'always' : 'never';
 
   // Finale gulp fade (STORY_SPEC §3 ch8): plain RN Animated (no new deps).
   // Out = 300ms to black; in = 900ms back, matching the chapter table.
@@ -204,9 +216,6 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
     setCameraFollow(orbit.cameraFollow);
   };
 
-  // Sound-library menu (SOUND_SPEC.md §2): identical 40x40 circle, stacked
-  // directly above the eye toggle on the same right-side column.
-  const [soundMenuOpen, setSoundMenuOpen] = useState(false);
   const onToggleSoundMenu = () => {
     playSlot(soundMenuOpen ? 'ui.menuClose' : 'ui.menuOpen');
     setSoundMenuOpen((v) => !v);

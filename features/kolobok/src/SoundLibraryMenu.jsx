@@ -55,8 +55,36 @@ function formatSeconds(ms) {
   return (ms / 1000).toFixed(2);
 }
 
+// The `sound.slot.dialogue.*` labels (strings.js) are deliberately short
+// previews (e.g. 'Narrator: "Grandma mixed a little dough..."') so they fit
+// a single list row -- they are NOT what the scene actually says. This maps
+// each dialogue slot back to the real full-text i18n key the scene plays
+// (StoryDirector's NARRATION_SOUND_SLOT / EncounterDirector's
+// LINE_SOUND_SLOT, inverted) so both the row's "read full phrase" icon and
+// the recording popup can show the user the exact line they're voicing.
+const DIALOGUE_FULL_TEXT_KEY = {
+  'dialogue.kolobokSong': 'song.full',
+  'dialogue.hareEat': 'line.eat.hare',
+  'dialogue.wolfEat': 'line.eat.wolf',
+  'dialogue.bearEat': 'line.eat.bear',
+  'dialogue.foxFlatter': 'line.fox.flatter',
+  'dialogue.foxCloser': 'story.fox.closer',
+  'dialogue.grandmaTap': 'line.grandma.tap',
+  'dialogue.bake1': 'story.bake1',
+  'dialogue.bake1b': 'story.bake1b',
+  'dialogue.bake2': 'story.bake2',
+  'dialogue.bragGrandma': 'story.brag.grandma',
+  'dialogue.bragHare': 'story.brag.hare',
+  'dialogue.bragWolf': 'story.brag.wolf',
+  'dialogue.bragBear': 'story.brag.bear',
+  'dialogue.foxIntro': 'story.fox.intro',
+  'dialogue.snap': 'story.snap',
+  'dialogue.rebirth': 'story.rebirth',
+  'dialogue.eggRebirth': 'story.egg.rebirth',
+};
+
 function SlotRow({
-  slotId, locale, onPlay, onRecord, onReset, onToggleMute, busy, recording, previewing, refreshTick,
+  slotId, locale, onPlay, onRecord, onReset, onToggleMute, onShowFullPhrase, busy, recording, previewing, refreshTick,
 }) {
   // refreshTick is unused directly -- its only job is to be a changing prop
   // so this row re-renders (and re-reads the manifest) after a save/reset/
@@ -67,6 +95,7 @@ function SlotRow({
   const slot = getSlotDefinition(slotId);
   const labelKey = getSlotLabelKey(slotId);
   const label = t(labelKey, locale);
+  const fullPhraseKey = DIALOGUE_FULL_TEXT_KEY[slotId];
   // Live feedback: "no need for a prompt regarding sound duration" for
   // unlimited (My Ambience) slots -- durationMs there is only the
   // procedural default's own loop length, not a recording target, so
@@ -100,6 +129,17 @@ function SlotRow({
     <View style={styles.row}>
       <View style={styles.rowLabelWrap}>
         <Text style={styles.rowLabel} numberOfLines={1}>{label}</Text>
+        {fullPhraseKey && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('sound.action.readFullPhrase', locale)}
+            hitSlop={10}
+            disabled={busy}
+            onPress={() => onShowFullPhrase(fullPhraseKey)}
+          >
+            <Text style={styles.infoIcon}>ⓘ</Text>
+          </Pressable>
+        )}
         {durationLabel && <Text style={styles.rowDuration}>{durationLabel}</Text>}
         <View style={[styles.badge, overridden && styles.badgeCustom]}>
           <Text style={[styles.badgeText, overridden && styles.badgeTextCustom]}>
@@ -159,6 +199,26 @@ function SlotRow({
   );
 }
 
+/** The live mm:ss readout during capture, deliberately its OWN component.
+ *  Live feedback: "the recording timer is lagging." It was ticking state on
+ *  the whole SoundLibraryMenu ~33x/second, and since SlotRow isn't memoized
+ *  that re-rendered every expanded category and every row underneath the
+ *  popup on every tick -- tens of components per frame, purely to repaint
+ *  one number. Isolating it here means a tick re-renders exactly this one
+ *  <Text>. The displayed value is derived from wall-clock `startedAt`
+ *  rather than an accumulator, so a late/dropped tick self-corrects instead
+ *  of the clock permanently falling behind. */
+function RecordingTimer({ startedAt, durationMs, unlimited, locale, style }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 50);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedMs = Math.max(0, nowMs - startedAt);
+  const shownMs = unlimited ? elapsedMs : Math.max(0, durationMs - elapsedMs);
+  return <Text style={style}>{formatSeconds(shownMs)}{t('sound.unit.seconds', locale)}</Text>;
+}
+
 export function SoundLibraryMenu({ visible, onClose, locale }) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
@@ -166,14 +226,21 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   // 'idle' | 'countdown' | 'recording' | 'saved' | 'denied'
   const [phase, setPhase] = useState('idle');
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
-  const [elapsedMs, setElapsedMs] = useState(0);
+  // Wall-clock instant capture actually began -- drives RecordingTimer.
+  const [recordStartedAt, setRecordStartedAt] = useState(0);
   const [refreshTick, setRefreshTick] = useState(0);
   // Collapsed by default -- tap a category header to expand it.
   const [expanded, setExpanded] = useState({});
   // Which loop slot (if any) is currently toggled on for an audible preview
   // (PLAY on a loop slot starts/stops a real loop instead of a one-shot).
   const [previewingLoopId, setPreviewingLoopId] = useState(null);
-  const recordStartRef = useRef(0);
+  // i18n key of the full phrase currently shown in the "read full phrase"
+  // overlay (see DIALOGUE_FULL_TEXT_KEY) -- null when the overlay is closed.
+  const [fullPhraseKey, setFullPhraseKey] = useState(null);
+  // Wall-clock instant the 3-2-1 countdown should hit zero. Every tick
+  // re-derives the digit from this instead of counting down blindly, so
+  // drift can't accumulate -- see the countdown effect below.
+  const countdownEndRef = useRef(0);
   const isMountedRef = useRef(true);
   // Holds the in-flight (or already-resolved) session-setup promise kicked
   // off by handleRecord, awaited once the countdown reaches zero -- see its
@@ -186,39 +253,76 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
 
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  // Countdown ticker: 3 -> 2 -> 1 -> start the real recording. Live
-  // feedback: "the countdown feels like more than 3 seconds" -- it was:
-  // setAudioModeAsync + recorder.prepareToRecordAsync used to run AFTER the
-  // countdown finished (sequentially), and that native setup's own latency
-  // (mic session init, first-recording-of-the-session overhead) added
-  // unpredictable extra wait on top of the visual 3s. Now handleRecord
-  // kicks that prep off immediately, in PARALLEL with the countdown ticking
-  // (prepareRef); by the time countdown reaches zero it's normally already
-  // resolved, so recorder.record() fires with no perceptible extra delay.
+  // Switch the OS audio session into recording-capable mode once, for the
+  // WHOLE time this menu is open, rather than per recording. Live feedback:
+  // "are we sure the 3-2-1 countdown takes 3 seconds?" -- it doesn't always,
+  // because setAudioModeAsync (a real OS-level session-category switch, not
+  // a cheap flag) used to run fresh on every single record tap AND get
+  // reverted after every single take (see finishRecording's own comment) --
+  // so every recording after the first was paying that cost again, racing
+  // the very same 3s window. Doing it once here means by the time the user
+  // ever taps record for the first time (which is always well after the
+  // menu has been open for at least a moment), the session is already in
+  // the right mode -- only recorder.prepareToRecordAsync() (much cheaper)
+  // remains in the per-tap critical path.
+  useEffect(() => {
+    if (!visible) return undefined;
+    setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
+    return () => {
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    };
+  }, [visible]);
+
+  // Countdown: 3 -> 2 -> 1 -> capture starts. Exactly three seconds, and
+  // exactly three visible steps.
+  //
+  // Live feedback: "the countdown doesn't take 3 seconds for 3-2-1 and 1
+  // extra second before the recording starts -- it feels wrong." Two
+  // separate causes, both fixed here:
+  //
+  // 1. THE EXTRA STEP. This used to render a 4th state -- countdown 0 drew
+  //    a '●' and only THEN awaited prepareRef before flipping to
+  //    'recording'. That dot was a real, visible 4th beat of unbounded
+  //    length. Now hitting zero starts capture directly; there is no zero
+  //    state to draw.
+  // 2. THE DRIFT. Three chained setTimeout(1000)s each start counting only
+  //    once the previous one has fired AND React has re-rendered, so every
+  //    tick's own lateness was permanently baked into the total -- and this
+  //    modal renders over a live 3D scene, so ticks land late a lot. Now
+  //    each tick re-derives the digit from a fixed wall-clock deadline and
+  //    schedules itself to the NEXT digit boundary, so a late tick corrects
+  //    itself instead of pushing the finish line back.
   useEffect(() => {
     if (phase !== 'countdown') return undefined;
-    if (countdown <= 0) {
-      let cancelled = false;
+    let cancelled = false;
+    let timer = null;
+
+    const tick = () => {
+      if (cancelled) return;
+      const remainingMs = countdownEndRef.current - Date.now();
+      if (remainingMs > 0) {
+        setCountdown(Math.max(1, Math.ceil(remainingMs / 1000)));
+        // Sleep only until the digit actually changes, not a flat 1000ms.
+        const toBoundary = remainingMs - Math.floor(remainingMs / 1000) * 1000;
+        timer = setTimeout(tick, toBoundary || 1000);
+        return;
+      }
       (async () => {
-        await prepareRef.current;
+        const result = await prepareRef.current;
         if (cancelled || !isMountedRef.current) return;
+        if (!result?.granted) {
+          setPhase('denied');
+          return;
+        }
         recorder.record();
-        recordStartRef.current = Date.now();
-        setElapsedMs(0);
+        setRecordStartedAt(Date.now());
         setPhase('recording');
       })();
-      return () => { cancelled = true; };
-    }
-    const timer = setTimeout(() => setCountdown((c) => c - 1), 1000);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, countdown]);
+    };
 
-  // Live timer while actually capturing (30ms resolution).
-  useEffect(() => {
-    if (phase !== 'recording') return undefined;
-    const interval = setInterval(() => setElapsedMs(Date.now() - recordStartRef.current), 30);
-    return () => clearInterval(interval);
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   const finishRecording = async () => {
@@ -229,7 +333,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       // if it's already gone there's nothing left to save.
       return;
     }
-    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    // NOT reverting allowsRecording here anymore -- see the visible/mount
+    // effect below for why. Flipping it back after every single take used
+    // to make the NEXT recording pay for a full OS audio-session-mode
+    // switch again, inside the very same 3s countdown window it's racing.
     if (!isMountedRef.current || !flowSlotId) return;
     if (recorder.uri) saveRecordingForSlot(flowSlotId, recorder.uri);
     setRefreshTick((v) => v + 1);
@@ -301,23 +408,29 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setRefreshTick((v) => v + 1);
   };
 
-  const handleRecord = async (slotId) => {
-    const { granted } = await requestRecordingPermissionsAsync();
-    if (!granted) {
-      setFlowSlotId(slotId);
-      setPhase('denied');
-      return;
-    }
+  const handleRecord = (slotId) => {
     if (previewingLoopId) {
       stopPreviewSlotLoop(previewingLoopId);
       setPreviewingLoopId(null);
     }
     setFlowSlotId(slotId);
     setCountdown(COUNTDOWN_START);
+    countdownEndRef.current = Date.now() + COUNTDOWN_START * 1000;
     setPhase('countdown');
+    // Live feedback: "the countdown before recording doesn't last 3
+    // seconds, it's longer" -- requestRecordingPermissionsAsync used to be
+    // awaited BEFORE any of the state above, so on a slow permission round
+    // trip the popup itself wouldn't appear until part of the 3s had
+    // already silently ticked away. Folding it into this same parallel prep
+    // means nothing runs before the countdown is on screen. The audio-mode
+    // switch itself no longer happens here at all -- see the visible-effect
+    // above, which does it once for the whole time the menu is open --
+    // leaving only prepareToRecordAsync() (cheap) in this per-tap path.
     prepareRef.current = (async () => {
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) return { granted: false };
       await recorder.prepareToRecordAsync();
+      return { granted: true };
     })();
   };
 
@@ -333,16 +446,39 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setFlowSlotId(null);
   };
 
+  /** Live feedback: "if you click somewhere around the pop up, let it cancel
+   *  the recording and be back to the library." Discards whatever was
+   *  captured -- deliberately NOT finishRecording(), which would save it.
+   *  Phase is cleared FIRST and synchronously so the hard-auto-stop effect's
+   *  own cleanup cancels its pending timer before the await below can yield;
+   *  otherwise a cancel landing near the target duration could still race
+   *  finishRecording() and save the take the user just threw away. */
+  const cancelFlow = () => {
+    const wasRecording = phase === 'recording';
+    setPhase('idle');
+    setFlowSlotId(null);
+    if (wasRecording) {
+      try {
+        recorder.stop().catch(() => {});
+      } catch {
+        // Already released -- nothing to stop.
+      }
+    }
+  };
+
   const toggleCategory = (catId) => {
     setExpanded((prev) => ({ ...prev, [catId]: !prev[catId] }));
   };
 
-  const flowLabel = flowSlot ? t(getSlotLabelKey(flowSlot.id), locale) : '';
-  const flowTargetLabel = flowSlot ? `${formatSeconds(flowSlot.durationMs)}${t('sound.unit.seconds', locale)}` : '';
-  const remainingLabel = flowSlot
-    ? `${formatSeconds(Math.max(0, flowSlot.durationMs - elapsedMs))}${t('sound.unit.seconds', locale)}`
+  // Live feedback: "when recording has started, the popup should show the
+  // whole phrase" -- the row label is a deliberately short preview (see
+  // DIALOGUE_FULL_TEXT_KEY), which is useless to actually read aloud while
+  // recording. Swap in the real full line whenever this slot has one.
+  const flowFullPhraseKey = flowSlot ? DIALOGUE_FULL_TEXT_KEY[flowSlot.id] : null;
+  const flowLabel = flowSlot
+    ? (flowFullPhraseKey ? t(flowFullPhraseKey, locale) : t(getSlotLabelKey(flowSlot.id), locale))
     : '';
-  const elapsedLabel = `${formatSeconds(elapsedMs)}${t('sound.unit.seconds', locale)}`;
+  const flowTargetLabel = flowSlot ? `${formatSeconds(flowSlot.durationMs)}${t('sound.unit.seconds', locale)}` : '';
 
   const popupPulse = useSharedValue(0);
   useEffect(() => {
@@ -362,7 +498,15 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   }));
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={() => canClose && onClose?.()}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      // Android back mirrors the tap-outside gesture: during a take it
+      // abandons that take rather than being swallowed, otherwise it closes
+      // the whole library.
+      onRequestClose={() => (busy ? cancelFlow() : onClose?.())}
+    >
       <Pressable style={styles.backdrop} onPress={canClose ? onClose : undefined} />
       <View style={styles.panel} pointerEvents="box-none">
         <View style={styles.header}>
@@ -410,6 +554,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                     onRecord={handleRecord}
                     onReset={handleReset}
                     onToggleMute={handleToggleMute}
+                    onShowFullPhrase={setFullPhraseKey}
                   />
                 ))}
               </View>
@@ -418,9 +563,18 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
         </ScrollView>
 
         {busy && flowSlot && (
-          <View style={styles.recordOverlay} pointerEvents="auto">
-            <View style={styles.recordCard}>
-              <Text style={styles.recordSlotLabel} numberOfLines={2}>{flowLabel}</Text>
+          <View style={styles.recordOverlay} pointerEvents="box-none">
+            {/* Tap anywhere around the card to abandon this take. The card
+                itself claims the responder so taps ON it don't fall through
+                to this. */}
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              accessibilityRole="button"
+              accessibilityLabel={t('sound.recording.cancel', locale)}
+              onPress={cancelFlow}
+            />
+            <View style={styles.recordCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.recordSlotLabel}>{flowLabel}</Text>
               {!flowSlot.unlimited && (
                 <Text style={styles.recordTarget}>{t('sound.recording.target', locale)}: {flowTargetLabel}</Text>
               )}
@@ -433,7 +587,13 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               {phase === 'recording' && (
                 <>
                   <Animated.View style={[styles.recordingDot, pulsingDotStyle]} />
-                  <Text style={styles.recordTimer}>{flowSlot.unlimited ? elapsedLabel : remainingLabel}</Text>
+                  <RecordingTimer
+                    startedAt={recordStartedAt}
+                    durationMs={flowSlot.durationMs}
+                    unlimited={flowSlot.unlimited}
+                    locale={locale}
+                    style={styles.recordTimer}
+                  />
                   <Text style={styles.recordStatus}>{t('sound.recording.recording', locale)}</Text>
                   {flowSlot.unlimited && (
                     <TactileButton
@@ -466,6 +626,20 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               )}
             </View>
           </View>
+        )}
+
+        {fullPhraseKey && (
+          <Pressable
+            style={styles.fullPhraseOverlay}
+            onPress={() => setFullPhraseKey(null)}
+            accessibilityRole="button"
+            accessibilityLabel={t('sound.close', locale)}
+          >
+            <View style={styles.fullPhraseCard}>
+              <Text style={styles.fullPhraseText}>{t(fullPhraseKey, locale)}</Text>
+              <Text style={styles.fullPhraseHint}>{t('sound.action.closeHint', locale)}</Text>
+            </View>
+          </Pressable>
         )}
       </View>
     </Modal>
@@ -529,6 +703,11 @@ const styles = StyleSheet.create({
   },
   rowLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   rowLabel: { fontSize: 15, color: '#2e2a22', flexShrink: 1 },
+  // "Read full phrase" affordance for dialogue slots whose row label is a
+  // shortened preview (see DIALOGUE_FULL_TEXT_KEY) -- small and inline
+  // rather than a full TactileButton, since it's a secondary affordance next
+  // to the label, not a peer of the row's 4 action buttons.
+  infoIcon: { fontSize: 16, color: '#8a5a2b' },
   rowDuration: { fontSize: 12, color: '#8a5a2b', fontWeight: '600' },
   badge: {
     backgroundColor: 'rgba(46,42,34,0.08)',
@@ -578,12 +757,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 16,
   },
-  // Fixed size regardless of phase (countdown/recording/saved/denied) so the
-  // window never jumps around; marginTop leaves the dimmed sounds list
-  // visibly peeking above it instead of the card touching the panel top.
+  // minHeight (not a fixed height) so the card holds its usual size
+  // regardless of phase (countdown/recording/saved/denied) but can still
+  // grow for a long dialogue phrase (live feedback: "the popup should show
+  // the whole phrase" -- a full narration line can run to 2-3 lines, and a
+  // fixed height would have clipped it). marginTop leaves the dimmed sounds
+  // list visibly peeking above it instead of the card touching the panel top.
   recordCard: {
     width: '100%',
-    height: 260,
+    minHeight: 260,
     marginTop: 40,
     backgroundColor: '#ffd6e8',
     borderRadius: 20,
@@ -623,4 +805,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopBtnIcon: { fontSize: 26, color: '#fff' },
+  // "Read full phrase" popup, triggered from a row's infoIcon. Simple
+  // tap-anywhere-to-dismiss overlay (same layering approach as recordOverlay
+  // above it in z-order isn't a concern -- the two are mutually exclusive,
+  // since a row's infoIcon is disabled while busy/recording).
+  fullPhraseOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(20,16,10,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 28,
+  },
+  fullPhraseCard: {
+    backgroundColor: '#fffbf4',
+    borderRadius: 18,
+    paddingVertical: 22,
+    paddingHorizontal: 22,
+    gap: 12,
+  },
+  fullPhraseText: { fontSize: 17, lineHeight: 24, color: '#2e2a22', textAlign: 'center' },
+  fullPhraseHint: { fontSize: 12, color: '#8a5a2b', textAlign: 'center', opacity: 0.75 },
 });

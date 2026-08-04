@@ -221,7 +221,13 @@ export function getCachedDefaultUri(slotId, synthesizeFn) {
 
 // ---------------------------------------------------------------- playback
 
-const ONE_SHOT_POOL_SIZE = 3; // "≤3 concurrent one-shots; extra requests dropped"
+// SOUND_SPEC.md §2 originally specified 3. Raised to 6 after live feedback
+// ("it's important that sounds are overlapping"): the pool is round-robin,
+// so the Nth+1 concurrent sound doesn't get "dropped" as the spec's wording
+// suggests -- it REPLACES the oldest player, cutting that sound off
+// mid-playback. At 3 voices any moderately busy moment (a character line +
+// an interaction blip + a UI tap) was audibly truncating things.
+const ONE_SHOT_POOL_SIZE = 6;
 let oneShotPool = null;
 let poolIndex = 0;
 
@@ -230,6 +236,21 @@ function getPool() {
     oneShotPool = new Array(ONE_SHOT_POOL_SIZE).fill(0).map(() => createAudioPlayer(null));
   }
   return oneShotPool;
+}
+
+// Dedicated channel for spoken lines (the `dialogue` category), kept OUT of
+// the round-robin pool above. Dialogue slots run up to 4.5s -- far longer
+// than any effect -- so on a shared pool they were the most likely thing to
+// get evicted mid-sentence by a burst of short blips, which is exactly the
+// wrong trade now that the user can record the whole tale in their own
+// voice. Its own player means narration can never be cut off by an effect;
+// a NEW line still replaces the previous one, which is correct (two
+// overlapping narrators would just be mush).
+let voicePlayer = null;
+
+function getVoicePlayer() {
+  if (!voicePlayer) voicePlayer = createAudioPlayer(null);
+  return voicePlayer;
 }
 
 let masterEnabled = true; // toggled by Scene3D.jsx's own mute button (stacked above the sound-library button)
@@ -256,12 +277,17 @@ export function isMasterEnabled() { return masterEnabled; }
 /** Plays a one-shot sound immediately. `preview` bypasses the master
  *  enabled/volume gating (the sound-library menu's own PLAY button always
  *  previews audibly, regardless of the ambient scene toggle). */
-export function playOneShot(uri, { volume = 1, rate = 1, preview = false } = {}) {
+export function playOneShot(uri, { volume = 1, rate = 1, preview = false, channel = 'sfx' } = {}) {
   if (!uri) return;
   if (!preview && !masterEnabled) return;
-  const pool = getPool();
-  const player = pool[poolIndex];
-  poolIndex = (poolIndex + 1) % pool.length;
+  let player;
+  if (channel === 'voice') {
+    player = getVoicePlayer();
+  } else {
+    const pool = getPool();
+    player = pool[poolIndex];
+    poolIndex = (poolIndex + 1) % pool.length;
+  }
   player.replace(uri);
   player.volume = (preview ? 1 : masterVolume) * volume;
   // Live feedback: assigning player.playbackRate throws "Cannot assign to

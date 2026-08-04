@@ -668,13 +668,21 @@ export function resetSlotToDefault(slotId) {
 // previewSlot/getSlotUri intentionally do NOT -- the menu's own PLAY button
 // always previews audibly regardless of that slot's mute state, same as it
 // already bypasses the master mute (soundEngine's own preview:true).
+/** Spoken lines get soundEngine's dedicated `voice` channel rather than the
+ *  shared round-robin one-shot pool, so a long narration line can't be cut
+ *  off mid-sentence by a burst of short effects -- see getVoicePlayer's own
+ *  comment there. */
+function channelFor(slotId) {
+  return getSlotDefinition(slotId)?.category === 'dialogue' ? 'voice' : 'sfx';
+}
+
 export function playSlot(slotId, opts) {
   if (isSlotMuted(slotId)) return;
-  playOneShot(getSlotUri(slotId), opts);
+  playOneShot(getSlotUri(slotId), { channel: channelFor(slotId), ...opts });
 }
 
 export function previewSlot(slotId) {
-  playOneShot(getSlotUri(slotId), { preview: true });
+  playOneShot(getSlotUri(slotId), { preview: true, channel: channelFor(slotId) });
 }
 
 export function startSlotLoop(slotId) {
