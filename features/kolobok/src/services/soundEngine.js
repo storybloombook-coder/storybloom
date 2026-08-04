@@ -277,7 +277,14 @@ export function isMasterEnabled() { return masterEnabled; }
 /** Plays a one-shot sound immediately. `preview` bypasses the master
  *  enabled/volume gating (the sound-library menu's own PLAY button always
  *  previews audibly, regardless of the ambient scene toggle). */
-export function playOneShot(uri, { volume = 1, rate = 1, preview = false, channel = 'sfx' } = {}) {
+// Pending auto-stops for trimmed one-shots, keyed by the player itself, so
+// re-firing the same pooled player cancels the previous clip's stop timer
+// instead of letting it cut the NEW sound short partway through.
+const trimStops = new Map();
+
+export function playOneShot(uri, {
+  volume = 1, rate = 1, preview = false, channel = 'sfx', trim = null,
+} = {}) {
   if (!uri) return;
   if (!preview && !masterEnabled) return;
   let player;
@@ -288,6 +295,8 @@ export function playOneShot(uri, { volume = 1, rate = 1, preview = false, channe
     player = pool[poolIndex];
     poolIndex = (poolIndex + 1) % pool.length;
   }
+  const pendingStop = trimStops.get(player);
+  if (pendingStop) { clearTimeout(pendingStop); trimStops.delete(player); }
   player.replace(uri);
   player.volume = (preview ? 1 : masterVolume) * volume;
   // Live feedback: assigning player.playbackRate throws "Cannot assign to
@@ -295,7 +304,23 @@ export function playOneShot(uri, { volume = 1, rate = 1, preview = false, channe
   // despite the expo-audio .d.ts documenting it as a plain settable
   // property -- setPlaybackRate() is the actual working setter.
   player.setPlaybackRate(rate);
-  player.play();
+  if (!trim) {
+    player.play();
+    return;
+  }
+  // Trimmed user recording: the file is the whole 20s take, so seek to the
+  // chosen window and stop at its end. seekTo resolves once the player has
+  // actually moved, so playing inside the .then keeps the clip from starting
+  // at 0 for a frame first. Errors are swallowed -- a failed seek should
+  // degrade to "plays from the top", never throw into a scene callback.
+  player.seekTo(trim.startMs / 1000).then(() => {
+    player.play();
+    const stop = setTimeout(() => {
+      try { player.pause(); } catch { /* released underneath us */ }
+      trimStops.delete(player);
+    }, trim.durMs / Math.max(0.01, rate));
+    trimStops.set(player, stop);
+  }).catch(() => { try { player.play(); } catch { /* released */ } });
 }
 
 const loopPlayers = new Map(); // slotId -> { player, uri, wantsPlaying }

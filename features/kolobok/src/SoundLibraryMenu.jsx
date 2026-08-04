@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Modal, View, Text, Pressable, ScrollView, StyleSheet, Switch,
+  Modal, View, Text, Pressable, ScrollView, StyleSheet, Switch, PanResponder,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, {
@@ -31,6 +31,8 @@ import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
+  createAudioPlayer,
+  useAudioSampleListener,
 } from 'expo-audio';
 import {
   CATEGORIES,
@@ -53,6 +55,18 @@ import { t } from './config/strings';
 
 const COUNTDOWN_START = 3;
 const GLOW_HALF_MS = 400;
+
+// Every non-ambient slot now records a fixed 20s take and the user picks the
+// piece they want out of it afterwards, rather than the recording being
+// hard-cut at the slot's own (often very short) target length.
+const SEGMENT_MS = 20000;
+const WAVEFORM_BARS = 56;
+// Scan rate for the silent amplitude pass. 2x matches the outer app's
+// EditRecordingModal, which is the proven path -- expo-audio's sample
+// listener yields real PCM frames from a muted player, and pushing the rate
+// higher starts dropping frames on some devices, which would thin the
+// waveform rather than just speed it up.
+const SCAN_RATE = 2;
 
 function formatSeconds(ms) {
   return (ms / 1000).toFixed(2);
@@ -222,12 +236,100 @@ function RecordingTimer({ startedAt, durationMs, unlimited, locale, style }) {
   return <Text style={style}>{formatSeconds(shownMs)}{t('sound.unit.seconds', locale)}</Text>;
 }
 
+/** The trim strip: a waveform of the whole 20s take with a fixed-width
+ *  window over it, dragged left/right to choose which part of the take
+ *  becomes this slot's sound. The window's width is the slot's own target
+ *  duration, so it can't be resized -- only positioned, which is what makes
+ *  every slot come out exactly the length the scene expects. */
+function TrimStrip({ waveform, startMs, durMs, onChangeStart }) {
+  const [width, setWidth] = useState(0);
+  // Live values for the gesture: PanResponder's callbacks are created once,
+  // so reading startMs/width straight out of the closure would pin them to
+  // whatever they were on first render.
+  const liveRef = useRef({ startMs, width, durMs, onChangeStart });
+  // Synced in an effect rather than assigned during render: the PanResponder
+  // below is created once, so its callbacks would otherwise capture whatever
+  // these were on the first render and never see a drag update.
+  useEffect(() => {
+    liveRef.current = { startMs, width, durMs, onChangeStart };
+  });
+  const dragOriginRef = useRef(0);
+
+  const [pan] = useState(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => { dragOriginRef.current = liveRef.current.startMs; },
+    onPanResponderMove: (_e, g) => {
+      const l = liveRef.current;
+      if (!l.width) return;
+      const maxStart = Math.max(0, SEGMENT_MS - l.durMs);
+      const deltaMs = (g.dx / l.width) * SEGMENT_MS;
+      l.onChangeStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
+    },
+  }));
+
+  const frac = Math.min(1, durMs / SEGMENT_MS);
+  const selLeft = width * (startMs / SEGMENT_MS);
+  const selWidth = Math.max(12, width * frac);
+
+  return (
+    <View
+      style={styles.trimStrip}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      {...pan.panHandlers}
+    >
+      <View style={styles.trimBars} pointerEvents="none">
+        {waveform.map((v, i) => {
+          // Inside the window the bar is full-strength; outside it dims, so
+          // the selection reads even before the overlay frame is noticed.
+          const barMs = (i / waveform.length) * SEGMENT_MS;
+          const inWindow = barMs >= startMs && barMs <= startMs + durMs;
+          return (
+            <View
+              key={i}
+              style={[
+                styles.trimBar,
+                { height: `${Math.max(4, v * 100)}%` },
+                inWindow ? styles.trimBarActive : styles.trimBarIdle,
+              ]}
+            />
+          );
+        })}
+      </View>
+      {width > 0 && (
+        <View pointerEvents="none" style={[styles.trimWindow, { left: selLeft, width: selWidth }]} />
+      )}
+    </View>
+  );
+}
+
 export function SoundLibraryMenu({ visible, onClose, locale }) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // One player does double duty: muted at 2x for the amplitude scan, then at
+  // normal volume/rate for previewing the chosen window. Created lazily and
+  // kept for the menu's lifetime -- a second native player just to preview
+  // isn't worth it.
+  const [editPlayer] = useState(() => createAudioPlayer(null, { updateInterval: 100 }));
+  useAudioSampleListener(editPlayer, (sample) => {
+    let peak = 0;
+    for (const channel of sample.channels) {
+      for (const frame of channel.frames) {
+        const abs = Math.abs(frame);
+        if (abs > peak) peak = abs;
+      }
+    }
+    scanPeaksRef.current.push(peak);
+  });
 
   const [flowSlotId, setFlowSlotId] = useState(null);
-  // 'idle' | 'countdown' | 'recording' | 'saved' | 'denied'
+  // 'idle' | 'countdown' | 'recording' | 'scanning' | 'trimming' | 'saved' | 'denied'
   const [phase, setPhase] = useState('idle');
+  // The just-recorded 20s take, held un-saved until the user confirms a
+  // window in the trim editor (or discards it).
+  const [pendingUri, setPendingUri] = useState(null);
+  const [waveform, setWaveform] = useState([]);
+  const [trimStartMs, setTrimStartMs] = useState(0);
+  const scanPeaksRef = useRef([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
   // Wall-clock instant capture actually began -- drives RecordingTimer.
   const [recordStartedAt, setRecordStartedAt] = useState(0);
@@ -352,10 +454,69 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // to make the NEXT recording pay for a full OS audio-session-mode
     // switch again, inside the very same 3s countdown window it's racing.
     if (!isMountedRef.current || !flowSlotId) return;
-    if (recorder.uri) saveRecordingForSlot(flowSlotId, recorder.uri);
-    setRefreshTick((v) => v + 1);
-    setPhase('saved');
+    const uri = recorder.uri;
+    if (!uri) { setPhase('idle'); setFlowSlotId(null); return; }
+    const slot = getSlotDefinition(flowSlotId);
+    // Ambient (unlimited) slots have no target length to fit, so there's
+    // nothing to trim TO -- they save the whole take exactly as before.
+    if (slot?.unlimited) {
+      saveRecordingForSlot(flowSlotId, uri);
+      setRefreshTick((v) => v + 1);
+      setPhase('saved');
+      return;
+    }
+    // Everything else goes through the trim editor. Kick off the silent
+    // amplitude scan; the status effect below flips to 'trimming' when the
+    // playhead reaches the end.
+    setPendingUri(uri);
+    setTrimStartMs(0);
+    setWaveform([]);
+    scanPeaksRef.current = [];
+    setPhase('scanning');
   };
+
+  // Silent amplitude pass over the fresh take (see SCAN_RATE). Muted and at
+  // 2x, so a 20s take scans in ~10s; the sample listener above collects one
+  // peak per PCM frame batch and this buckets them into WAVEFORM_BARS.
+  useEffect(() => {
+    if (phase !== 'scanning' || !pendingUri) return undefined;
+    let done = false;
+    const finish = () => {
+      if (done || !isMountedRef.current) return;
+      done = true;
+      editPlayer.pause();
+      const peaks = scanPeaksRef.current;
+      const bars = new Array(WAVEFORM_BARS).fill(0);
+      if (peaks.length > 0) {
+        for (let i = 0; i < peaks.length; i += 1) {
+          const bucket = Math.min(WAVEFORM_BARS - 1, Math.floor((i / peaks.length) * WAVEFORM_BARS));
+          if (peaks[i] > bars[bucket]) bars[bucket] = peaks[i];
+        }
+        // Normalize to the loudest bar so quiet takes still show shape.
+        const max = Math.max(...bars);
+        if (max > 0) for (let i = 0; i < bars.length; i += 1) bars[i] /= max;
+      }
+      setWaveform(bars);
+      setPhase('trimming');
+    };
+    editPlayer.loop = false;
+    editPlayer.volume = 0;
+    editPlayer.replace(pendingUri);
+    editPlayer.setPlaybackRate(SCAN_RATE);
+    editPlayer.play();
+    // Poll rather than trusting a completion event: a scan that stalls (or a
+    // file whose duration never resolves) must still hand over a waveform
+    // instead of leaving the user stuck on a spinner forever.
+    const started = Date.now();
+    const poll = setInterval(() => {
+      const dur = editPlayer.duration;
+      const at = editPlayer.currentTime;
+      const overran = Date.now() - started > (SEGMENT_MS / SCAN_RATE) + 4000;
+      if (overran || (dur > 0 && at >= dur - 0.15)) finish();
+    }, 150);
+    return () => { clearInterval(poll); done = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, pendingUri]);
 
   // Hard auto-stop at THIS slot's own target duration -- one-shots and
   // ambient loops alike (SOUND_SPEC.md §3's "hard cap, every slot" rule) --
@@ -365,7 +526,11 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     if (phase !== 'recording' || !flowSlotId) return undefined;
     const slot = getSlotDefinition(flowSlotId);
     if (slot.unlimited) return undefined;
-    const timer = setTimeout(() => finishRecording(), slot.durationMs);
+    // Fixed 20s take for every non-ambient slot now, not the slot's own
+    // (often sub-second) target length -- the user picks the piece they want
+    // out of it in the trim editor afterwards. Stoppable early via the Stop
+    // button, which every slot now has rather than only ambient ones.
+    const timer = setTimeout(() => finishRecording(), SEGMENT_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, flowSlotId]);
@@ -400,6 +565,12 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   useEffect(() => () => {
     if (previewingLoopId) stopPreviewSlotLoop(previewingLoopId);
   }, [previewingLoopId]);
+
+  // Release the scan/preview player's native handle on unmount. Same
+  // already-released hazard as the recorder cleanup above, hence the guard.
+  useEffect(() => () => {
+    try { editPlayer.remove(); } catch { /* already released */ }
+  }, [editPlayer]);
 
   const handlePlay = (slotId) => {
     const slot = getSlotDefinition(slotId);
@@ -484,6 +655,38 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
 
   const handleManualStop = () => finishRecording();
 
+  /** Preview just the selected window, the same way the scene will play it
+   *  once confirmed (seek to start, stop after the slot's duration). */
+  const handlePreviewTrim = () => {
+    if (!pendingUri || !flowSlot) return;
+    editPlayer.volume = 1;
+    editPlayer.setPlaybackRate(1);
+    editPlayer.seekTo(trimStartMs / 1000).then(() => {
+      editPlayer.play();
+      setTimeout(() => { try { editPlayer.pause(); } catch { /* released */ } }, flowSlot.durationMs);
+    }).catch(() => {});
+  };
+
+  const handleConfirmTrim = () => {
+    if (!pendingUri || !flowSlotId || !flowSlot) return;
+    try { editPlayer.pause(); } catch { /* released */ }
+    saveRecordingForSlot(flowSlotId, pendingUri, {
+      startMs: Math.round(trimStartMs),
+      durMs: flowSlot.durationMs,
+    });
+    setPendingUri(null);
+    setRefreshTick((v) => v + 1);
+    setPhase('saved');
+  };
+
+  /** Throw the take away and go straight back to recording it again. */
+  const handleRetakeTrim = () => {
+    try { editPlayer.pause(); } catch { /* released */ }
+    setPendingUri(null);
+    setWaveform([]);
+    if (flowSlotId) handleRecord(flowSlotId);
+  };
+
   const dismissFlow = () => {
     setPhase('idle');
     setFlowSlotId(null);
@@ -500,6 +703,11 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     const wasRecording = phase === 'recording';
     setPhase('idle');
     setFlowSlotId(null);
+    // Discards an un-confirmed take outright: the trim editor never wrote
+    // anything to the slot, so dropping the reference is the whole undo.
+    setPendingUri(null);
+    setWaveform([]);
+    try { editPlayer.pause(); } catch { /* released */ }
     if (wasRecording) {
       try {
         recorder.stop().catch(() => {});
@@ -655,25 +863,92 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               {phase === 'recording' && (
                 <>
                   <Animated.View style={[styles.recordingDot, pulsingDotStyle]} />
+                  {/* Counts down the 20s TAKE, not the slot's target length
+                      -- the slot length is what the trim window will be, and
+                      showing that here would hit zero seconds into a
+                      recording that keeps running. */}
                   <RecordingTimer
                     startedAt={recordStartedAt}
-                    durationMs={flowSlot.durationMs}
+                    durationMs={SEGMENT_MS}
                     unlimited={flowSlot.unlimited}
                     locale={locale}
                     style={styles.recordTimer}
                   />
                   <Text style={styles.recordStatus}>{t('sound.recording.recording', locale)}</Text>
-                  {flowSlot.unlimited && (
+                  {/* Stop is available on EVERY slot now, not just ambient:
+                      a fixed 20s take would otherwise be a long wait for a
+                      half-second blip. */}
+                  <TactileButton
+                    accessibilityRole="button"
+                    accessibilityLabel={t('sound.recording.stopRecording', locale)}
+                    style={styles.stopBtnOuter}
+                    innerStyle={styles.stopBtnInner}
+                    onPress={handleManualStop}
+                  >
+                    <Text style={styles.stopBtnIcon}>⏹</Text>
+                  </TactileButton>
+                </>
+              )}
+              {phase === 'scanning' && (
+                <>
+                  <Text style={styles.recordBig}>◍</Text>
+                  <Text style={styles.recordStatus}>{t('sound.recording.analyzing', locale)}</Text>
+                </>
+              )}
+              {phase === 'trimming' && (
+                <>
+                  <Text style={styles.recordStatus}>{t('sound.recording.trimHint', locale)}</Text>
+                  <TrimStrip
+                    waveform={waveform}
+                    startMs={trimStartMs}
+                    durMs={flowSlot.durationMs}
+                    onChangeStart={setTrimStartMs}
+                  />
+                  <Text style={styles.trimReadout}>
+                    {formatSeconds(trimStartMs)}
+                    {t('sound.unit.seconds', locale)}
+                    {' – '}
+                    {formatSeconds(trimStartMs + flowSlot.durationMs)}
+                    {t('sound.unit.seconds', locale)}
+                  </Text>
+                  <View style={styles.trimActions}>
                     <TactileButton
                       accessibilityRole="button"
-                      accessibilityLabel={t('sound.recording.stopRecording', locale)}
-                      style={styles.stopBtnOuter}
-                      innerStyle={styles.stopBtnInner}
-                      onPress={handleManualStop}
+                      accessibilityLabel={t('sound.action.play', locale)}
+                      style={styles.trimBtnOuter}
+                      innerStyle={styles.trimBtnInner}
+                      onPress={handlePreviewTrim}
                     >
-                      <Text style={styles.stopBtnIcon}>⏹</Text>
+                      <Text style={styles.trimBtnIcon}>▶</Text>
                     </TactileButton>
-                  )}
+                    <TactileButton
+                      accessibilityRole="button"
+                      accessibilityLabel={t('sound.recording.retake', locale)}
+                      style={styles.trimBtnOuter}
+                      innerStyle={styles.trimBtnInner}
+                      onPress={handleRetakeTrim}
+                    >
+                      <Text style={styles.trimBtnIcon}>↻</Text>
+                    </TactileButton>
+                    <TactileButton
+                      accessibilityRole="button"
+                      accessibilityLabel={t('sound.recording.confirm', locale)}
+                      style={[styles.trimBtnOuter, styles.trimBtnConfirm]}
+                      innerStyle={styles.trimBtnInner}
+                      onPress={handleConfirmTrim}
+                    >
+                      <Text style={[styles.trimBtnIcon, styles.trimBtnIconOnDark]}>✓</Text>
+                    </TactileButton>
+                    <TactileButton
+                      accessibilityRole="button"
+                      accessibilityLabel={t('sound.recording.cancel', locale)}
+                      style={styles.trimBtnOuter}
+                      innerStyle={styles.trimBtnInner}
+                      onPress={cancelFlow}
+                    >
+                      <Text style={styles.trimBtnIcon}>✕</Text>
+                    </TactileButton>
+                  </View>
                 </>
               )}
               {phase === 'saved' && (
@@ -883,6 +1158,56 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopBtnIcon: { fontSize: 26, color: '#fff' },
+  // Trim editor -------------------------------------------------------------
+  trimStrip: {
+    width: '100%',
+    height: 72,
+    marginTop: 6,
+    borderRadius: 10,
+    backgroundColor: 'rgba(122,51,80,0.10)',
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  trimBars: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 2,
+  },
+  trimBar: { flex: 1, marginHorizontal: 0.5, borderRadius: 1 },
+  trimBarActive: { backgroundColor: '#7a3350' },
+  trimBarIdle: { backgroundColor: 'rgba(122,51,80,0.28)' },
+  trimWindow: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    borderWidth: 2,
+    borderColor: '#7a3350',
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  trimReadout: {
+    fontSize: 12,
+    color: '#7a3350',
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  trimActions: { flexDirection: 'row', gap: 14, marginTop: 8 },
+  trimBtnOuter: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#f0dbe4',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.22,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  trimBtnInner: { borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+  trimBtnConfirm: { backgroundColor: '#7a3350' },
+  trimBtnIcon: { fontSize: 19, color: '#7a3350' },
+  trimBtnIconOnDark: { color: '#fff' },
   // "Read full phrase" popup, triggered from a row's infoIcon. Simple
   // tap-anywhere-to-dismiss overlay (same layering approach as recordOverlay
   // above it in z-order isn't a concern -- the two are mutually exclusive,

@@ -571,7 +571,7 @@ let manifestCache = null;
 // wants every slot to START muted) can never be confused with "has a user
 // recording" (isSlotOverridden below only ever looks at .overrides).
 function emptyManifest() {
-  return { overrides: {}, muted: {} };
+  return { overrides: {}, muted: {}, trims: {} };
 }
 
 function loadManifest() {
@@ -583,7 +583,13 @@ function loadManifest() {
   }
   try {
     const parsed = JSON.parse(file.textSync());
-    manifestCache = { overrides: parsed.overrides ?? {}, muted: parsed.muted ?? {} };
+    manifestCache = {
+      overrides: parsed.overrides ?? {},
+      muted: parsed.muted ?? {},
+      // Added after the first manifests shipped -- absent on any older file,
+      // which correctly reads as "no trim, play the whole recording".
+      trims: parsed.trims ?? {},
+    };
   } catch {
     manifestCache = emptyManifest();
   }
@@ -659,7 +665,13 @@ export function getSlotUri(slotId) {
  *  ITS OWN temp location) into this slot's permanent spot in the document
  *  directory, and flips the manifest -- called by the recording UI once
  *  `recorder.stop()` resolves. */
-export function saveRecordingForSlot(slotId, recordedUri) {
+/** `trim` is an optional { startMs, durMs } window into the saved file. The
+ *  recording itself is kept WHOLE and the window is stored alongside it,
+ *  rather than cutting the audio: there's no on-device encoder, so an actual
+ *  cut would mean decoding to PCM in real time and re-encoding to WAV --
+ *  a ~20s wait on every confirm, for a much larger file. Seeking on playback
+ *  costs a few ms instead, and keeps the take re-editable. */
+export function saveRecordingForSlot(slotId, recordedUri, trim = null) {
   ensureUserSoundsDir();
   const dest = recordingFile(slotId);
   if (dest.exists) dest.delete();
@@ -667,8 +679,18 @@ export function saveRecordingForSlot(slotId, recordedUri) {
   src.copySync(dest);
   const manifest = loadManifest();
   manifest.overrides[slotId] = { recordedAt: Date.now() };
+  if (trim) manifest.trims[slotId] = { startMs: trim.startMs, durMs: trim.durMs };
+  else delete manifest.trims[slotId];
   persistManifest();
   return dest.uri;
+}
+
+/** The { startMs, durMs } window for this slot, or null to play it whole.
+ *  Only ever set for a user recording -- procedural defaults are already
+ *  exactly their slot's length. */
+export function getSlotTrim(slotId) {
+  if (!isSlotOverridden(slotId)) return null;
+  return loadManifest().trims[slotId] ?? null;
 }
 
 export function resetSlotToDefault(slotId) {
@@ -676,6 +698,7 @@ export function resetSlotToDefault(slotId) {
   if (file.exists) file.delete();
   const manifest = loadManifest();
   delete manifest.overrides[slotId];
+  delete manifest.trims[slotId];
   persistManifest();
 }
 
@@ -696,11 +719,15 @@ function channelFor(slotId) {
 
 export function playSlot(slotId, opts) {
   if (isSlotMuted(slotId)) return;
-  playOneShot(getSlotUri(slotId), { channel: channelFor(slotId), ...opts });
+  playOneShot(getSlotUri(slotId), {
+    channel: channelFor(slotId), trim: getSlotTrim(slotId), ...opts,
+  });
 }
 
 export function previewSlot(slotId) {
-  playOneShot(getSlotUri(slotId), { preview: true, channel: channelFor(slotId) });
+  playOneShot(getSlotUri(slotId), {
+    preview: true, channel: channelFor(slotId), trim: getSlotTrim(slotId),
+  });
 }
 
 export function startSlotLoop(slotId) {
