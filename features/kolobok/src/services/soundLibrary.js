@@ -674,13 +674,28 @@ export function getSlotUri(slotId) {
 export function saveRecordingForSlot(slotId, recordedUri, trim = null) {
   ensureUserSoundsDir();
   const dest = recordingFile(slotId);
-  if (dest.exists) dest.delete();
-  const src = new File(recordedUri);
-  src.copySync(dest);
+  // Re-confirming an ALREADY-saved take (the editor reopened on a slot that
+  // has one) hands us this slot's own file back. Deleting it and then
+  // copying from it would destroy the recording, so only the trim moves.
+  const reSaving = recordedUri === dest.uri;
+  if (!reSaving) {
+    if (dest.exists) dest.delete();
+    new File(recordedUri).copySync(dest);
+  }
   const manifest = loadManifest();
   manifest.overrides[slotId] = { recordedAt: Date.now() };
-  if (trim) manifest.trims[slotId] = { startMs: trim.startMs, durMs: trim.durMs };
-  else delete manifest.trims[slotId];
+  if (trim) {
+    // takeMs + waveform ride along so reopening the editor can rebuild the
+    // strip exactly: neither is recoverable from the file afterwards (the
+    // amplitude trace only exists while recording -- see SoundLibraryMenu's
+    // metering poll).
+    manifest.trims[slotId] = {
+      startMs: trim.startMs,
+      durMs: trim.durMs,
+      takeMs: trim.takeMs ?? null,
+      waveform: trim.waveform ?? null,
+    };
+  } else delete manifest.trims[slotId];
   persistManifest();
   return dest.uri;
 }

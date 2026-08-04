@@ -32,7 +32,6 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   createAudioPlayer,
-  useAudioSampleListener,
 } from 'expo-audio';
 import {
   CATEGORIES,
@@ -40,6 +39,8 @@ import {
   getSlotDefinition,
   getSlotLabelKey,
   isSlotOverridden,
+  getSlotTrim,
+  getSlotUri,
   isSlotMuted,
   setSlotMuted,
   setAllSlotsMuted,
@@ -61,12 +62,27 @@ const GLOW_HALF_MS = 400;
 // hard-cut at the slot's own (often very short) target length.
 const SEGMENT_MS = 20000;
 const WAVEFORM_BARS = 56;
-// Scan rate for the silent amplitude pass. 2x matches the outer app's
-// EditRecordingModal, which is the proven path -- expo-audio's sample
-// listener yields real PCM frames from a muted player, and pushing the rate
-// higher starts dropping frames on some devices, which would thin the
-// waveform rather than just speed it up.
-const SCAN_RATE = 2;
+// Metering sample interval while recording. 60ms gives ~330 samples across a
+// full 20s take -- comfortably more than WAVEFORM_BARS, so every bar has
+// several samples to take its peak from even on a short take.
+const METER_POLL_MS = 60;
+
+/** Buckets raw 0..1 amplitude samples down to WAVEFORM_BARS peaks, then
+ *  normalizes to the loudest bar so a quiet take still shows shape. Falls
+ *  back to a flat low strip when there's nothing usable (a silent take, or
+ *  metering unavailable) -- the window is still positionable by ear with the
+ *  play button, which beats a blank box that reads as broken. */
+function buildWaveform(peaks) {
+  const bars = new Array(WAVEFORM_BARS).fill(0);
+  for (let i = 0; i < peaks.length; i += 1) {
+    const bucket = Math.min(WAVEFORM_BARS - 1, Math.floor((i / peaks.length) * WAVEFORM_BARS));
+    if (peaks[i] > bars[bucket]) bars[bucket] = peaks[i];
+  }
+  const max = Math.max(...bars);
+  if (max > 0) for (let i = 0; i < bars.length; i += 1) bars[i] /= max;
+  else bars.fill(0.22);
+  return bars;
+}
 
 function formatSeconds(ms) {
   return (ms / 1000).toFixed(2);
@@ -262,15 +278,26 @@ const TrimBars = memo(function TrimBars({ waveform, height }) {
   );
 });
 
-function TrimStrip({ waveform, startMs, durMs, takeMs, onChangeStart }) {
+function TrimStrip({
+  waveform, startMs, durMs, takeMs, locale, onChangeStart,
+}) {
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const liveRef = useRef({ startMs, width: 0, durMs, takeMs, onChangeStart });
-  // Synced in an effect rather than assigned during render: the PanResponder
-  // below is created once, so its callbacks would otherwise capture whatever
-  // these were on the first render and never see a drag update.
+  // Live feedback (round 2): "sliding the piece of sound still feels laggy."
+  // Memoizing the bars wasn't enough, because the position itself lived in
+  // the PARENT -- so every move event re-rendered the whole menu: the
+  // ScrollView, every expanded category, every SlotRow underneath the popup.
+  // The drag now moves purely local state, and the parent is told only on
+  // release. A move re-renders this component alone, and the bars inside it
+  // are memoized away, so it comes down to three small views and a label.
+  // Keyed on takeMs via the parent (see the <TrimStrip key=...>), so a new
+  // take remounts this component and the initial value is simply the seed --
+  // no effect syncing a prop into state, and no cascading render.
+  const [localStart, setLocalStart] = useState(startMs);
+
+  const liveRef = useRef(null);
   useEffect(() => {
     liveRef.current = {
-      startMs, width: size.width, durMs, takeMs, onChangeStart,
+      start: localStart, width: size.width, durMs, takeMs, onChangeStart,
     };
   });
   const dragOriginRef = useRef(0);
@@ -278,23 +305,30 @@ function TrimStrip({ waveform, startMs, durMs, takeMs, onChangeStart }) {
   const [pan] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { dragOriginRef.current = liveRef.current.startMs; },
+    onPanResponderGrant: () => { dragOriginRef.current = liveRef.current?.start ?? 0; },
     onPanResponderMove: (_e, g) => {
       const l = liveRef.current;
-      if (!l.width || !l.takeMs) return;
+      if (!l?.width || !l.takeMs) return;
       const maxStart = Math.max(0, l.takeMs - l.durMs);
       const deltaMs = (g.dx / l.width) * l.takeMs;
-      l.onChangeStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
+      setLocalStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
+    },
+    // Commit to the parent once, at the end of the gesture -- that's all
+    // Confirm needs, and it keeps the expensive tree out of the drag.
+    onPanResponderRelease: () => {
+      const l = liveRef.current;
+      if (l) l.onChangeStart(l.start);
     },
   }));
 
   // Everything is a fraction of the REAL take length, not the 20s ceiling --
   // stopping early has to give a strip that spans only what was recorded.
   const span = Math.max(1, takeMs);
-  const selLeft = size.width * (startMs / span);
+  const selLeft = size.width * (localStart / span);
   const selWidth = Math.max(12, size.width * Math.min(1, durMs / span));
 
   return (
+    <>
     <View
       style={styles.trimStrip}
       onLayout={(e) => setSize({
@@ -317,29 +351,33 @@ function TrimStrip({ waveform, startMs, durMs, takeMs, onChangeStart }) {
         </>
       )}
     </View>
+    {/* Readout lives here rather than in the parent so it tracks the drag
+        live -- the parent only hears about the new position on release. */}
+    <Text style={styles.trimReadout}>
+      {formatSeconds(localStart)}
+      {' – '}
+      {formatSeconds(Math.min(takeMs, localStart + durMs))}
+      {t('sound.unit.seconds', locale)}
+      {'  /  '}
+      {formatSeconds(takeMs)}
+      {t('sound.unit.seconds', locale)}
+    </Text>
+    </>
   );
 }
 
 export function SoundLibraryMenu({ visible, onClose, locale }) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // isMeteringEnabled is what makes getStatus().metering populated, which is
+  // now the waveform's only source -- see the metering poll below.
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   // One player does double duty: muted at 2x for the amplitude scan, then at
   // normal volume/rate for previewing the chosen window. Created lazily and
   // kept for the menu's lifetime -- a second native player just to preview
   // isn't worth it.
   const [editPlayer] = useState(() => createAudioPlayer(null, { updateInterval: 100 }));
-  useAudioSampleListener(editPlayer, (sample) => {
-    let peak = 0;
-    for (const channel of sample.channels) {
-      for (const frame of channel.frames) {
-        const abs = Math.abs(frame);
-        if (abs > peak) peak = abs;
-      }
-    }
-    scanPeaksRef.current.push(peak);
-  });
 
   const [flowSlotId, setFlowSlotId] = useState(null);
-  // 'idle' | 'countdown' | 'recording' | 'scanning' | 'trimming' | 'saved' | 'denied'
+  // 'idle' | 'countdown' | 'recording' | 'trimming' | 'saved' | 'denied'
   const [phase, setPhase] = useState('idle');
   // The just-recorded 20s take, held un-saved until the user confirms a
   // window in the trim editor (or discards it).
@@ -486,84 +524,44 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       setPhase('saved');
       return;
     }
-    // Everything else goes through the trim editor. Kick off the silent
-    // amplitude scan; the status effect below flips to 'trimming' when the
-    // playhead reaches the end.
+    // Everything else goes to the trim editor immediately -- the waveform
+    // was already built while recording (see the metering poll below), so
+    // there's nothing to process and no wait.
+    const takenMs = Math.max(1, Date.now() - recordStartedAt);
     setPendingUri(uri);
+    setWaveform(buildWaveform(scanPeaksRef.current));
+    setTakeMs(takenMs);
     setTrimStartMs(0);
-    setWaveform([]);
-    scanPeaksRef.current = [];
-    setPhase('scanning');
+    setPhase('trimming');
   };
 
-  // Silent amplitude pass over the fresh take (see SCAN_RATE). Muted and at
-  // 2x, so a 20s take scans in ~10s; the sample listener above collects one
-  // peak per PCM frame batch and this buckets them into WAVEFORM_BARS.
+  // Waveform capture, live during the take.
+  //
+  // Live feedback: "sound bar waveform is still not there." The previous
+  // approach replayed the finished file through a muted player and read PCM
+  // via useAudioSampleListener -- but that hook checks
+  // isAudioSamplingSupported and silently subscribes to nothing where the
+  // platform can't deliver frames, which is this device: the strip came out
+  // flat every time. The recorder's own metering is always available, so
+  // sampling it WHILE recording gives a real amplitude trace and, as a
+  // bonus, removes the whole post-processing step -- the editor now opens
+  // the instant recording stops. Polled through getStatus() into a ref
+  // rather than useAudioRecorderState, which would re-render the entire menu
+  // several times a second for a value nothing renders.
   useEffect(() => {
-    if (phase !== 'scanning' || !pendingUri) return undefined;
-    let done = false;
-    let playing = false;
+    if (phase !== 'recording') return undefined;
+    scanPeaksRef.current = [];
+    const id = setInterval(() => {
+      let db;
+      try { db = recorder.getStatus().metering; } catch { return; }
+      if (typeof db !== 'number' || Number.isNaN(db)) return;
+      // dBFS -> 0..1. -50dB is a fair noise floor for a phone mic in a room;
+      // quieter than that is indistinguishable from silence anyway.
+      scanPeaksRef.current.push(Math.max(0, Math.min(1, (db + 50) / 50)));
+    }, METER_POLL_MS);
+    return () => clearInterval(id);
+  }, [phase, recorder]);
 
-    const finish = (takeMs) => {
-      if (done || !isMountedRef.current) return;
-      done = true;
-      try { editPlayer.pause(); } catch { /* released */ }
-      const peaks = scanPeaksRef.current;
-      const bars = new Array(WAVEFORM_BARS).fill(0);
-      for (let i = 0; i < peaks.length; i += 1) {
-        const bucket = Math.min(WAVEFORM_BARS - 1, Math.floor((i / peaks.length) * WAVEFORM_BARS));
-        if (peaks[i] > bars[bucket]) bars[bucket] = peaks[i];
-      }
-      const max = Math.max(...bars);
-      // Normalize to the loudest bar so a quiet take still shows shape. With
-      // no usable peaks at all (sampling unsupported, or a silent take) fall
-      // back to a flat mid-height strip: the window is still positionable by
-      // ear with the play button, which is far better than a blank box that
-      // reads as broken.
-      if (max > 0) for (let i = 0; i < bars.length; i += 1) bars[i] /= max;
-      else bars.fill(0.22);
-      setWaveform(bars);
-      setTakeMs(takeMs);
-      // Live feedback: "the end result always shows a 20 secs piece even if
-      // recorded less." Clamp the window so it can't start past the end of
-      // a short take.
-      setTrimStartMs((s) => Math.max(0, Math.min(s, takeMs - (flowSlot?.durationMs ?? 0))));
-      setPhase('trimming');
-    };
-
-    editPlayer.loop = false;
-    editPlayer.volume = 0;
-    editPlayer.replace(pendingUri);
-    editPlayer.setPlaybackRate(SCAN_RATE);
-
-    // Poll rather than trusting a completion event: a scan that stalls, or a
-    // file whose duration never resolves, must still hand over a waveform
-    // instead of leaving the user on a spinner forever.
-    const started = Date.now();
-    const poll = setInterval(() => {
-      const durMs = editPlayer.duration > 0 ? editPlayer.duration * 1000 : 0;
-      if (!playing) {
-        if (durMs <= 0) {
-          // Duration not resolved yet -- give it a moment, then give up and
-          // assume a full-length take rather than hanging here.
-          if (Date.now() - started > 3000) finish(SEGMENT_MS);
-          return;
-        }
-        // useAudioSampleListener silently no-ops where the platform can't
-        // deliver PCM (it checks isAudioSamplingSupported before subscribing),
-        // and waiting out a full silent playback for nothing is the worst
-        // case -- skip straight to the editor with the flat fallback.
-        if (!editPlayer.isAudioSamplingSupported) { finish(durMs); return; }
-        editPlayer.play();
-        playing = true;
-        return;
-      }
-      const overran = Date.now() - started > (SEGMENT_MS / SCAN_RATE) + 5000;
-      if (overran || editPlayer.currentTime >= editPlayer.duration - 0.15) finish(durMs || SEGMENT_MS);
-    }, 120);
-    return () => { clearInterval(poll); done = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, pendingUri]);
 
   // Hard auto-stop at THIS slot's own target duration -- one-shots and
   // ambient loops alike (SOUND_SPEC.md §3's "hard cap, every slot" rule) --
@@ -650,7 +648,30 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setRefreshTick((v) => v + 1);
   };
 
-  const handleRecord = (slotId) => {
+  /** Live feedback: "when the sound is recorded already and you tap record,
+   *  redirect to the pop-up with the recorded sound so the piece can be
+   *  adjusted or re-recorded." So record on a slot that already has a take
+   *  reopens the editor on it rather than immediately overwriting it -- ↻
+   *  inside the editor is then the deliberate way to start over. Only
+   *  applies where there's a stored waveform to rebuild the strip from
+   *  (ambient slots never get one, and neither do takes saved before this
+   *  existed); those fall through to recording as usual. */
+  const reopenExistingTake = (slotId) => {
+    const trim = getSlotTrim(slotId);
+    if (!trim?.waveform?.length || !trim.takeMs) return false;
+    const uri = getSlotUri(slotId);
+    if (!uri) return false;
+    setFlowSlotId(slotId);
+    setPendingUri(uri);
+    setWaveform(trim.waveform);
+    setTakeMs(trim.takeMs);
+    setTrimStartMs(trim.startMs ?? 0);
+    setPhase('trimming');
+    return true;
+  };
+
+  const handleRecord = (slotId, { forceNew = false } = {}) => {
+    if (!forceNew && reopenExistingTake(slotId)) return;
     if (previewingLoopId) {
       stopPreviewSlotLoop(previewingLoopId);
       setPreviewingLoopId(null);
@@ -722,6 +743,8 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       // A take stopped early can be shorter than the slot's target -- save
       // what actually exists rather than a window running past the file end.
       durMs: Math.round(Math.min(flowSlot.durationMs, takeMs - trimStartMs)),
+      takeMs: Math.round(takeMs),
+      waveform,
     });
     setPendingUri(null);
     setRefreshTick((v) => v + 1);
@@ -733,7 +756,8 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     try { editPlayer.pause(); } catch { /* released */ }
     setPendingUri(null);
     setWaveform([]);
-    if (flowSlotId) handleRecord(flowSlotId);
+    // forceNew, or this would just reopen the very take being discarded.
+    if (flowSlotId) handleRecord(flowSlotId, { forceNew: true });
   };
 
   const dismissFlow = () => {
@@ -792,22 +816,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       false,
     );
   }, [phase, popupPulse]);
-  // Loading animation for the scan step (live feedback: "give it a loading
-  // animation"). A continuous rotation rather than a pulse, because the
-  // scan is a real ~10s wait and a spinner reads as "working" where a pulse
-  // can read as "stuck".
-  const spin = useSharedValue(0);
-  useEffect(() => {
-    if (phase !== 'scanning') {
-      spin.value = 0;
-      return;
-    }
-    spin.value = withRepeat(withTiming(1, { duration: 900 }), -1, false);
-  }, [phase, spin]);
-  const spinnerStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spin.value * 360}deg` }],
-  }));
-
   const pulsingDotStyle = useAnimatedStyle(() => ({
     opacity: interpolate(popupPulse.value, [0, 1], [0.4, 1]),
     transform: [{ scale: interpolate(popupPulse.value, [0, 1], [0.85, 1.15]) }],
@@ -954,31 +962,21 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   </TactileButton>
                 </>
               )}
-              {phase === 'scanning' && (
-                <>
-                  <Animated.View style={[styles.scanSpinner, spinnerStyle]} />
-                  <Text style={styles.recordStatus}>{t('sound.recording.analyzing', locale)}</Text>
-                </>
-              )}
               {phase === 'trimming' && (
                 <>
                   <Text style={styles.recordStatus}>{t('sound.recording.trimHint', locale)}</Text>
                   <TrimStrip
+                    // Remount per take: the strip's drag position is local
+                    // state seeded from startMs, so a new/reopened take needs
+                    // a fresh instance rather than an effect syncing it back.
+                    key={`${flowSlotId}:${takeMs}`}
                     waveform={waveform}
                     startMs={trimStartMs}
                     durMs={Math.min(flowSlot.durationMs, takeMs)}
                     takeMs={takeMs}
+                    locale={locale}
                     onChangeStart={setTrimStartMs}
                   />
-                  <Text style={styles.trimReadout}>
-                    {formatSeconds(trimStartMs)}
-                    {' – '}
-                    {formatSeconds(Math.min(takeMs, trimStartMs + flowSlot.durationMs))}
-                    {t('sound.unit.seconds', locale)}
-                    {'  /  '}
-                    {formatSeconds(takeMs)}
-                    {t('sound.unit.seconds', locale)}
-                  </Text>
                   <View style={styles.trimActions}>
                     <TactileButton
                       accessibilityRole="button"
@@ -1226,17 +1224,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopBtnIcon: { fontSize: 26, color: '#fff' },
-  // Open-ended ring: the gap is what makes the rotation legible -- a full
-  // ring would look motionless however fast it spins.
-  scanSpinner: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 4,
-    borderColor: '#7a3350',
-    borderTopColor: 'transparent',
-    marginBottom: 4,
-  },
   // Trim editor -------------------------------------------------------------
   trimStrip: {
     width: '100%',
