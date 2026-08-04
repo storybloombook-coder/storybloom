@@ -92,6 +92,7 @@ export const STRINGS = {
       },
       action: {
         play: 'Play',
+        stop: 'Stop',
         record: 'Record',
         reset: 'Reset',
         mute: 'Mute this sound',
@@ -353,6 +354,7 @@ export const STRINGS = {
       },
       action: {
         play: 'Слушать',
+        stop: 'Остановить',
         record: 'Записать',
         reset: 'Сбросить',
         mute: 'Выключить этот звук',

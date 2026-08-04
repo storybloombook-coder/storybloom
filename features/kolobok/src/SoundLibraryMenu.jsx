@@ -388,6 +388,8 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   // auto-stop -- pressing Stop early makes it shorter, and the trim strip
   // has to span what was really recorded.
   const [takeMs, setTakeMs] = useState(SEGMENT_MS);
+  const [trimPlaying, setTrimPlaying] = useState(false);
+  const trimStopRef = useRef(null);
   const scanPeaksRef = useRef([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
   // Wall-clock instant capture actually began -- drives RecordingTimer.
@@ -420,21 +422,20 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
 
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  // Switch the OS audio session into recording-capable mode once, for the
-  // WHOLE time this menu is open, rather than per recording. Live feedback:
-  // "are we sure the 3-2-1 countdown takes 3 seconds?" -- it doesn't always,
-  // because setAudioModeAsync (a real OS-level session-category switch, not
-  // a cheap flag) used to run fresh on every single record tap AND get
-  // reverted after every single take (see finishRecording's own comment) --
-  // so every recording after the first was paying that cost again, racing
-  // the very same 3s window. Doing it once here means by the time the user
-  // ever taps record for the first time (which is always well after the
-  // menu has been open for at least a moment), the session is already in
-  // the right mode -- only recorder.prepareToRecordAsync() (much cheaper)
-  // remains in the per-tap critical path.
+  // Hold the session in PLAYBACK mode for as long as the menu is open, and
+  // borrow recording mode only for the duration of an actual take.
+  //
+  // This menu used to park the session in recording mode the whole time it
+  // was open, to keep an OS-level category switch out of the 3s countdown.
+  // But a record-capable session attenuates and re-routes playback, so
+  // previewing a clip in the trim editor came out inaudible -- and preview
+  // is now a core part of the flow, not an afterthought. The switch moves
+  // back into the per-tap prep, which runs in PARALLEL with the countdown
+  // (see prepareRef) rather than after it, so the countdown doesn't pay for
+  // it the way it originally did.
   useEffect(() => {
     if (!visible) return undefined;
-    setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
+    setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     return () => {
       setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     };
@@ -508,10 +509,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       // if it's already gone there's nothing left to save.
       return;
     }
-    // NOT reverting allowsRecording here anymore -- see the visible/mount
-    // effect below for why. Flipping it back after every single take used
-    // to make the NEXT recording pay for a full OS audio-session-mode
-    // switch again, inside the very same 3s countdown window it's racing.
+    // Hand the session straight back to playback: the trim editor opens
+    // next and its Play button has to actually be audible. The next take
+    // re-borrows recording mode in its own parallel prep.
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     if (!isMountedRef.current || !flowSlotId) return;
     const uri = recorder.uri;
     if (!uri) { setPhase('idle'); setFlowSlotId(null); return; }
@@ -534,6 +535,28 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTrimStartMs(0);
     setPhase('trimming');
   };
+
+  // Load the take into the preview player as soon as the editor opens.
+  //
+  // Live feedback: "I can't hear what's happening in the clip when I click
+  // Play." replace() used to happen inside the post-record scan effect --
+  // removing that scan (metering made it unnecessary) took the only place
+  // the player was ever given a source with it, so Play was seeking and
+  // playing an empty player. Doing it on entry also means the file is
+  // decoded and ready before the first tap rather than during it.
+  useEffect(() => {
+    if (phase !== 'trimming' || !pendingUri) return undefined;
+    try {
+      editPlayer.loop = false;
+      editPlayer.volume = 1;
+      editPlayer.setPlaybackRate(1);
+      editPlayer.replace(pendingUri);
+    } catch { /* released */ }
+    return () => {
+      if (trimStopRef.current) { clearTimeout(trimStopRef.current); trimStopRef.current = null; }
+      try { editPlayer.pause(); } catch { /* released */ }
+    };
+  }, [phase, pendingUri, editPlayer]);
 
   // Waveform capture, live during the take.
   //
@@ -693,6 +716,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       try {
         const { granted } = await requestRecordingPermissionsAsync();
         if (!granted) return { granted: false };
+        // Borrow recording mode for this take (see the visible-effect above
+        // for why it isn't held open). In parallel with the countdown, so
+        // the 3s isn't spent waiting on it.
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
         // expo-audio REJECTS prepareToRecordAsync outright if the recorder
         // is still prepared from a previous take ("AudioRecorder has
         // already been prepared. Stop or release the current session before
@@ -723,21 +750,31 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
 
   const handleManualStop = () => finishRecording();
 
-  /** Preview just the selected window, the same way the scene will play it
-   *  once confirmed (seek to start, stop after the slot's duration). */
+  const stopTrimPreview = () => {
+    if (trimStopRef.current) { clearTimeout(trimStopRef.current); trimStopRef.current = null; }
+    try { editPlayer.pause(); } catch { /* released */ }
+    setTrimPlaying(false);
+  };
+
+  /** Preview just the selected window, exactly the way the scene will play
+   *  it once confirmed (seek to start, stop after the window's length), and
+   *  toggle back to Stop while it runs. */
   const handlePreviewTrim = () => {
     if (!pendingUri || !flowSlot) return;
+    if (trimPlaying) { stopTrimPreview(); return; }
+    const windowMs = Math.max(1, Math.min(flowSlot.durationMs, takeMs - trimStartMs));
     editPlayer.volume = 1;
     editPlayer.setPlaybackRate(1);
+    setTrimPlaying(true);
     editPlayer.seekTo(trimStartMs / 1000).then(() => {
       editPlayer.play();
-      setTimeout(() => { try { editPlayer.pause(); } catch { /* released */ } }, flowSlot.durationMs);
-    }).catch(() => {});
+      trimStopRef.current = setTimeout(stopTrimPreview, windowMs);
+    }).catch(() => { setTrimPlaying(false); });
   };
 
   const handleConfirmTrim = () => {
     if (!pendingUri || !flowSlotId || !flowSlot) return;
-    try { editPlayer.pause(); } catch { /* released */ }
+    stopTrimPreview();
     saveRecordingForSlot(flowSlotId, pendingUri, {
       startMs: Math.round(trimStartMs),
       // A take stopped early can be shorter than the slot's target -- save
@@ -753,7 +790,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
 
   /** Throw the take away and go straight back to recording it again. */
   const handleRetakeTrim = () => {
-    try { editPlayer.pause(); } catch { /* released */ }
+    stopTrimPreview();
     setPendingUri(null);
     setWaveform([]);
     // forceNew, or this would just reopen the very take being discarded.
@@ -780,7 +817,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // anything to the slot, so dropping the reference is the whole undo.
     setPendingUri(null);
     setWaveform([]);
-    try { editPlayer.pause(); } catch { /* released */ }
+    stopTrimPreview();
     if (wasRecording) {
       try {
         recorder.stop().catch(() => {});
@@ -980,12 +1017,12 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   <View style={styles.trimActions}>
                     <TactileButton
                       accessibilityRole="button"
-                      accessibilityLabel={t('sound.action.play', locale)}
+                      accessibilityLabel={t(trimPlaying ? 'sound.action.stop' : 'sound.action.play', locale)}
                       style={styles.trimBtnOuter}
                       innerStyle={styles.trimBtnInner}
                       onPress={handlePreviewTrim}
                     >
-                      <Text style={styles.trimBtnIcon}>▶</Text>
+                      <Text style={styles.trimBtnIcon}>{trimPlaying ? '⏹' : '▶'}</Text>
                     </TactileButton>
                     <TactileButton
                       accessibilityRole="button"
