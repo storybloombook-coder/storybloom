@@ -27,6 +27,7 @@ const tiltQuatTmp = new Quaternion();
 const lineTipTmp = new Vector3();
 const lineMidTmp = new Vector3();
 const lineDirTmp = new Vector3();
+const lineFloatTmp = new Vector3();
 const lineQuatTmp = new Quaternion();
 const UP_AXIS = new Vector3(0, 1, 0);
 
@@ -561,10 +562,23 @@ export function PondAndGrandpa() {
     // it rises/falls, not hang from a fixed rest point -- read the tip back
     // from the rod group's OWN just-set transform (rotation.x above already
     // synced its quaternion) rather than re-deriving the angle by hand.
+    // Live feedback: "don't forget to tie the line to the float, right now
+    // they aren't connected." The line's lower end was pinned to
+    // FLOAT_GRANDPA_LOCAL -- the float's REST position -- so every bob and
+    // the whole yank left the float visibly detached from the line. Both
+    // ends now come from the same live value: this lift is computed once
+    // here and used for the line's lower end AND the float's own position
+    // below. GRANDPA_GROUP_INV is a translation plus a Y-rotation, neither
+    // of which touches Y, so the same vertical offset is valid in both
+    // spaces without re-transforming.
+    const floatLift = Math.sin((t / 1000) * Math.PI * 2 * 0.4) * 0.02
+      + eggMotion.floatYank * 0.5;
     if (rodRef.current && lineRef.current) {
       lineTipTmp.set(0, ROD_LENGTH, 0).applyQuaternion(rodRef.current.quaternion).add(rodRef.current.position);
-      lineMidTmp.copy(lineTipTmp).lerp(FLOAT_GRANDPA_LOCAL, 0.5);
-      lineDirTmp.copy(FLOAT_GRANDPA_LOCAL).sub(lineTipTmp);
+      lineFloatTmp.copy(FLOAT_GRANDPA_LOCAL);
+      lineFloatTmp.y += floatLift;
+      lineMidTmp.copy(lineTipTmp).lerp(lineFloatTmp, 0.5);
+      lineDirTmp.copy(lineFloatTmp).sub(lineTipTmp);
       const lineLength = Math.max(0.001, lineDirTmp.length());
       lineDirTmp.normalize();
       lineQuatTmp.setFromUnitVectors(UP_AXIS, lineDirTmp);
@@ -574,11 +588,9 @@ export function PondAndGrandpa() {
     }
     if (headRef.current) headRef.current.rotation.z = eggMotion.headShake;
 
-    // Float: gentle bob, lifted by the yank.
-    if (floatRef.current) {
-      const bob = Math.sin(t / 1000 * Math.PI * 2 * 0.4) * 0.02;
-      floatRef.current.position.y = 0.03 + bob + eggMotion.floatYank * 0.5;
-    }
+    // Float: gentle bob, lifted by the yank -- same floatLift the line above
+    // already used, so the two can't drift apart.
+    if (floatRef.current) floatRef.current.position.y = 0.03 + floatLift;
 
     // Fish/boot: hidden until fishT >= 0. 0..1 = arc from water to hands
     // (with two flips); 1..2 = release arc back to the water.

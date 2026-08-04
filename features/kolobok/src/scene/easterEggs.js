@@ -55,12 +55,12 @@ export const eggs = { forceCatch: null };
 
 const now = () => Date.now();
 
-// Grandpa's float after a bite: 4 arches, each half the height of the last
-// (1, 1/2, 1/4, 1/8), sharing one span so the whole settle reads as a
-// single decaying bounce rather than four separate hops. Ends before the
-// beat's own s(2000) reset, which then just re-zeroes an already-zero value.
-const FLOAT_BOUNCES = 4;
-const FLOAT_BOUNCE_MS = 1400;
+// Grandpa's float after a bite: exactly one up-and-down, no settle tail
+// (live feedback: "just one upward movement and one downward movement").
+// A single half-sine over this span -- 0 at both ends, peak in the middle.
+// Ends well before the beat's own s(2000) reset, which then just re-zeroes
+// an already-zero value.
+const FLOAT_BOUNCE_MS = 700;
 
 function suppressed() {
   // User feedback: "eastereggs should be available during story mode." So
@@ -103,20 +103,15 @@ function runFishing(ctx) {
   return createTimeline([
     { at: 0, dur: s(300), ease: 'easeOutCubic', update: (t) => { eggMotion.rodPitch = -(18 * Math.PI / 180) * t; } },
     { at: s(300), dur: s(400), ease: 'easeOutBack', update: (t) => { eggMotion.rodPitch = -(18 * Math.PI / 180) * (1 - t); } },
-    // Live feedback: "let the float bounce up and then immediately go back
-    // down, and let it bounce half as high the next time." floatYank used to
-    // ramp to 1 and simply STAY there until the beat ended, so the float
-    // hung in the air for ~1.7s. Now it's a decaying bounce: each arch is a
-    // half-sine (up and straight back down, no hold at the top) at half the
-    // previous arch's height.
+    // Live feedback: "just one upward movement and one downward movement."
+    // floatYank originally ramped to 1 and STAYED there until the beat
+    // ended, leaving the float hanging in the air; a first pass then
+    // over-corrected into a four-arch decaying bounce. One half-sine is the
+    // whole motion: 0 -> 1 -> 0, up and straight back down.
     {
       at: s(300),
       dur: s(FLOAT_BOUNCE_MS),
-      update: (t) => {
-        const phase = t * FLOAT_BOUNCES;
-        const arch = Math.min(FLOAT_BOUNCES - 1, Math.floor(phase));
-        eggMotion.floatYank = Math.sin((phase - arch) * Math.PI) * (0.5 ** arch);
-      },
+      update: (t) => { eggMotion.floatYank = Math.sin(t * Math.PI); },
     },
     { at: s(300), call: () => { eggMotion.rippleBurst += 1; } },
     { at: s(700), dur: s(800), update: (t) => { eggMotion.fishT = t; } },

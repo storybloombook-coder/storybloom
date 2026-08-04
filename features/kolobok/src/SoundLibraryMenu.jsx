@@ -18,7 +18,7 @@
 // outer Pressable carrying the shadow, an overflow:hidden inner View
 // carrying the fill) fixes both at once.
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, Pressable, ScrollView, StyleSheet, Switch, PanResponder,
 } from 'react-native';
@@ -241,17 +241,37 @@ function RecordingTimer({ startedAt, durationMs, unlimited, locale, style }) {
  *  becomes this slot's sound. The window's width is the slot's own target
  *  duration, so it can't be resized -- only positioned, which is what makes
  *  every slot come out exactly the length the scene expects. */
-function TrimStrip({ waveform, startMs, durMs, onChangeStart }) {
-  const [width, setWidth] = useState(0);
-  // Live values for the gesture: PanResponder's callbacks are created once,
-  // so reading startMs/width straight out of the closure would pin them to
-  // whatever they were on first render.
-  const liveRef = useRef({ startMs, width, durMs, onChangeStart });
+/** The bars alone, memoized on `waveform`. Live feedback: "bar movement
+ *  lags." Dragging updates startMs on every move event, and the bars used to
+ *  recolor themselves from it -- so all WAVEFORM_BARS re-rendered with fresh
+ *  style arrays many times a second, which is what made the window stutter.
+ *  Split out and independent of startMs, they render exactly once per take;
+ *  a drag then only moves the three small overlay views. Heights are in
+ *  pixels off the measured strip rather than percentages, which resolve
+ *  unreliably for children of an absolutely-positioned flex row. */
+const TrimBars = memo(function TrimBars({ waveform, height }) {
+  return (
+    <View style={styles.trimBars} pointerEvents="none">
+      {waveform.map((v, i) => (
+        <View
+          key={i}
+          style={[styles.trimBar, { height: Math.max(3, v * (height - 12)) }]}
+        />
+      ))}
+    </View>
+  );
+});
+
+function TrimStrip({ waveform, startMs, durMs, takeMs, onChangeStart }) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const liveRef = useRef({ startMs, width: 0, durMs, takeMs, onChangeStart });
   // Synced in an effect rather than assigned during render: the PanResponder
   // below is created once, so its callbacks would otherwise capture whatever
   // these were on the first render and never see a drag update.
   useEffect(() => {
-    liveRef.current = { startMs, width, durMs, onChangeStart };
+    liveRef.current = {
+      startMs, width: size.width, durMs, takeMs, onChangeStart,
+    };
   });
   const dragOriginRef = useRef(0);
 
@@ -261,43 +281,40 @@ function TrimStrip({ waveform, startMs, durMs, onChangeStart }) {
     onPanResponderGrant: () => { dragOriginRef.current = liveRef.current.startMs; },
     onPanResponderMove: (_e, g) => {
       const l = liveRef.current;
-      if (!l.width) return;
-      const maxStart = Math.max(0, SEGMENT_MS - l.durMs);
-      const deltaMs = (g.dx / l.width) * SEGMENT_MS;
+      if (!l.width || !l.takeMs) return;
+      const maxStart = Math.max(0, l.takeMs - l.durMs);
+      const deltaMs = (g.dx / l.width) * l.takeMs;
       l.onChangeStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
     },
   }));
 
-  const frac = Math.min(1, durMs / SEGMENT_MS);
-  const selLeft = width * (startMs / SEGMENT_MS);
-  const selWidth = Math.max(12, width * frac);
+  // Everything is a fraction of the REAL take length, not the 20s ceiling --
+  // stopping early has to give a strip that spans only what was recorded.
+  const span = Math.max(1, takeMs);
+  const selLeft = size.width * (startMs / span);
+  const selWidth = Math.max(12, size.width * Math.min(1, durMs / span));
 
   return (
     <View
       style={styles.trimStrip}
-      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      onLayout={(e) => setSize({
+        width: e.nativeEvent.layout.width,
+        height: e.nativeEvent.layout.height,
+      })}
       {...pan.panHandlers}
     >
-      <View style={styles.trimBars} pointerEvents="none">
-        {waveform.map((v, i) => {
-          // Inside the window the bar is full-strength; outside it dims, so
-          // the selection reads even before the overlay frame is noticed.
-          const barMs = (i / waveform.length) * SEGMENT_MS;
-          const inWindow = barMs >= startMs && barMs <= startMs + durMs;
-          return (
-            <View
-              key={i}
-              style={[
-                styles.trimBar,
-                { height: `${Math.max(4, v * 100)}%` },
-                inWindow ? styles.trimBarActive : styles.trimBarIdle,
-              ]}
-            />
-          );
-        })}
-      </View>
-      {width > 0 && (
-        <View pointerEvents="none" style={[styles.trimWindow, { left: selLeft, width: selWidth }]} />
+      {size.height > 0 && <TrimBars waveform={waveform} height={size.height} />}
+      {size.width > 0 && (
+        <>
+          {/* Dim what falls outside the window, so the selection reads
+              without the bars themselves needing to know about it. */}
+          <View pointerEvents="none" style={[styles.trimMask, { left: 0, width: selLeft }]} />
+          <View
+            pointerEvents="none"
+            style={[styles.trimMask, { left: selLeft + selWidth, right: 0 }]}
+          />
+          <View pointerEvents="none" style={[styles.trimWindow, { left: selLeft, width: selWidth }]} />
+        </>
       )}
     </View>
   );
@@ -329,6 +346,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [pendingUri, setPendingUri] = useState(null);
   const [waveform, setWaveform] = useState([]);
   const [trimStartMs, setTrimStartMs] = useState(0);
+  // Actual length of the take, which is SEGMENT_MS only when it ran to the
+  // auto-stop -- pressing Stop early makes it shorter, and the trim strip
+  // has to span what was really recorded.
+  const [takeMs, setTakeMs] = useState(SEGMENT_MS);
   const scanPeaksRef = useRef([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
   // Wall-clock instant capture actually began -- drives RecordingTimer.
@@ -481,39 +502,65 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   useEffect(() => {
     if (phase !== 'scanning' || !pendingUri) return undefined;
     let done = false;
-    const finish = () => {
+    let playing = false;
+
+    const finish = (takeMs) => {
       if (done || !isMountedRef.current) return;
       done = true;
-      editPlayer.pause();
+      try { editPlayer.pause(); } catch { /* released */ }
       const peaks = scanPeaksRef.current;
       const bars = new Array(WAVEFORM_BARS).fill(0);
-      if (peaks.length > 0) {
-        for (let i = 0; i < peaks.length; i += 1) {
-          const bucket = Math.min(WAVEFORM_BARS - 1, Math.floor((i / peaks.length) * WAVEFORM_BARS));
-          if (peaks[i] > bars[bucket]) bars[bucket] = peaks[i];
-        }
-        // Normalize to the loudest bar so quiet takes still show shape.
-        const max = Math.max(...bars);
-        if (max > 0) for (let i = 0; i < bars.length; i += 1) bars[i] /= max;
+      for (let i = 0; i < peaks.length; i += 1) {
+        const bucket = Math.min(WAVEFORM_BARS - 1, Math.floor((i / peaks.length) * WAVEFORM_BARS));
+        if (peaks[i] > bars[bucket]) bars[bucket] = peaks[i];
       }
+      const max = Math.max(...bars);
+      // Normalize to the loudest bar so a quiet take still shows shape. With
+      // no usable peaks at all (sampling unsupported, or a silent take) fall
+      // back to a flat mid-height strip: the window is still positionable by
+      // ear with the play button, which is far better than a blank box that
+      // reads as broken.
+      if (max > 0) for (let i = 0; i < bars.length; i += 1) bars[i] /= max;
+      else bars.fill(0.22);
       setWaveform(bars);
+      setTakeMs(takeMs);
+      // Live feedback: "the end result always shows a 20 secs piece even if
+      // recorded less." Clamp the window so it can't start past the end of
+      // a short take.
+      setTrimStartMs((s) => Math.max(0, Math.min(s, takeMs - (flowSlot?.durationMs ?? 0))));
       setPhase('trimming');
     };
+
     editPlayer.loop = false;
     editPlayer.volume = 0;
     editPlayer.replace(pendingUri);
     editPlayer.setPlaybackRate(SCAN_RATE);
-    editPlayer.play();
-    // Poll rather than trusting a completion event: a scan that stalls (or a
-    // file whose duration never resolves) must still hand over a waveform
-    // instead of leaving the user stuck on a spinner forever.
+
+    // Poll rather than trusting a completion event: a scan that stalls, or a
+    // file whose duration never resolves, must still hand over a waveform
+    // instead of leaving the user on a spinner forever.
     const started = Date.now();
     const poll = setInterval(() => {
-      const dur = editPlayer.duration;
-      const at = editPlayer.currentTime;
-      const overran = Date.now() - started > (SEGMENT_MS / SCAN_RATE) + 4000;
-      if (overran || (dur > 0 && at >= dur - 0.15)) finish();
-    }, 150);
+      const durMs = editPlayer.duration > 0 ? editPlayer.duration * 1000 : 0;
+      if (!playing) {
+        if (durMs <= 0) {
+          // Duration not resolved yet -- give it a moment, then give up and
+          // assume a full-length take rather than hanging here.
+          if (Date.now() - started > 3000) finish(SEGMENT_MS);
+          return;
+        }
+        // useAudioSampleListener silently no-ops where the platform can't
+        // deliver PCM (it checks isAudioSamplingSupported before subscribing),
+        // and waiting out a full silent playback for nothing is the worst
+        // case -- skip straight to the editor with the flat fallback.
+        if (!editPlayer.isAudioSamplingSupported) { finish(durMs); return; }
+        editPlayer.play();
+        playing = true;
+        return;
+      }
+      const overran = Date.now() - started > (SEGMENT_MS / SCAN_RATE) + 5000;
+      if (overran || editPlayer.currentTime >= editPlayer.duration - 0.15) finish(durMs || SEGMENT_MS);
+    }, 120);
     return () => { clearInterval(poll); done = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, pendingUri]);
@@ -672,7 +719,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     try { editPlayer.pause(); } catch { /* released */ }
     saveRecordingForSlot(flowSlotId, pendingUri, {
       startMs: Math.round(trimStartMs),
-      durMs: flowSlot.durationMs,
+      // A take stopped early can be shorter than the slot's target -- save
+      // what actually exists rather than a window running past the file end.
+      durMs: Math.round(Math.min(flowSlot.durationMs, takeMs - trimStartMs)),
     });
     setPendingUri(null);
     setRefreshTick((v) => v + 1);
@@ -743,6 +792,22 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       false,
     );
   }, [phase, popupPulse]);
+  // Loading animation for the scan step (live feedback: "give it a loading
+  // animation"). A continuous rotation rather than a pulse, because the
+  // scan is a real ~10s wait and a spinner reads as "working" where a pulse
+  // can read as "stuck".
+  const spin = useSharedValue(0);
+  useEffect(() => {
+    if (phase !== 'scanning') {
+      spin.value = 0;
+      return;
+    }
+    spin.value = withRepeat(withTiming(1, { duration: 900 }), -1, false);
+  }, [phase, spin]);
+  const spinnerStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${spin.value * 360}deg` }],
+  }));
+
   const pulsingDotStyle = useAnimatedStyle(() => ({
     opacity: interpolate(popupPulse.value, [0, 1], [0.4, 1]),
     transform: [{ scale: interpolate(popupPulse.value, [0, 1], [0.85, 1.15]) }],
@@ -891,7 +956,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               )}
               {phase === 'scanning' && (
                 <>
-                  <Text style={styles.recordBig}>◍</Text>
+                  <Animated.View style={[styles.scanSpinner, spinnerStyle]} />
                   <Text style={styles.recordStatus}>{t('sound.recording.analyzing', locale)}</Text>
                 </>
               )}
@@ -901,14 +966,17 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   <TrimStrip
                     waveform={waveform}
                     startMs={trimStartMs}
-                    durMs={flowSlot.durationMs}
+                    durMs={Math.min(flowSlot.durationMs, takeMs)}
+                    takeMs={takeMs}
                     onChangeStart={setTrimStartMs}
                   />
                   <Text style={styles.trimReadout}>
                     {formatSeconds(trimStartMs)}
-                    {t('sound.unit.seconds', locale)}
                     {' – '}
-                    {formatSeconds(trimStartMs + flowSlot.durationMs)}
+                    {formatSeconds(Math.min(takeMs, trimStartMs + flowSlot.durationMs))}
+                    {t('sound.unit.seconds', locale)}
+                    {'  /  '}
+                    {formatSeconds(takeMs)}
                     {t('sound.unit.seconds', locale)}
                   </Text>
                   <View style={styles.trimActions}>
@@ -1158,6 +1226,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopBtnIcon: { fontSize: 26, color: '#fff' },
+  // Open-ended ring: the gap is what makes the rotation legible -- a full
+  // ring would look motionless however fast it spins.
+  scanSpinner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 4,
+    borderColor: '#7a3350',
+    borderTopColor: 'transparent',
+    marginBottom: 4,
+  },
   // Trim editor -------------------------------------------------------------
   trimStrip: {
     width: '100%',
@@ -1174,9 +1253,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 2,
   },
-  trimBar: { flex: 1, marginHorizontal: 0.5, borderRadius: 1 },
-  trimBarActive: { backgroundColor: '#7a3350' },
-  trimBarIdle: { backgroundColor: 'rgba(122,51,80,0.28)' },
+  trimBar: {
+    flex: 1,
+    marginHorizontal: 0.5,
+    borderRadius: 1,
+    backgroundColor: '#7a3350',
+  },
+  // Dims the un-selected ends. Cheaper than recoloring every bar, and it
+  // keeps TrimBars independent of the drag (see its own comment).
+  trimMask: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,214,232,0.72)',
+  },
   trimWindow: {
     position: 'absolute',
     top: 0,
