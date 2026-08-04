@@ -603,7 +603,7 @@ const styles = StyleSheet.create({
   eggCounterWrap: {
     width: 34,
     height: 44,
-    backgroundColor: 'rgba(253,246,232,0.82)',
+    backgroundColor: 'rgba(253,246,232,0.55)',
     borderTopLeftRadius: '50%',
     borderTopRightRadius: '50%',
     borderBottomLeftRadius: '50%',
