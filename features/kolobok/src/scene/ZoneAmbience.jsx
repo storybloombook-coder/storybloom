@@ -47,6 +47,8 @@ const PUFF_SIZE_VARIANCE = 0.2;
 // Live feedback: "increase the time between when the balls appear" -- was 0.3.
 const PUFF_GAP_S = 0.6;
 const PUFF_RISE_S = 3;
+// Live feedback: "let them fly 3 times higher than now" -- was 1.5.
+const PUFF_RISE_HEIGHT = 4.5;
 // Live feedback: "don't make them just disappear, let them completely
 // shrink" -- was an instant scale=0.001 snap the moment the rise finished.
 // Expressed as a fraction of PUFF_RISE_S so it plugs into the same
@@ -308,7 +310,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         let pz = chimneyPos[2];
         if (active) {
           const riseT = Math.min(p.t, 1);
-          const rise = riseT * 1.5;
+          const rise = riseT * PUFF_RISE_HEIGHT;
           const sway = Math.sin(p.t * Math.PI * 2 + p.drift) * 0.15;
           const windDriftX = wind.direction[0] * wind.strength * riseT * 0.5;
           const windDriftZ = wind.direction[2] * wind.strength * riseT * 0.5;
@@ -350,6 +352,25 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       });
       puffRef.current.instanceMatrix.needsUpdate = true;
       if (puffShadowRef.current) puffShadowRef.current.instanceMatrix.needsUpdate = true;
+      // An InstancedMesh keeps its OWN boundingSphere, computed once from
+      // whatever the instance matrices held at that moment and then cached
+      // forever. These puffs sit parked at y=-5 at ~zero scale until the
+      // first tap, so that cached sphere is a speck under the ground -- and
+      // three.js uses it for BOTH frustum culling and the raycast's early-out.
+      //
+      // Live feedback, and this one cause explains both halves of it: "tap
+      // the pipe, smoke disappears but bubbles are not visible; rotate the
+      // scene 180 to see the house from the distance and the bubbles are
+      // there... but the bubbles are not popping." Invisible because the
+      // whole mesh was frustum-culled whenever that speck at y=-5 fell
+      // outside the view (rotating far enough away brings it back inside,
+      // which is exactly why the far view worked); unpoppable because
+      // raycast bails on the same stale sphere before ever testing an
+      // instance. Recomputing after each matrix write fixes both. Called
+      // rather than nulling: with the sphere already allocated this reuses
+      // it, where nulling makes three allocate a fresh one every frame.
+      puffRef.current.computeBoundingSphere();
+      if (puffShadowRef.current) puffShadowRef.current.computeBoundingSphere();
     }
 
     // Pop dust: motes fly outward from the popped bubble on an easeOut arc
@@ -374,6 +395,9 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         popDustRef.current.setMatrixAt(i, dummy.matrix);
       });
       popDustRef.current.instanceMatrix.needsUpdate = true;
+      // Same stale-bounds trap as the puffs above -- these park at y=-5 too,
+      // so without this the dust would be culled away exactly when it fires.
+      popDustRef.current.computeBoundingSphere();
     }
 
     // Live feedback: "the default smoke disappears... after 6 seconds, the

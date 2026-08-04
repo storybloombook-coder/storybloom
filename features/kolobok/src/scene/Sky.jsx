@@ -49,7 +49,8 @@ const CLOUD_RADIUS_MAX = PATH_RADIUS * 1.15;
 const CLOUD_ORBIT_SPEED = 0.006;
 const CLOUD_SHADOW_R = 0.85;
 const RAIN_DURATION_MS = 15000;
-const RAIN_COUNT_PER_CLOUD = 10;
+// Live feedback: "make 3 times more rain when you tap the cloud" -- was 10.
+const RAIN_COUNT_PER_CLOUD = 30;
 const RAIN_POOL_SIZE = CLOUD_COUNT * RAIN_COUNT_PER_CLOUD;
 const RAIN_FALL_S = 2; // seconds for one drop to cycle top->bottom
 // Live feedback: "add 10 percent gray to both the cloud and cloud mass
@@ -58,6 +59,12 @@ const RAIN_FALL_S = 2; // seconds for one drop to cycle top->bottom
 // below both still apply on top of these).
 const CLOUD_WHITE = new Color('#ffffff').lerp(new Color('#808080'), 0.1);
 const CLOUD_RAIN_TINT = new Color('#9aa4b2').lerp(new Color('#808080'), 0.1);
+// Live feedback: "make drops 30% darker". Derived from the cloud tint
+// rather than hardcoded, because CLOUD_RAIN_TINT does double duty -- it's
+// also what the cloud body lerps toward while raining, and the drops were
+// sharing it. Darkening that constant directly would have dimmed the
+// clouds too; this keeps the two linked but lets the drops sit 30% below.
+const RAIN_DROP_COLOR = CLOUD_RAIN_TINT.clone().multiplyScalar(0.7);
 
 /** The cloud's fixed silhouette: medium sphere, then large, then small,
  *  left to right, each overlapping the previous by 30% (gap between
@@ -430,7 +437,7 @@ export function Sky() {
       />
 
       <points ref={rainRef} geometry={rainGeometry} visible={false}>
-        <pointsMaterial map={starTexture} color={CLOUD_RAIN_TINT} size={0.1} transparent depthWrite={false} sizeAttenuation fog={false} opacity={0.85} />
+        <pointsMaterial map={starTexture} color={RAIN_DROP_COLOR} size={0.1} transparent depthWrite={false} sizeAttenuation fog={false} opacity={0.85} />
       </points>
     </group>
   );
