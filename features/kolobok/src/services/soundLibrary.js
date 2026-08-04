@@ -620,6 +620,24 @@ export function setSlotMuted(slotId, muted) {
   if (muted) stopLoop(slotId);
 }
 
+/** Mute/unmute EVERY slot at once (the library header's own toggle).
+ *  Deliberately not a setSlotMuted loop: that persists the manifest per
+ *  call, which would be one file write per slot -- ~100 synchronous writes
+ *  for a single tap. Mutates the cached manifest in full, then writes once. */
+export function setAllSlotsMuted(muted) {
+  const manifest = loadManifest();
+  SLOTS.forEach((slot) => { manifest.muted[slot.id] = muted; });
+  persistManifest();
+  if (muted) SLOTS.forEach((slot) => stopLoop(slot.id));
+}
+
+/** True when at least one slot would actually be audible in the scene --
+ *  drives the header toggle's on/off position. */
+export function isAnySlotUnmuted() {
+  const manifest = loadManifest();
+  return SLOTS.some((slot) => manifest.muted[slot.id] === false);
+}
+
 function recordingFile(slotId) {
   return new File(userSoundsDir, `${slotId}.m4a`);
 }

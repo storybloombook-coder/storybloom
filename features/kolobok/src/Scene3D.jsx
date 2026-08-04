@@ -56,9 +56,16 @@ function createCameraDragController() {
   return createSinglePointerDrag({
     threshold: 4,
     onStart: () => {
+      if (orbit.rotationLocked) return;
       orbit.freeLookActive = true;
     },
     onChange: (event) => {
+      // Camera-lock button: swallow the drag's camera effect entirely, but
+      // let the gesture itself run so singlePointerDrag's own click
+      // suppression still behaves exactly as before -- taps keep working,
+      // the view just doesn't move. Deliberately gated here rather than by
+      // detaching the responder, which would change tap handling too.
+      if (orbit.rotationLocked) return;
       story.lastInputAt = Date.now();
       orbit.lastDragAt = Date.now();
       if (orbit.mode === 'story') orbit.lookingAway = true;
@@ -77,7 +84,9 @@ function createCameraDragController() {
       );
     },
     onEnd: (event) => {
-      orbit.velocity = -event.velocityX * FLING_SENSITIVITY;
+      // No fling either -- otherwise releasing a locked drag would still
+      // spin the camera afterwards, which is the exact thing being locked.
+      orbit.velocity = orbit.rotationLocked ? 0 : -event.velocityX * FLING_SENSITIVITY;
       orbit.freeLookActive = false;
     },
     onCancel: () => {
@@ -235,6 +244,20 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
     playSlot('ui.eyeToggle');
     orbit.cameraFollow = !orbit.cameraFollow;
     setCameraFollow(orbit.cameraFollow);
+  };
+
+  // Camera-lock button, same transient-plus-local-mirror shape as the eye
+  // toggle above (orbit.rotationLocked is read by the drag controller, not
+  // by React). Always starts unlocked: it's a deliberate "let me tap things
+  // without the view sliding" mode, not a preference worth persisting.
+  const [rotationLocked, setRotationLocked] = useState(orbit.rotationLocked);
+  const onToggleRotationLock = () => {
+    playSlot('ui.eyeToggle');
+    orbit.rotationLocked = !orbit.rotationLocked;
+    // A drag can be mid-flight when the lock engages; drop any fling the
+    // camera was already carrying so it stops now rather than coasting on.
+    if (orbit.rotationLocked) orbit.velocity = 0;
+    setRotationLocked(orbit.rotationLocked);
   };
 
   const onToggleSoundMenu = () => {
@@ -396,6 +419,23 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
       </TactileButton>
 
+      {/* Camera lock: identical 40x40 circle, stacked directly BELOW the
+          play/pause button. Locked = swipes no longer orbit the camera, so
+          animals/props can be tapped without the view sliding away under
+          the finger. Off by default, dimmed while off -- same tint
+          convention as the eye toggle below. */}
+      <TactileButton
+        accessibilityRole="button"
+        accessibilityLabel={t(rotationLocked ? 'ui.unlockCamera' : 'ui.lockCamera', locale)}
+        onPress={onToggleRotationLock}
+        style={[styles.storyButton, styles.cameraLockButton]}
+        innerStyle={[styles.buttonVisual, !rotationLocked && styles.followButtonOff]}
+        hitSlop={8}
+      >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
+        <Text style={styles.storyButtonText}>{rotationLocked ? '🔒' : '🔓'}</Text>
+      </TactileButton>
+
       {/* Eye toggle: identical 40x40 circle, stacked directly above the
           play/pause button. ON (default) = Kolobok chases the camera and it
           soft-snaps onto zones, same as always; OFF = a genuinely detached
@@ -554,13 +594,26 @@ const styles = StyleSheet.create({
     right: 14,
     alignItems: 'flex-end',
   },
+  // An actual egg, not a pill: taller than it is wide with every corner at
+  // 50%, which resolves to a true ellipse (RN takes percentage radii, and
+  // 50% is the practical ceiling -- two adjacent corners summing past 100%
+  // of a side get scaled back down, so anything larger just returns to an
+  // ellipse anyway). Warm shell cream rather than plain white so it reads as
+  // an egg on its own, before you notice the count inside.
   eggCounterWrap: {
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    width: 34,
+    height: 44,
+    backgroundColor: 'rgba(253,246,232,0.82)',
+    borderTopLeftRadius: '50%',
+    borderTopRightRadius: '50%',
+    borderBottomLeftRadius: '50%',
+    borderBottomRightRadius: '50%',
+    borderWidth: 1,
+    borderColor: 'rgba(138,90,43,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  eggCounterText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
+  eggCounterText: { fontSize: 12, fontWeight: '700', color: '#2e2a22' },
   eggTooltipWrap: {
     marginTop: 6,
     maxWidth: 160,
@@ -614,6 +667,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
+  cameraLockButton: { bottom: 48 }, // stacked directly BELOW storyButton (96 - 40 - 8 gap)
   followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
   soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)

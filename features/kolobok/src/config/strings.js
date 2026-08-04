@@ -62,6 +62,8 @@ export const STRINGS = {
       },
       enableFollow: 'Follow Kolobok',
       disableFollow: 'Free the camera',
+      lockCamera: 'Lock the camera',
+      unlockCamera: 'Unlock the camera',
       mainMenu: 'Main menu',
       switchLanguage: 'Switch to Russian',
       eggTooltip: 'Find all the secrets',
@@ -94,6 +96,7 @@ export const STRINGS = {
         unmute: 'Unmute this sound',
         readFullPhrase: 'Read the full phrase',
         closeHint: 'Tap anywhere to close',
+        toggleAll: 'Turn every sound in the library on or off',
       },
       unit: {
         seconds: 's',
@@ -314,6 +317,8 @@ export const STRINGS = {
       },
       enableFollow: 'Следовать за Колобком',
       disableFollow: 'Свободная камера',
+      lockCamera: 'Заблокировать камеру',
+      unlockCamera: 'Разблокировать камеру',
       mainMenu: 'Главное меню',
       switchLanguage: 'Переключить на английский',
       eggTooltip: 'Найди все секреты',
@@ -346,6 +351,7 @@ export const STRINGS = {
         unmute: 'Включить этот звук',
         readFullPhrase: 'Прочитать фразу целиком',
         closeHint: 'Нажмите в любом месте, чтобы закрыть',
+        toggleAll: 'Включить или выключить все звуки библиотеки',
       },
       unit: {
         seconds: 'с',

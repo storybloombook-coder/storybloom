@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Modal, View, Text, Pressable, ScrollView, StyleSheet,
+  Modal, View, Text, Pressable, ScrollView, StyleSheet, Switch,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, {
@@ -40,6 +40,8 @@ import {
   isSlotOverridden,
   isSlotMuted,
   setSlotMuted,
+  setAllSlotsMuted,
+  isAnySlotUnmuted,
   previewSlot,
   previewSlotLoop,
   stopPreviewSlotLoop,
@@ -251,6 +253,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const busy = phase !== 'idle';
   const canClose = phase !== 'countdown' && phase !== 'recording';
   const flowSlot = flowSlotId ? getSlotDefinition(flowSlotId) : null;
+  // Re-read on every render; refreshTick changing is what re-runs this after
+  // any mute edit, same as SlotRow's own manifest reads.
+  const anyUnmuted = isAnySlotUnmuted();
 
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
@@ -417,6 +422,16 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setRefreshTick((v) => v + 1);
   };
 
+  const handleToggleAll = (next) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (previewingLoopId) {
+      stopPreviewSlotLoop(previewingLoopId);
+      setPreviewingLoopId(null);
+    }
+    setAllSlotsMuted(!next);
+    setRefreshTick((v) => v + 1);
+  };
+
   const handleRecord = (slotId) => {
     if (previewingLoopId) {
       stopPreviewSlotLoop(previewingLoopId);
@@ -538,7 +553,22 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       <Pressable style={styles.backdrop} onPress={canClose ? onClose : undefined} />
       <View style={styles.panel} pointerEvents="box-none">
         <View style={styles.header}>
-          <Text style={styles.title}>{t('sound.title', locale)}</Text>
+          <View style={styles.headerTitleGroup}>
+            <Text style={styles.title}>{t('sound.title', locale)}</Text>
+            {/* Bulk on/off for every slot in the library. Separate from the
+                scene's own master-mute button, which stays: that silences
+                the whole scene at the engine level, this decides which
+                slots are armed to play at all. */}
+            <Switch
+              accessibilityRole="switch"
+              accessibilityLabel={t('sound.action.toggleAll', locale)}
+              value={anyUnmuted}
+              disabled={busy}
+              onValueChange={handleToggleAll}
+              trackColor={{ false: 'rgba(46,42,34,0.22)', true: 'rgba(138,90,43,0.55)' }}
+              thumbColor={anyUnmuted ? '#8a5a2b' : '#f4f0e8'}
+            />
+          </View>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('sound.close', locale)}
@@ -706,6 +736,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(46,42,34,0.1)',
   },
+  headerTitleGroup: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
   title: { fontSize: 18, fontWeight: '700', color: '#2e2a22' },
   closeBtn: { paddingHorizontal: 10, paddingVertical: 6 },
   closeText: { fontSize: 14, fontWeight: '600', color: '#8a5a2b' },
@@ -716,6 +747,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 8,
+    // Live feedback: the pressed tint "sticks to the text on the left and to
+    // the icon to right". Padding widens the highlight past both; the
+    // matching negative margin pulls the row back out to the same visual
+    // alignment as the slot rows below it, so only the tint grows.
+    paddingHorizontal: 10,
+    marginHorizontal: -10,
   },
   categoryTitle: {
     fontSize: 13,

@@ -6,6 +6,7 @@
 
 import { create } from 'zustand';
 import * as Localization from 'expo-localization';
+import { File, Paths } from 'expo-file-system';
 
 export type Locale = 'en' | 'ru';
 
@@ -574,12 +575,49 @@ function detectLocale(): Locale {
   return code === 'ru' ? 'ru' : 'en';
 }
 
+// Remembered language. This store is the app-wide source of truth for BOTH
+// halves of the app -- the 3D scene's own toggle reports back up into it via
+// kolobok-preview.tsx's onLocaleChange -- so persisting here covers a switch
+// made from either the 2D menu or the 3D scene.
+//
+// Written and read through expo-file-system's SYNCHRONOUS API (textSync/
+// write, the same v57 surface features/kolobok's sound engine uses) rather
+// than an async store rehydration: the initial value is needed at module
+// evaluation, and anything async would render one frame in the wrong
+// language and then visibly flip.
+const LOCALE_FILE = 'settings.json';
+
+function readStoredLocale(): Locale | null {
+  try {
+    const file = new File(Paths.document, LOCALE_FILE);
+    if (!file.exists) return null;
+    const stored = (JSON.parse(file.textSync()) as { locale?: unknown }).locale;
+    return stored === 'ru' || stored === 'en' ? stored : null;
+  } catch {
+    // Missing, unreadable, or malformed -- fall back to device language.
+    return null;
+  }
+}
+
+function writeStoredLocale(locale: Locale): void {
+  try {
+    const file = new File(Paths.document, LOCALE_FILE);
+    if (!file.exists) file.create({ overwrite: true });
+    file.write(JSON.stringify({ locale }));
+  } catch {
+    // Persisting the preference is best-effort; never break the toggle.
+  }
+}
+
 export const useLocaleStore = create<{
   locale: Locale;
   setLocale: (locale: Locale) => void;
 }>((set) => ({
-  locale: detectLocale(),
-  setLocale: (locale) => set({ locale }),
+  locale: readStoredLocale() ?? detectLocale(),
+  setLocale: (locale) => {
+    writeStoredLocale(locale);
+    set({ locale });
+  },
 }));
 
 /** Dot-path lookup into STRINGS[locale], e.g. t('page.cancel', 'ru'). Value

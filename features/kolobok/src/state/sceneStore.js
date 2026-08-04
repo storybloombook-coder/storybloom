@@ -33,6 +33,13 @@ export const orbit = {
   // relationship (camera chases Kolobok) ignores this flag entirely --
   // toggling it only matters while steering in free/user mode.
   cameraFollow: false,
+  // Camera-lock button (Scene3D), read by the drag controller only. false
+  // (default, and deliberately NOT persisted -- every session starts
+  // unlocked) = swipes orbit the camera as normal. true = swipes are
+  // ignored entirely so the scene can be tapped without the camera moving
+  // under the finger. Taps/raycasts are unaffected either way: this gates
+  // only the angle/pitch/fling writes, never the tap pipeline.
+  rotationLocked: false,
   // ms epoch of the last real camera-DRAG gesture (Scene3D's pan onChange/
   // onEnd only -- never touched by story/encounter events). CameraRig's
   // steering-vs-idle decision reads this alone, so an animal encounter
