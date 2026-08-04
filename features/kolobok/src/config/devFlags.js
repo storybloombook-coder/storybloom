@@ -13,12 +13,12 @@ export const quality = { toon: true, fillLight: true };
 // average and every dpr change behind this flag (the ship-readiness gate's
 // FPS histogram reads the same flag family).
 //
-// ON deliberately, for the live "the scene feels laggy sometimes"
-// investigation: it now logs one line per 5s window, so `adb logcat | grep
-// kolobok` shows exactly which moments dip and which dpr the ladder settles
-// on. Turn back off once that's characterised -- it's a console.log per
-// window, not free.
-export const perf = { hud: true };
+// OFF: this is a console.log per 5s window plus a one-shot scene audit, and
+// a console.log crosses the bridge -- not something to ship. Flip to true to
+// re-run the measurement (`adb logcat -d | grep "kolobok]"`); the probe
+// reports frame avg/worst/fps, draw calls, triangles, and the per-mesh
+// triangle breakdown that found the ground disc.
+export const perf = { hud: false };
 
 // POLISH_SPEC §7: one kill-switch per Phase 8 feature, for the ship-
 // readiness audit ("each §5 feature has a dev kill-switch").

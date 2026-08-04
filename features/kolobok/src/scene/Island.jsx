@@ -68,35 +68,69 @@ function clumpNoise01(x, z) {
 // nothing in the interior to act on and silently did nothing. Ring/segment
 // counts are chosen so vertex spacing stays well under the smallest pothole
 // radius, giving every feature enough vertices to shape smoothly.
-function makeRadialDisc(radius, rings, segments) {
+// Floor on the innermost rings: at r -> 0 the proportional count below goes
+// to nothing, and a 3-segment ring reads as a visible triangle in the middle
+// of the lawn.
+const MIN_RING_SEGMENTS = 12;
+
+/** `rimSegments` is the segment count at the OUTERMOST ring; inner rings get
+ *  proportionally fewer, so tangential vertex spacing stays roughly constant
+ *  across the whole disc instead of collapsing toward the centre.
+ *
+ *  Measured on device: at a fixed 340 segments/ring this disc was 37,740
+ *  triangles -- 37% of the entire scene's 91k, against a 50k budget for
+ *  everything. The waste was all in the middle: 340 segments at the rim
+ *  (r=8) is ~0.148 spacing, which is what the displacement/tint work below
+ *  actually needs, but the SAME 340 segments on the innermost ring (r~0.14)
+ *  put vertices ~0.0026 apart -- about 55x denser than anything reads.
+ *  Scaling per ring keeps rim density identical (so hills and potholes,
+ *  which live in a ~5.45-7.0 radial band, see no change at all) and drops
+ *  the disc to ~19k triangles. */
+function makeRadialDisc(radius, rings, rimSegments) {
   const geo = new BufferGeometry();
-  const verts = [];
-  verts.push(0, 0, 0); // center vertex
+  const verts = [0, 0, 0]; // centre vertex
+  const ringStart = [0];   // first vertex index of each ring (ring 0 = centre)
+  const ringCount = [1];
+
   for (let ring = 1; ring <= rings; ring += 1) {
     const rr = (ring / rings) * radius;
-    for (let s = 0; s < segments; s += 1) {
-      const a = (s / segments) * Math.PI * 2;
+    const count = Math.max(MIN_RING_SEGMENTS, Math.round((rimSegments * ring) / rings));
+    ringStart.push(verts.length / 3);
+    ringCount.push(count);
+    for (let s = 0; s < count; s += 1) {
+      const a = (s / count) * Math.PI * 2;
       verts.push(Math.cos(a) * rr, Math.sin(a) * rr, 0);
     }
   }
+
   const idx = [];
-  // Innermost fan: center to first ring.
-  for (let s = 0; s < segments; s += 1) {
-    const a = 1 + s;
-    const b = 1 + ((s + 1) % segments);
-    idx.push(0, a, b);
+  // Innermost fan: centre to ring 1.
+  for (let s = 0; s < ringCount[1]; s += 1) {
+    idx.push(0, ringStart[1] + s, ringStart[1] + ((s + 1) % ringCount[1]));
   }
-  // Ring-to-ring quads (two triangles each).
+  // Ring-to-ring bands. Adjacent rings no longer share a segment count, so
+  // this can't pair vertices 1:1 into quads -- it walks both rims together
+  // in angle order and emits one triangle per step, always advancing
+  // whichever rim's next vertex comes first (a two-pointer merge). Each
+  // band therefore emits exactly nIn + nOut triangles and leaves no gaps,
+  // whatever the two counts are. Winding matches the old quad version
+  // (inner -> outer -> next), so face orientation is unchanged.
   for (let ring = 1; ring < rings; ring += 1) {
-    const base = 1 + (ring - 1) * segments;
-    const next = 1 + ring * segments;
-    for (let s = 0; s < segments; s += 1) {
-      const s1 = (s + 1) % segments;
-      const a = base + s;
-      const b = base + s1;
-      const c = next + s;
-      const d = next + s1;
-      idx.push(a, c, d, a, d, b);
+    const inBase = ringStart[ring];
+    const outBase = ringStart[ring + 1];
+    const nIn = ringCount[ring];
+    const nOut = ringCount[ring + 1];
+    let i = 0;
+    let j = 0;
+    while (i < nIn || j < nOut) {
+      const takeInner = j >= nOut || (i < nIn && (i + 1) / nIn <= (j + 1) / nOut);
+      if (takeInner) {
+        idx.push(inBase + (i % nIn), outBase + (j % nOut), inBase + ((i + 1) % nIn));
+        i += 1;
+      } else {
+        idx.push(inBase + (i % nIn), outBase + (j % nOut), outBase + ((j + 1) % nOut));
+        j += 1;
+      }
     }
   }
   geo.setAttribute('position', new BufferAttribute(new Float32Array(verts), 3));
