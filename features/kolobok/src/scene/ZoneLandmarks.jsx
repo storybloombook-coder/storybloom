@@ -7,7 +7,7 @@ import {
 import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
-import { eggManager, eggMotion } from './easterEggs';
+import { eggManager } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeNoiseGrain } from './textures/proceduralTextures';
 import { mergeColoredParts } from './builders/mergeColoredParts';
@@ -723,24 +723,20 @@ function Landmark({ zone }) {
     return new Vector3(...CHIMNEY_LOCAL).applyMatrix4(o.matrixWorld);
   }, [zone.id, pos, a]);
 
-  // Live feedback: the chimney is now a press-and-hold interaction (long
-  // press "closes" it -- no smoke -- releasing makes smoke "go out"), not a
-  // tap -- see onZonePointerDown/onZoneRelease below. chimneyHeldRef tracks
-  // whether THIS press started on the chimney (proximity-gated, same spot
-  // the old tap discrimination lived, see IzbaChimney's own comment for why
-  // it can't live on a nested hitbox), so release only fires the burst if
-  // the hold actually began there.
-  const chimneyHeldRef = useRef(false);
+  // Proximity-gated on the chimney's own world position rather than a nested
+  // hitbox (see IzbaChimney's own comment for why it can't live there).
+  //
+  // Live feedback: "the pipe works great -- let's just stop having to hold
+  // it down for so long to make the smoke stop, I don't like that." So the
+  // press-and-hold is gone: a plain tap now fires the burst immediately on
+  // pointer DOWN, and the smoke stays away on its own for the burst's own
+  // suppression window (ZoneAmbience's SMOKE_SUPPRESS_S) rather than for
+  // however long a finger stays on the pipe. eggMotion.chimneyHeld is left
+  // permanently false -- the gates that read it (freezing puffs mid-rise,
+  // hiding ambient smoke) simply never engage now, which is the point.
   const onZonePointerDown = (e) => {
     if (!chimneyWorldPos || e.ray.distanceToPoint(chimneyWorldPos) >= CHIMNEY_HIT_R) return;
     e.stopPropagation();
-    chimneyHeldRef.current = true;
-    eggMotion.chimneyHeld = true;
-  };
-  const onZoneRelease = () => {
-    if (!chimneyHeldRef.current) return;
-    chimneyHeldRef.current = false;
-    eggMotion.chimneyHeld = false;
     eggManager.tapChimney();
   };
 
@@ -779,8 +775,6 @@ function Landmark({ zone }) {
       rotation={[0, a + Math.PI, 0]}
       onClick={onTap}
       onPointerDown={onZonePointerDown}
-      onPointerUp={onZoneRelease}
-      onPointerLeave={onZoneRelease}
     >
       {zone.id === 'izba' ? (
         <>

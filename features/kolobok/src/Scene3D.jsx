@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Animated, AppState, PixelRatio, StyleSheet, View, Text, Pressable,
 } from 'react-native';
+import { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Canvas } from '@react-three/fiber/native';
 import { KolobokScene } from './scene/KolobokScene';
 import { createSinglePointerDrag } from './scene/singlePointerDrag';
@@ -51,6 +52,28 @@ const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
 // fragment cost on mobile GPUs and buys little at this density, and
 // rendering more pixels without it beats fewer pixels with it.
 const RENDER_DPR = Math.min(PixelRatio.get(), 2);
+
+// Corner button stack. The burger sits at BURGER_BOTTOM (exactly where the
+// eye toggle used to live) and never moves; everything else collapses onto
+// it when closed and fans out from it when open -- two slots downward
+// (play/pause, camera lock) and three upward (eye, sound library, mute).
+const BURGER_BOTTOM = 144;
+const STACK_GAP = 48; // 40px button + 8px gap, matching the old fixed stack
+const STACK_SLIDE_MS = 260;
+
+/** Slide/fade for one button in the burger stack. `bottom` is where the
+ *  button sits when the menu is OPEN; closed, it rides back to the burger's
+ *  own slot and fades out. Reanimated (not RN Animated) because
+ *  TactileButton's outer element is a Reanimated-wrapped Pressable, which
+ *  can't consume an RN Animated.Value style. */
+function useStackSlide(openSv, bottom) {
+  return useAnimatedStyle(() => ({
+    opacity: openSv.value,
+    // translateY is positive downward, while `bottom` grows upward -- hence
+    // the sign flip. At open=0 every button lands exactly on BURGER_BOTTOM.
+    transform: [{ translateY: (1 - openSv.value) * (bottom - BURGER_BOTTOM) }],
+  }));
+}
 
 function createCameraDragController() {
   return createSinglePointerDrag({
@@ -260,6 +283,26 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
     setRotationLocked(orbit.rotationLocked);
   };
 
+  // Burger: collapses the whole right-hand column behind one button. Closed
+  // by default so the scene starts uncluttered. menuExpanded (React state)
+  // exists alongside the shared value purely to drive `disabled` -- a
+  // collapsed button is at opacity 0 but would still be tappable otherwise,
+  // and an invisible live button under the burger is the worst kind of
+  // mis-tap.
+  const [menuExpanded, setMenuExpanded] = useState(false);
+  const menuOpen = useSharedValue(0);
+  const onToggleButtonMenu = () => {
+    const next = !menuExpanded;
+    playSlot(next ? 'ui.menuOpen' : 'ui.menuClose');
+    setMenuExpanded(next);
+    menuOpen.value = withTiming(next ? 1 : 0, { duration: STACK_SLIDE_MS });
+  };
+  const lockSlide = useStackSlide(menuOpen, BURGER_BOTTOM - STACK_GAP * 2);
+  const playSlide = useStackSlide(menuOpen, BURGER_BOTTOM - STACK_GAP);
+  const eyeSlide = useStackSlide(menuOpen, BURGER_BOTTOM + STACK_GAP);
+  const soundSlide = useStackSlide(menuOpen, BURGER_BOTTOM + STACK_GAP * 2);
+  const muteSlide = useStackSlide(menuOpen, BURGER_BOTTOM + STACK_GAP * 3);
+
   const onToggleSoundMenu = () => {
     playSlot(soundMenuOpen ? 'ui.menuClose' : 'ui.menuOpen');
     setSoundMenuOpen((v) => !v);
@@ -411,9 +454,10 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
               : t('ui.playTale', locale)
         }
         onPress={onPlayPause}
-        style={styles.storyButton}
+        style={[styles.storyButton, playSlide]}
         innerStyle={styles.buttonVisual}
         hitSlop={8}
+        disabled={!menuExpanded}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>{storyPlaying ? '❚❚' : storyCompleted ? '⟲' : '▶'}</Text>
@@ -428,9 +472,10 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         accessibilityRole="button"
         accessibilityLabel={t(rotationLocked ? 'ui.unlockCamera' : 'ui.lockCamera', locale)}
         onPress={onToggleRotationLock}
-        style={[styles.storyButton, styles.cameraLockButton]}
+        style={[styles.storyButton, styles.cameraLockButton, lockSlide]}
         innerStyle={[styles.buttonVisual, !rotationLocked && styles.followButtonOff]}
         hitSlop={8}
+        disabled={!menuExpanded}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>{rotationLocked ? '🔒' : '🔓'}</Text>
@@ -446,9 +491,10 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         accessibilityRole="button"
         accessibilityLabel={cameraFollow ? t('ui.disableFollow', locale) : t('ui.enableFollow', locale)}
         onPress={onToggleFollow}
-        style={[styles.storyButton, styles.followButton]}
+        style={[styles.storyButton, styles.followButton, eyeSlide]}
         innerStyle={[styles.buttonVisual, !cameraFollow && styles.followButtonOff]}
         hitSlop={8}
+        disabled={!menuExpanded}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>👁</Text>
@@ -461,9 +507,10 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         accessibilityRole="button"
         accessibilityLabel={t('ui.soundLibrary', locale)}
         onPress={onToggleSoundMenu}
-        style={[styles.storyButton, styles.soundButton]}
+        style={[styles.storyButton, styles.soundButton, soundSlide]}
         innerStyle={styles.buttonVisual}
         hitSlop={8}
+        disabled={!menuExpanded}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={[styles.storyButtonText, styles.soundButtonIcon]}>♪</Text>
@@ -475,12 +522,31 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
         accessibilityRole="button"
         accessibilityLabel={t(soundMuted ? 'ui.unmuteSound' : 'ui.muteSound', locale)}
         onPress={onToggleMute}
-        style={[styles.storyButton, styles.muteButton]}
+        style={[styles.storyButton, styles.muteButton, muteSlide]}
         innerStyle={[styles.buttonVisual, soundMuted && styles.followButtonOff]}
         hitSlop={8}
+        disabled={!menuExpanded}
       >
         <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
         <Text style={styles.storyButtonText}>{soundMuted ? '🔇' : '🔊'}</Text>
+      </TactileButton>
+
+      {/* Burger: the one control in this column that's always visible, and
+          the anchor the other five collapse onto. Rendered AFTER them so it
+          stays on top while they slide out from underneath it. Solid fill
+          (the rest are translucent) so it reads as the group's handle rather
+          than one more peer. */}
+      <TactileButton
+        accessibilityRole="button"
+        accessibilityState={{ expanded: menuExpanded }}
+        accessibilityLabel={t(menuExpanded ? 'ui.closeControls' : 'ui.openControls', locale)}
+        onPress={onToggleButtonMenu}
+        style={[styles.storyButton, styles.burgerButton]}
+        innerStyle={[styles.buttonVisual, styles.burgerVisual]}
+        hitSlop={8}
+      >
+        <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
+        <Text style={[styles.storyButtonText, styles.burgerIcon]}>{menuExpanded ? '✕' : '☰'}</Text>
       </TactileButton>
 
       {/* Main-menu button: identical 40x40 circle, mirrored to the play/
@@ -667,11 +733,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   storyButtonText: { fontSize: 13, fontWeight: '700', color: '#2e2a22' },
-  cameraLockButton: { bottom: 48 }, // stacked directly BELOW storyButton (96 - 40 - 8 gap)
-  followButton: { bottom: 144 }, // stacked directly above storyButton (96 + 40 + 8 gap)
+  // All five fan out from the burger at BURGER_BOTTOM (144): two below it,
+  // three above, one STACK_GAP apart. These are the OPEN positions -- the
+  // useStackSlide transform rides each one back onto the burger when closed.
+  cameraLockButton: { bottom: 48 },
+  // play/pause keeps storyButton's own base bottom: 96 -- no override needed.
+  burgerButton: { bottom: 144 },
+  followButton: { bottom: 192 },
   followButtonOff: { backgroundColor: 'rgba(255,255,255,0.22)' },
-  soundButton: { bottom: 192 }, // stacked directly above followButton (144 + 40 + 8 gap)
-  muteButton: { bottom: 240 }, // stacked directly above soundButton (192 + 40 + 8 gap)
+  soundButton: { bottom: 240 },
+  muteButton: { bottom: 288 },
+  // Solid, unlike every other button in this column -- see the JSX comment.
+  burgerVisual: { backgroundColor: '#fffbf4' },
+  burgerIcon: { fontSize: 17 },
   soundButtonIcon: {
     fontSize: 25, // live feedback: 35% smaller than the previous 39
     // Live feedback: still read too low after the first attempt --
