@@ -270,7 +270,10 @@ export default function DraggablePageCard({
         { translateY: isMe ? translateY.value : shiftStyle },
         { scale: withTiming(dragging.value ? 1.03 : 1) },
       ],
-      zIndex: dragging.value ? 100 : 0,
+      // Stays lifted for the WHOLE settle, not just while the finger is
+      // down. Dropping to 0 on release put the still-moving card behind its
+      // neighbours for the last ~220ms of its travel, which read as a flick.
+      zIndex: dragging.value || isSettlingOut.value ? 100 : 0,
       shadowOpacity: withTiming(dragging.value ? 0.25 : 0),
     };
   });
@@ -304,10 +307,19 @@ export default function DraggablePageCard({
         'worklet';
         translateY.value -= correction;
         translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING }, (finished) => {
-          if (finished) isSettlingOut.value = false;
+          if (finished) {
+            isSettlingOut.value = false;
+            // Re-arm layout animation only once this card has actually
+            // stopped. Re-enabling it here (rather than immediately below)
+            // matters: every OTHER card reports onMeasured as the reordered
+            // list lands, each of which re-renders the list, and any layout
+            // pass during the settle would hand this card a LinearTransition
+            // running against the translateY it's already mid-way through.
+            // Two animations moving the same card is exactly the twitch.
+            runOnJS(setSuppressLayoutAnim)(false);
+          }
         });
       })();
-      setSuppressLayoutAnim(false);
     }
   }
 

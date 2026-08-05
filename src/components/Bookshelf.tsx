@@ -602,6 +602,11 @@ function ShelfPage({
   // that's crossed TOPPLE_HOLD_MS -- see the frame loop.
   const sustainedTiltMs = useSharedValue(0);
   const toppleArmed = useSharedValue(false);
+  // Which books are lying down, and which way: -1 / 0 / +1 per book. A
+  // latched state, not something re-derived from the current tilt -- that
+  // re-derivation is exactly why a fallen book used to stand itself back up
+  // when the phone came level.
+  const fallenDir = useSharedValue<number[]>(books.map(() => 0));
   // Grab-point-dependent tilt while dragging — see the constants above.
   const rotations = useSharedValue<number[]>(books.map(() => 0));
   const rotationVs = useSharedValue<number[]>(books.map(() => 0));
@@ -698,6 +703,9 @@ function ShelfPage({
       shuffled[j] = tmp;
     }
     order.value = shuffled;
+    // A shake re-shelves everything, so anything that was lying down is
+    // stood back up along with it.
+    fallenDir.value = fallenDir.value.map(() => 0);
     const kicked = vxs.value.slice();
     for (let i = 0; i < len; i++) kicked[i] = (Math.random() - 0.5) * 2 * SHAKE_KICK;
     vxs.value = kicked;
@@ -875,6 +883,13 @@ function ShelfPage({
       // makes a released spine settle back down rather than snap to level.
       const isDragged = i === draggingIndex.value;
       const isLifted = Math.abs(liftYs.value[i]) > LIFT_THRESHOLD;
+      // Picking a fallen book up stands it back up -- the one physical way
+      // to undo a topple, and the reason latching it is safe.
+      if (isDragged && fallenDir.value[i] !== 0) {
+        const cleared = fallenDir.value.slice();
+        cleared[i] = 0;
+        fallenDir.value = cleared;
+      }
       // Baseline: slump toward whichever side has open space. Zero when a
       // book is packed between two neighbours, which is most of them --
       // this only shows up around a gap or at the end of the row.
@@ -903,20 +918,30 @@ function ShelfPage({
         const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
         const atRightWall = nextXs[i] >= maxX - 0.5;
         const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
-        if (bracedByWall) {
+        if (fallenDir.value[i] !== 0) {
+          // Already down. A fallen book has no reason to get back up when
+          // the phone levels out -- gravity doesn't work in reverse. It
+          // stays until something physically lifts it (a drag, or a shake).
+          restTarget = fallenDir.value[i] * FALL_ROTATION_DEG;
+        } else if (bracedByWall) {
           restTarget = 0;
         } else {
           // Ambient lean stays hard-capped at MAX_LEAN_DEG no matter how
           // far the phone is tilted -- that cap is what stopped the shelf
           // sliding toward collapse just from being held at an angle.
           const lean = Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
-          // A full topple is now its own deliberate act: steep AND held
-          // (see toppleArmed). It self-rights when the phone comes back
-          // level, rather than leaving the shelf wrecked -- a shelf you
-          // can't undo would be worse than one that never falls.
-          restTarget = FALL_ENABLED && toppleArmed.value
-            ? Math.sign(tiltX.value) * FALL_ROTATION_DEG
-            : lean;
+          // A full topple is its own deliberate act: steep AND held (see
+          // toppleArmed). Crossing that line LATCHES -- the book is now
+          // down and stays down (see the fallenDir branch above).
+          if (FALL_ENABLED && toppleArmed.value) {
+            const dir = Math.sign(tiltX.value);
+            const next = fallenDir.value.slice();
+            next[i] = dir;
+            fallenDir.value = next;
+            restTarget = dir * FALL_ROTATION_DEG;
+          } else {
+            restTarget = lean;
+          }
         }
       }
       const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
