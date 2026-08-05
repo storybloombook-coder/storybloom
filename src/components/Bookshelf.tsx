@@ -34,14 +34,16 @@
 // defensively below and every sensor-driven feature stays inert without one.
 
 import * as Haptics from 'expo-haptics';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, useColorScheme, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   runOnJS,
   useAnimatedStyle,
   useFrameCallback,
   useSharedValue,
+  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
@@ -92,6 +94,11 @@ const SPINE_VISIBLE_HEIGHT = SHELF_HEIGHT - 8;
 // glitchy on real hardware, insetting the range avoids the overlap
 // altogether.
 const WALL_WIDTH = 6;
+// Layout width of a book's contact shadow. It's never this wide on screen —
+// the shadow is scaled to the book's real horizontal extent every frame (see
+// contactStyle) — this is just a fixed box for scaleX to work against, since
+// animating `width` would mean a layout pass per frame.
+const CONTACT_SHADOW_WIDTH = 2 * SPINE_WIDTH;
 
 // Everything that used to live here — the rotation spring-damper, the
 // corner-hang strength, the topple/slide angle thresholds, the lean cap, the
@@ -191,8 +198,55 @@ function hashId(id: string): number {
   return h;
 }
 
-function hueFromId(id: string): number {
-  return hashId(id) % 360;
+// Bookbinding materials, not a colour wheel. The old scheme was one hue per
+// book at a fixed `42% 34%`, which gave every spine the same weight and read
+// as a swatch chart. Real shelves are mostly deep, desaturated cloth and
+// leather with the occasional cream linen and one loud outlier, so that's
+// what these are — and the variety comes from having genuinely different
+// LIGHTNESSES sitting next to each other, not from hue alone.
+const SPINE_MATERIALS: { h: number; s: number; l: number }[] = [
+  { h: 6, s: 36, l: 29 }, // oxblood
+  { h: 24, s: 30, l: 33 }, // tan leather
+  { h: 42, s: 28, l: 64 }, // cream linen
+  { h: 96, s: 17, l: 27 }, // olive cloth
+  { h: 168, s: 25, l: 26 }, // teal cloth
+  { h: 210, s: 30, l: 30 }, // navy buckram
+  { h: 266, s: 16, l: 32 }, // aubergine
+  { h: 350, s: 14, l: 23 }, // near-black plum
+  { h: 34, s: 52, l: 47 }, // ochre — the loud one
+  { h: 152, s: 14, l: 40 }, // sage paper
+];
+
+type SpineLook = {
+  base: string;
+  /** Stamped detail — foil on a dark spine, ink on a pale one. */
+  foil: string;
+  /** Slightly off-base panel colour for layouts that inset one. */
+  panel: string;
+  /** True when the material is pale enough that white text would vanish. */
+  pale: boolean;
+  /** Which of the four spine layouts this book is bound in. */
+  layout: number;
+};
+
+/** Everything about how one book's spine is bound, derived from its id so a
+ *  book looks the same on every visit (a shelf that reshuffles its own
+ *  appearance reads as broken, not organic). */
+function spineLook(id: string): SpineLook {
+  const h = hashId(`look:${id}`);
+  const m = SPINE_MATERIALS[h % SPINE_MATERIALS.length];
+  // Jitter within the material so two books bound in the same cloth are still
+  // distinguishable side by side, without leaving the material's character.
+  const light = m.l + ((h >>> 5) % 9) - 4;
+  const sat = Math.max(8, m.s + ((h >>> 11) % 7) - 3);
+  const pale = light > 50;
+  return {
+    base: `hsl(${m.h}, ${sat}%, ${light}%)`,
+    foil: pale ? `hsl(${m.h}, ${Math.min(40, sat + 8)}%, 26%)` : `hsl(42, 38%, 78%)`,
+    panel: `hsl(${m.h}, ${sat}%, ${pale ? light - 9 : light + 8}%)`,
+    pale,
+    layout: (h >>> 17) % 4,
+  };
 }
 
 /** Per-book height, 84-100% of the shelf's usable height. Derived from the
@@ -212,8 +266,12 @@ function spineWidthFromId(id: string): number {
 function spineHeightFromId(id: string): number {
   // A second, independent hash mix so height doesn't correlate with hue --
   // otherwise every blue book would also be the tallest.
+  // 72-100% of the shelf's usable height. The old 84-100% band was too timid
+  // to read as a real shelf; the ceiling stays at 100% because a spine hangs
+  // off `bottom: 8` inside a SHELF_HEIGHT-tall area, so anything above that
+  // would poke out through the shelf label.
   const h = hashId(`h:${id}`);
-  return Math.round(SPINE_VISIBLE_HEIGHT * (0.84 + ((h % 1000) / 1000) * 0.16));
+  return Math.round(SPINE_VISIBLE_HEIGHT * (0.72 + ((h % 1000) / 1000) * 0.28));
 }
 
 
@@ -350,19 +408,44 @@ function Spine({
     };
   });
 
-  const hue = hueFromId(book.id);
+  // A contact shadow that belongs to the SIMULATION, not to the element: it
+  // pools under the book where it actually meets the shelf, stretches as the
+  // book leans (a leaning book covers more shelf), and thins and fades as one
+  // is lifted away. The element's own `shadowOpacity` can't do any of that,
+  // because it rotates and lifts along with the book it's attached to.
+  const contactStyle = useAnimatedStyle(() => {
+    const b = world.value.bodies[index];
+    if (!b) return { opacity: 0 };
+    const lift = Math.max(0, b.y - b.halfH);
+    const near = Math.max(0.12, 1 - lift / 100); // 1 on the shelf, ->0 lifted
+    const ext = horizontalExtent(b);
+    return {
+      opacity: 0.3 * near,
+      transform: [
+        { translateX: b.x - CONTACT_SHADOW_WIDTH / 2 },
+        { translateY: bounceY.value },
+        // A lifted book's shadow spreads as it softens, same as a real one.
+        { scaleX: (ext * 2 * (1 + (1 - near) * 0.5)) / CONTACT_SHADOW_WIDTH },
+        { scaleY: 0.55 + 0.45 * near },
+      ],
+    };
+  });
+
+  const look = spineLook(book.id);
 
   return (
+    <>
+    <Animated.View style={[styles.contactShadow, contactStyle]} pointerEvents="none" />
     <Animated.View
       style={[
         styles.spine,
-        { width: spineWidth, height: spineHeight, backgroundColor: `hsl(${hue}, 42%, 34%)` },
+        { width: spineWidth, height: spineHeight, backgroundColor: look.base },
         style,
       ]}
     >
       <GestureDetector gesture={pan}>
         <Pressable style={styles.spinePressable} onPress={() => onOpen(book)}>
-          <View style={[styles.spineHighlight, { backgroundColor: `hsl(${hue}, 42%, 46%)` }]} />
+          <SpineBinding look={look} />
           <View style={styles.spineTitleWrap}>
             <Text
               // The wrap is rotated 90deg, so the Text's own WIDTH runs along
@@ -371,7 +454,7 @@ function Spine({
               // capping it here is what lets adjustsFontSizeToFit shrink the
               // font to truly fit 2-3 lines instead of just getting clipped
               // by the spine's overflow:hidden.
-              style={[styles.spineTitle, { height: spineWidth - 6 }]}
+              style={[styles.spineTitle, { height: spineWidth - 6, color: look.foil }]}
               numberOfLines={3}
               adjustsFontSizeToFit
               minimumFontScale={0.5}
@@ -380,10 +463,204 @@ function Spine({
               {book.title}
             </Text>
           </View>
-          <View style={styles.spineBand} />
         </Pressable>
       </GestureDetector>
     </Animated.View>
+    </>
+  );
+}
+
+/** The decoration on one spine: the shading that makes a flat rectangle read
+ *  as the rounded back of a book, plus one of four bindings.
+ *
+ *  Four layouts rather than one, because a row where every spine carries the
+ *  same single band at the same height reads as one book repeated. These are
+ *  the four things real spines actually do — rule off the title, inset a
+ *  panel, raise leather bands, or stamp a publisher's mark at the foot — and
+ *  which one a book gets is fixed by its id, so it's always bound the same way.
+ *  All plain Views: no gradients, no SVG, nothing measured. */
+function SpineBinding({ look }: { look: SpineLook }) {
+  const foil = { backgroundColor: look.foil };
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {/* A spine is the curved back of a book: dark where it turns away at
+          both edges, brighter along the crown, with the head catching light. */}
+      <View style={[styles.spineEdge, styles.spineEdgeLeft]} />
+      <View style={[styles.spineEdge, styles.spineEdgeRight]} />
+      <View style={styles.spineSheen} />
+      <View style={styles.spineHead} />
+
+      {look.layout === 0 && (
+        <>
+          <View style={[styles.spineRule, foil, { top: 13 }]} />
+          <View style={[styles.spineRule, foil, { bottom: 22 }]} />
+          <View style={[styles.spineRule, foil, { bottom: 16 }]} />
+        </>
+      )}
+      {look.layout === 1 && (
+        <>
+          <View
+            style={[
+              styles.spinePanel,
+              { backgroundColor: look.panel, borderColor: look.foil },
+            ]}
+          />
+          <View style={[styles.spineRule, foil, { bottom: 12 }]} />
+        </>
+      )}
+      {look.layout === 2 && (
+        <>
+          <View style={[styles.spineBand, { top: 18 }]} />
+          <View style={[styles.spineBand, { top: '46%' }]} />
+          <View style={[styles.spineBand, { bottom: 24 }]} />
+          <View style={[styles.spineFootMark, foil]} />
+        </>
+      )}
+      {look.layout === 3 && (
+        <>
+          <View style={[styles.spineRule, foil, { top: 11 }]} />
+          <View style={[styles.spineRule, foil, { top: 15 }]} />
+          <View style={[styles.spineFootBlock, foil]} />
+        </>
+      )}
+    </View>
+  );
+}
+
+/** A book that has just been un-favorited, frozen at wherever the simulation
+ *  had it, so it can come apart on its way out. */
+type Departing = {
+  key: string;
+  id: string;
+  /** Body state at the moment it left the shelf. */
+  x: number;
+  y: number;
+  angle: number;
+  width: number;
+  height: number;
+};
+
+const CRUMBLE_MS = 1150;
+const CRUMBLE_COLS = 3;
+const CRUMBLE_ROWS = 5;
+
+/** One fragment of a disintegrating spine. Every piece derives its whole
+ *  motion from a single shared progress value, so a book coming apart is one
+ *  animation driving fifteen styles rather than fifteen animations to keep in
+ *  step. Its drift, spin and delay come from its own grid position, so the
+ *  break-up is deterministic and reads the same every time without ever
+ *  looking laid out on a grid. */
+function CrumbleFragment({
+  progress,
+  col,
+  row,
+  width,
+  height,
+  color,
+}: {
+  progress: SharedValue<number>;
+  col: number;
+  row: number;
+  width: number;
+  height: number;
+  color: string;
+}) {
+  const seed = hashId(`crumb:${col}:${row}`);
+  // Wind comes from the left, so the pieces nearest the right edge are taken
+  // first and travel furthest — that stagger is what makes it read as being
+  // blown apart rather than exploding.
+  const delay = 0.26 * (1 - col / (CRUMBLE_COLS - 1)) + ((seed % 100) / 100) * 0.12;
+  const driftX = 120 + ((seed >>> 3) % 160) + col * 40;
+  const lift = 24 + ((seed >>> 7) % 46);
+  const spin = (((seed >>> 11) % 2 === 0 ? -1 : 1) * (90 + ((seed >>> 13) % 200)));
+  const wobble = ((seed >>> 17) % 40) - 20;
+
+  const style = useAnimatedStyle(() => {
+    const raw = (progress.value - delay) / (1 - delay);
+    const p = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+    // Gravity takes it first, then the wind gets under it and carries it off.
+    const fall = 46 * p * p;
+    const rise = lift * p;
+    return {
+      opacity: p > 0.55 ? Math.max(0, 1 - (p - 0.55) / 0.45) : 1,
+      transform: [
+        { translateX: driftX * p * p },
+        { translateY: fall - rise + wobble * p },
+        { rotate: `${spin * p}deg` },
+        { scale: 1 - 0.5 * p },
+      ],
+    };
+  });
+
+  return (
+    <Animated.View
+      style={[
+        {
+          position: 'absolute',
+          left: (col * width) / CRUMBLE_COLS,
+          top: (row * height) / CRUMBLE_ROWS,
+          width: width / CRUMBLE_COLS + 0.5,
+          height: height / CRUMBLE_ROWS + 0.5,
+          backgroundColor: color,
+        },
+        style,
+      ]}
+    />
+  );
+}
+
+/** An un-favorited book leaving the shelf: it falls to pieces where it stood
+ *  and the pieces are blown away. Taking a star off is the one shelf action
+ *  with no physical counterpart — the book doesn't go anywhere, it simply
+ *  stops being a shelf book — so rather than have it blink out, it gets an
+ *  exit of its own.
+ *
+ *  The fragments are flat chips of the spine's own material, not a jigsaw of
+ *  the rendered spine: they spin, shrink and fade within a few hundred
+ *  milliseconds, so a faithful copy of the title in each of fifteen pieces
+ *  would cost fifteen laid-out text nodes to show something nobody can read. */
+function CrumblingSpine({ item, onDone }: { item: Departing; onDone: (key: string) => void }) {
+  const progress = useSharedValue(0);
+  const look = spineLook(item.id);
+  const cells: { col: number; row: number }[] = [];
+  for (let row = 0; row < CRUMBLE_ROWS; row++) {
+    for (let col = 0; col < CRUMBLE_COLS; col++) cells.push({ col, row });
+  }
+
+  useEffect(() => {
+    progress.value = withTiming(1, { duration: CRUMBLE_MS, easing: Easing.out(Easing.quad) }, (finished) => {
+      'worklet';
+      if (finished) runOnJS(onDone)(item.key);
+    });
+  }, [progress, onDone, item.key]);
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: item.x - item.width / 2,
+        bottom: 8 + (item.y - item.height / 2),
+        width: item.width,
+        height: item.height,
+        transform: [{ rotate: `${(-item.angle * 180) / Math.PI}deg` }],
+        zIndex: 5,
+      }}
+    >
+      {cells.map(({ col, row }) => (
+        <CrumbleFragment
+          key={`${col}:${row}`}
+          progress={progress}
+          col={col}
+          row={row}
+          width={item.width}
+          height={item.height}
+          // Alternating shades so the pieces separate visually the instant
+          // they part, instead of moving as one flat silhouette.
+          color={(col + row) % 2 === 0 ? look.base : look.panel}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -442,6 +719,15 @@ function ShelfPage({
   // whenever the id SEQUENCE changes but the SET doesn't — a changed set
   // already remounts the whole component via the parent's key.
   const prevIds = useRef<string[]>(books.map((b) => b.id));
+  // Books that have left the shelf but are still coming apart on screen. Keyed
+  // separately from the book id because the same book can be favorited again
+  // while its own pieces are still blowing away.
+  const [departing, setDeparting] = useState<Departing[]>([]);
+  const departSeq = useRef(0);
+  const dropDeparted = useCallback((key: string) => {
+    setDeparting((prev) => prev.filter((d) => d.key !== key));
+  }, []);
+
   useEffect(() => {
     const newIds = books.map((b) => b.id);
     const oldIds = prevIds.current;
@@ -456,6 +742,33 @@ function ShelfPage({
 
     const oldIndexOf = new Map(oldIds.map((id, i) => [id, i]));
     const w = world.value;
+
+    // Anything that was here and isn't any more was un-favorited. Snapshot
+    // where the simulation actually had it — leaning, stacked, wherever — so
+    // it comes apart from exactly the pose it was standing in.
+    const stillHere = new Set(newIds);
+    const leaving: Departing[] = [];
+    for (let i = 0; i < oldIds.length; i++) {
+      if (stillHere.has(oldIds[i])) continue;
+      const b = w.bodies[i];
+      if (!b) continue;
+      departSeq.current += 1;
+      leaving.push({
+        key: `${oldIds[i]}#${departSeq.current}`,
+        id: oldIds[i],
+        x: b.x,
+        y: b.y,
+        angle: b.angle,
+        width: b.halfW * 2,
+        height: b.halfH * 2,
+      });
+    }
+    // setState in an effect, which react-hooks/set-state-in-effect flags. It's
+    // deliberate: the pose only exists on the simulation side, and this is the
+    // one moment it can be read before the body is dropped. It runs once per
+    // favorite toggle, not per frame.
+    if (leaving.length > 0) setDeparting((prev) => [...prev, ...leaving]);
+
     // Keep the body every surviving book already has — its place, angle and
     // momentum are its identity, and a favourite added elsewhere on the
     // shelf must not disturb them.
@@ -635,7 +948,9 @@ function ShelfPage({
       }
     });
 
-  if (books.length === 0) return null;
+  // Still render an empty shelf while something is blowing away on it —
+  // otherwise removing the second-to-last book on a page cuts its own exit off.
+  if (books.length === 0 && departing.length === 0) return null;
 
   return (
     <GestureDetector gesture={shelfSwipeGesture}>
@@ -644,8 +959,19 @@ function ShelfPage({
             same edges the physics already pins spines against, just made
             visible instead of an invisible wall. Rendered behind the
             spines (default z-index), so a pinned book naturally covers it. */}
-        <View style={[styles.shelfWall, styles.shelfWallLeft]} />
-        <View style={[styles.shelfWall, styles.shelfWallRight]} />
+        <View style={styles.shelfBack} pointerEvents="none">
+          <View style={[styles.shelfBackShade, styles.shelfBackTop]} />
+          <View style={[styles.shelfBackShade, styles.shelfBackFloor]} />
+        </View>
+        <View style={[styles.shelfWall, styles.shelfWallLeft]}>
+          <WoodGrain vertical />
+        </View>
+        <View style={[styles.shelfWall, styles.shelfWallRight]}>
+          <WoodGrain vertical />
+        </View>
+        {departing.map((d) => (
+          <CrumblingSpine key={d.key} item={d} onDone={dropDeparted} />
+        ))}
         {books.map((book, index) => (
           <Spine
             key={book.id}
@@ -766,7 +1092,10 @@ export default function Bookshelf({
           onReorder={handlePageReorder}
         />
       )}
-      <View style={styles.shelfLip} />
+      <View style={styles.shelfLip}>
+        <View style={styles.shelfLipEdge} />
+        <WoodGrain />
+      </View>
       {shelfCount > 1 && (
         <ShelfSwitcher count={shelfCount} current={currentShelf} onSelect={setCurrentShelf} />
       )}
@@ -794,6 +1123,7 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 8, // matches `spine`'s own bottom inset — sits on the same shelf line
     width: 6,
+    overflow: 'hidden', // keeps the grain inside the wall's rounded corners
     backgroundColor: '#6b4423',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -817,7 +1147,79 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   spinePressable: { flex: 1 },
-  spineHighlight: { position: 'absolute', top: 0, bottom: 0, left: 3, width: 2, opacity: 0.7 },
+  // Rounded-spine shading. Stacked flat overlays rather than a gradient —
+  // there's no expo-linear-gradient or SVG in this project, and at 40-66px
+  // wide three hard-edged bands are indistinguishable from a real ramp.
+  spineEdge: { position: 'absolute', top: 0, bottom: 0, backgroundColor: '#000' },
+  spineEdgeLeft: { left: 0, width: 3, opacity: 0.22 },
+  spineEdgeRight: { right: 0, width: 4, opacity: 0.3 },
+  spineSheen: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 6,
+    width: 4,
+    backgroundColor: '#fff',
+    opacity: 0.09,
+  },
+  /** The head of the book, catching the light from above. */
+  spineHead: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#fff',
+    opacity: 0.14,
+  },
+  spineRule: { position: 'absolute', left: 5, right: 5, height: 1.5, opacity: 0.85 },
+  spinePanel: {
+    position: 'absolute',
+    top: 24,
+    bottom: 26,
+    left: 4,
+    right: 5,
+    borderWidth: 1,
+    borderRadius: 2,
+    opacity: 0.75,
+  },
+  /** Raised leather band — a ridge, so it's shaded rather than stamped. */
+  spineBand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 5,
+    backgroundColor: '#000',
+    opacity: 0.26,
+  },
+  spineFootMark: {
+    position: 'absolute',
+    bottom: 10,
+    alignSelf: 'center',
+    width: 7,
+    height: 7,
+    borderRadius: 1,
+    opacity: 0.8,
+  },
+  spineFootBlock: {
+    position: 'absolute',
+    bottom: 9,
+    left: 9,
+    right: 9,
+    height: 7,
+    borderRadius: 1,
+    opacity: 0.7,
+  },
+  contactShadow: {
+    position: 'absolute',
+    left: 0,
+    bottom: 4,
+    width: CONTACT_SHADOW_WIDTH,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#000',
+    zIndex: 0,
+  },
   spineTitleWrap: {
     flex: 1,
     alignItems: 'center',
@@ -836,25 +1238,78 @@ const styles = StyleSheet.create({
     // title that fits on one line.
     textAlignVertical: 'center',
   },
-  spineBand: {
-    position: 'absolute',
-    bottom: 14,
-    left: 4,
-    right: 4,
-    height: 3,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderRadius: 2,
-  },
   shelfLip: {
     height: 14,
     marginTop: -1,
     backgroundColor: '#8a5a34',
     borderBottomLeftRadius: 4,
     borderBottomRightRadius: 4,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
     shadowRadius: 4,
     elevation: 4,
   },
+  /** The lit front edge of the shelf board, where it faces the room. */
+  shelfLipEdge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#fff',
+    opacity: 0.16,
+  },
+  /** The recess the books stand in. Without it they float on the page
+   *  background; with it the walls and lip read as one piece of furniture. */
+  shelfBack: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 8,
+    backgroundColor: '#3b2717',
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+  },
+  /** Ambient occlusion: the recess is darkest where it meets the top and the
+   *  shelf board, which is what stops the flat panel reading as a flat panel. */
+  shelfBackShade: { position: 'absolute', left: 0, right: 0, backgroundColor: '#000' },
+  shelfBackTop: { top: 0, height: 16, opacity: 0.3 },
+  shelfBackFloor: { bottom: 0, height: 8, opacity: 0.22 },
 });
+
+/** Wood is not a flat fill. Three streaks at irregular offsets and opacities
+ *  is enough grain to read at this size, and it's the same trick along a wall
+ *  (vertical) as along the shelf board (horizontal). */
+function WoodGrain({ vertical }: { vertical?: boolean }) {
+  // offset = distance across the grain (x on a wall, y on the board),
+  // thickness = how heavy that streak is.
+  const streaks: { offset: number; thickness: number; opacity: number; dark: boolean }[] = vertical
+    ? [
+        { offset: 1, thickness: 1, opacity: 0.16, dark: true },
+        { offset: 3, thickness: 1, opacity: 0.1, dark: false },
+        { offset: 4, thickness: 1.5, opacity: 0.13, dark: true },
+      ]
+    : [
+        { offset: 4, thickness: 1, opacity: 0.12, dark: true },
+        { offset: 7, thickness: 1.5, opacity: 0.09, dark: false },
+        { offset: 11, thickness: 1, opacity: 0.14, dark: true },
+      ];
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {streaks.map((s, i) => (
+        <View
+          key={i}
+          style={[
+            { position: 'absolute', backgroundColor: s.dark ? '#000' : '#fff', opacity: s.opacity },
+            vertical
+              ? { top: 0, bottom: 0, left: s.offset, width: s.thickness }
+              : { left: 0, right: 0, top: s.offset, height: s.thickness },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}

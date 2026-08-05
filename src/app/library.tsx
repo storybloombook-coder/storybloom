@@ -267,10 +267,14 @@ export default function LibraryScreen() {
             <>
               {!favoritesOnly && shelfBooks.length > 0 && (
                 <Bookshelf
-                  // Remount (fresh physics arrays, correctly sized) only when
-                  // the SET of favorited ids changes — order-independent, so
-                  // persisting a drag's new order doesn't itself reset it.
-                  key={shelfBooks.map((b) => b.id).slice().sort().join(',')}
+                  // Deliberately NOT keyed on the favorited set. It used to be,
+                  // back when the shelf kept its physics in parallel arrays
+                  // sized at mount and a remount was the only way to resize
+                  // them. The shelf syncs bodies to the book list itself now,
+                  // and the remount had become the bug: favoriting a book tore
+                  // the whole shelf down, so it blanked for a frame (width
+                  // re-measures from zero), the shelf numbers flashed, and the
+                  // new book was rebuilt already seated instead of dropping in.
                   books={shelfBooks}
                   onOpen={openBook}
                   onReorder={handleShelfReorder}
