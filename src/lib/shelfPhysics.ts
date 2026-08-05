@@ -514,3 +514,36 @@ export function wake(b: Body): void {
   b.sleeping = false;
   b.restFrames = 0;
 }
+
+/** Hand a body to the finger: zero inverse mass makes it immovable by
+ *  everything else while still shoving everything it touches, which is
+ *  exactly what dragging should feel like. */
+export function makeKinematic(b: Body): void {
+  'worklet';
+  b.invMass = 0;
+  b.invInertia = 0;
+  b.sleeping = false;
+  b.restFrames = 0;
+}
+
+/** Give it back to the simulation on release. Recomputes from the same
+ *  formula makeBody uses, so the two can't drift apart. */
+export function restoreDynamics(b: Body): void {
+  'worklet';
+  const mass = (b.halfW * 2 * b.halfH * 2) / 1000;
+  const inertia = (mass * ((b.halfW * 2) ** 2 + (b.halfH * 2) ** 2)) / 12;
+  b.invMass = 1 / mass;
+  b.invInertia = 1 / inertia;
+  b.sleeping = false;
+  b.restFrames = 0;
+}
+
+/** Left-to-right order by position — the shelf's order is wherever the
+ *  books physically ended up, not a list the physics has to be told about. */
+export function orderByPosition(bodies: Body[]): number[] {
+  'worklet';
+  const idx: number[] = [];
+  for (let i = 0; i < bodies.length; i++) idx.push(i);
+  idx.sort((a, b) => bodies[a].x - bodies[b].x);
+  return idx;
+}
