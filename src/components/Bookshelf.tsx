@@ -157,15 +157,31 @@ const COLLISION_ROTATION_KICK = 1.0;
 //      sliding books across the shelf (see the `gravity` computation below),
 //      not just leaning/toppling them in place.
 const TILT_LEAN_DEG_PER_UNIT = 11; // degrees of lean per unit of tiltX — calmer baseline
-// Temporarily disabled — flip back to true to re-enable. While off, tilt
-// only ever produces the gentle lean below (capped at MAX_LEAN_DEG), never
-// a full topple or actual sliding across the shelf.
-const FALL_ENABLED = false;
+// Toppling is back on, but DELIBERATE now rather than incidental. It was
+// switched off because a book going over at 8.5° meant the shelf collapsed
+// while you were just holding the phone. It now needs the tilt held past a
+// much steeper angle for TOPPLE_HOLD_MS before it triggers, so it reads as
+// something you chose to do. Sliding stays off -- that was never asked for.
+const FALL_ENABLED = true;
 const SLIDE_ENABLED = false;
+// ~15deg, and it has to be held. Well past any angle you'd reach reading in
+// bed, and the hold is what separates "I tipped the shelf over" from "I
+// shifted in my chair".
+const TOPPLE_TILT_THRESHOLD = 0.259; // sin(15deg)
+const TOPPLE_HOLD_MS = 500;
+
+// Resting lean: a book with open space beside it slumps toward it, the way
+// a row does when you pull one out. Because the last book on a shelf always
+// has the run-out to the end wall on its right, this also produces the
+// classic leaning end book for free -- one mechanism, both behaviours.
+const GAP_LEAN_MAX_DEG = 7;
+const GAP_LEAN_IGNORE_PX = 10;  // hairline gaps read as "packed", not open
+const GAP_LEAN_FULL_PX = 46;    // gap at which the lean maxes out
 // Hard cap on the ambient lean angle while FALL_ENABLED is off — "just a
 // little tilt," not a progression toward toppling.
 const MAX_LEAN_DEG = 7;
-const FALL_TILT_THRESHOLD = 0.148; // sin(8.5°) — average book's topple angle
+// (The old incidental-topple threshold, sin(8.5deg), is gone -- toppling is
+// gated on TOPPLE_TILT_THRESHOLD + a hold now, not on a bare angle.)
 const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
 const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coefficient
 
@@ -276,10 +292,62 @@ const BASELINE_LOWPASS = 0.06;
 
 /** Deterministic, distinct-enough hue per book id — there's no real spine
  *  artwork, so color is how spines read as different books. */
-function hueFromId(id: string): number {
+function hashId(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return h % 360;
+  return h;
+}
+
+function hueFromId(id: string): number {
+  return hashId(id) % 360;
+}
+
+/** Per-book height, 84-100% of the shelf's usable height. Derived from the
+ *  id so a book is the same height on every visit -- a shelf that reshuffles
+ *  its own proportions each time you open it reads as broken, not organic.
+ *  Only the HEIGHT varies: spine width is load-bearing for the slot maths,
+ *  collision reach and shelf capacity, so varying that is a separate job. */
+function spineHeightFromId(id: string): number {
+  // A second, independent hash mix so height doesn't correlate with hue --
+  // otherwise every blue book would also be the tallest.
+  const h = hashId(`h:${id}`);
+  return Math.round(SPINE_VISIBLE_HEIGHT * (0.84 + ((h % 1000) / 1000) * 0.16));
+}
+
+/** Resting lean for one book, in degrees (+ = leaning right). Measures the
+ *  clear space either side and slumps toward the more open one, scaled by
+ *  how open it is. A book packed between neighbours gets 0, so on a full
+ *  shelf this is invisible; pull one out and its neighbours sag into the
+ *  hole, and the book at the end of the row leans into the run-out toward
+ *  the wall the way the last book on a real shelf always does. */
+function gapLeanFor(
+  i: number,
+  xs: number[],
+  len: number,
+  spineWidth: number,
+  maxX: number,
+): number {
+  'worklet';
+  const myLeft = xs[i];
+  const myRight = myLeft + spineWidth;
+  // Nearest neighbour edge on each side, falling back to the end walls.
+  let leftEdge = WALL_WIDTH;
+  let rightEdge = maxX + spineWidth;
+  for (let j = 0; j < len; j++) {
+    if (j === i) continue;
+    const jLeft = xs[j];
+    const jRight = jLeft + spineWidth;
+    if (jRight <= myLeft && jRight > leftEdge) leftEdge = jRight;
+    if (jLeft >= myRight && jLeft < rightEdge) rightEdge = jLeft;
+  }
+  const openness = (gap: number) => {
+    const g = gap - GAP_LEAN_IGNORE_PX;
+    if (g <= 0) return 0;
+    return Math.min(1, g / (GAP_LEAN_FULL_PX - GAP_LEAN_IGNORE_PX));
+  };
+  // Net: a book with space on BOTH sides (a lone book) stays upright,
+  // because the two pulls cancel -- which is right, nothing to lean on.
+  return (openness(rightEdge - myRight) - openness(myLeft - leftEdge)) * GAP_LEAN_MAX_DEG;
 }
 
 /** Move `bookIndex` to the rank implied by its current x, shifting the rest —
@@ -376,6 +444,10 @@ function Spine({
 }) {
   const startX = useSharedValue(0);
   const slot = spineWidth + SPINE_GAP;
+  // This book's own height -- the grab-point normalization and the topple
+  // pivot below both have to use it rather than the shelf-wide maximum, or
+  // a short book would pivot around a point above its own top edge.
+  const spineHeight = spineHeightFromId(book.id);
 
   const persist = (ord: number[]) => onReordered(ord);
 
@@ -390,13 +462,13 @@ function Spine({
       lastDragLiftY.value = 0;
       grabOffsetFrac.value = Math.min(
         1,
-        Math.max(-1, (e.y - SPINE_VISIBLE_HEIGHT / 2) / (SPINE_VISIBLE_HEIGHT / 2))
+        Math.max(-1, (e.y - spineHeight / 2) / (spineHeight / 2))
       );
       // Raw (unnormalized) pixel offsets from center, on BOTH axes — the
       // spine's real aspect ratio (narrow width, tall height) matters for a
       // believable corner-hang angle, which normalized fractions would lose.
       grabOffsetXPx.value = e.x - spineWidth / 2;
-      grabOffsetYPx.value = e.y - SPINE_VISIBLE_HEIGHT / 2;
+      grabOffsetYPx.value = e.y - spineHeight / 2;
       runOnJS(hapticStart)();
     })
     .onUpdate((e) => {
@@ -432,7 +504,7 @@ function Spine({
     // a full topple, so the grounded corner stays anchored to the shelf.
     const pivotFrac = Math.min(1, Math.abs(rotation) / FALL_ROTATION_DEG);
     const pivotX = Math.sign(rotation) * (spineWidth / 2) * pivotFrac;
-    const pivotY = (SPINE_VISIBLE_HEIGHT / 2) * pivotFrac;
+    const pivotY = (spineHeight / 2) * pivotFrac;
     return {
       transform: [
         { translateX: xs.value[index] ?? index * slot },
@@ -456,7 +528,9 @@ function Spine({
     <Animated.View
       style={[
         styles.spine,
-        { width: spineWidth, backgroundColor: `hsl(${hue}, 42%, 34%)` },
+        // height + bottom (styles.spine no longer pins top) so every book
+        // sits on the same shelf line and only its top edge varies.
+        { width: spineWidth, height: spineHeight, backgroundColor: `hsl(${hue}, 42%, 34%)` },
         style,
       ]}
     >
@@ -524,6 +598,10 @@ function ShelfPage({
   const lastDragLiftY = useSharedValue(0);
   const widthShared = useSharedValue(containerWidth);
   const tiltX = useSharedValue(0);
+  // How long the phone has been held past TOPPLE_TILT_THRESHOLD, and whether
+  // that's crossed TOPPLE_HOLD_MS -- see the frame loop.
+  const sustainedTiltMs = useSharedValue(0);
+  const toppleArmed = useSharedValue(false);
   // Grab-point-dependent tilt while dragging — see the constants above.
   const rotations = useSharedValue<number[]>(books.map(() => 0));
   const rotationVs = useSharedValue<number[]>(books.map(() => 0));
@@ -676,6 +754,17 @@ function ShelfPage({
     // directly by the sensed jerk, always integrated (it's O(1), unlike the
     // collision pass below) so a jerk registers even while the shelf is
     // otherwise fully at rest.
+    // Deliberate-topple gate: the steep tilt has to be SUSTAINED. Held past
+    // TOPPLE_HOLD_MS the shelf arms, and any single frame back under the
+    // threshold disarms it immediately -- so a jolt while you shift position
+    // can't tip the shelf, only a deliberate hold can.
+    if (Math.abs(tiltX.value) > TOPPLE_TILT_THRESHOLD) {
+      sustainedTiltMs.value += dt * 1000;
+    } else {
+      sustainedTiltMs.value = 0;
+    }
+    toppleArmed.value = sustainedTiltMs.value >= TOPPLE_HOLD_MS;
+
     const bounceSpring = -bounceY.value * BOUNCE_STIFFNESS;
     const bounceDamping = -bounceVY.value * BOUNCE_DAMPING;
     bounceVY.value += (bounceSpring + bounceDamping + jerkY.value * BOUNCE_STRENGTH) * dt;
@@ -786,7 +875,10 @@ function ShelfPage({
       // makes a released spine settle back down rather than snap to level.
       const isDragged = i === draggingIndex.value;
       const isLifted = Math.abs(liftYs.value[i]) > LIFT_THRESHOLD;
-      let restTarget = 0;
+      // Baseline: slump toward whichever side has open space. Zero when a
+      // book is packed between two neighbours, which is most of them --
+      // this only shows up around a gap or at the end of the row.
+      let restTarget = gapLeanFor(i, nextXs, len, spineWidth, maxX);
       if (isDragged && isLifted) {
         // Diagonal corner-hang: rotate toward wherever the grab point implies
         // the center of mass should hang below it, plus however much the
@@ -813,16 +905,18 @@ function ShelfPage({
         const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
         if (bracedByWall) {
           restTarget = 0;
-        } else if (FALL_ENABLED) {
-          restTarget = tiltX.value * TILT_LEAN_DEG_PER_UNIT;
-          // Past the fall threshold a book topples fully onto its side.
-          if (Math.abs(tiltX.value) > FALL_TILT_THRESHOLD) {
-            restTarget = Math.sign(tiltX.value) * FALL_ROTATION_DEG;
-          }
         } else {
-          // FALL_ENABLED off: just the gentle lean, hard-capped at
-          // MAX_LEAN_DEG — no progression toward a full topple at all.
-          restTarget = Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
+          // Ambient lean stays hard-capped at MAX_LEAN_DEG no matter how
+          // far the phone is tilted -- that cap is what stopped the shelf
+          // sliding toward collapse just from being held at an angle.
+          const lean = Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
+          // A full topple is now its own deliberate act: steep AND held
+          // (see toppleArmed). It self-rights when the phone comes back
+          // level, rather than leaving the shelf wrecked -- a shelf you
+          // can't undo would be worse than one that never falls.
+          restTarget = FALL_ENABLED && toppleArmed.value
+            ? Math.sign(tiltX.value) * FALL_ROTATION_DEG
+            : lean;
         }
       }
       const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
@@ -1162,7 +1256,8 @@ const styles = StyleSheet.create({
   shelfWallRight: { right: 0, borderTopRightRadius: 3, borderBottomRightRadius: 3 },
   spine: {
     position: 'absolute',
-    top: 0,
+    // No `top`: each spine sets its own height (spineHeightFromId) and hangs
+    // off `bottom`, so books of different heights all rest on the shelf.
     bottom: 8,
     borderRadius: 4,
     overflow: 'hidden',
