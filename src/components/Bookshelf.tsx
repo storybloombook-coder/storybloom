@@ -103,6 +103,10 @@ const WALL_WIDTH = 6;
 // (restitution, friction, solver iterations, sleep thresholds).
 // Gesture updates arrive at screen rate but carry no timestamp; one frame
 // at 60Hz is the honest assumption for integrating the held swing.
+// A newly favourited book appears this many of its own heights up and
+// drops in, so adding one reads as placing it on the shelf rather than it
+// blinking into existence.
+const SPAWN_DROP_HEIGHT = 3; // half-heights, i.e. 1.5x the full height
 const DRAG_DT = 1 / 60;
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 
@@ -442,19 +446,38 @@ function ShelfPage({
     const newIds = books.map((b) => b.id);
     const oldIds = prevIds.current;
     prevIds.current = newIds;
-    if (newIds.length !== oldIds.length) return; // set changed — remount handles it
-    let reordered = false;
-    for (let i = 0; i < newIds.length; i++) {
-      if (newIds[i] !== oldIds[i]) { reordered = true; break; }
+    let changed = newIds.length !== oldIds.length;
+    if (!changed) {
+      for (let i = 0; i < newIds.length; i++) {
+        if (newIds[i] !== oldIds[i]) { changed = true; break; }
+      }
     }
-    if (!reordered) return;
+    if (!changed) return;
+
     const oldIndexOf = new Map(oldIds.map((id, i) => [id, i]));
     const w = world.value;
-    const remapped = newIds.map((id, i) => {
+    // Keep the body every surviving book already has — its place, angle and
+    // momentum are its identity, and a favourite added elsewhere on the
+    // shelf must not disturb them.
+    const bodies = newIds.map((id, i) => {
       const oldIndex = oldIndexOf.get(id);
-      return oldIndex !== undefined ? w.bodies[oldIndex] : w.bodies[i];
+      if (oldIndex !== undefined && w.bodies[oldIndex]) return w.bodies[oldIndex];
+      // A book that wasn't here before: give it a body ABOVE the shelf and
+      // let it fall into place, rather than materialising already seated.
+      // Nothing else has to move — it lands in the gap and the solver sorts
+      // out any nudging.
+      const halfW = spineWidthFromId(id) / 2;
+      const halfH = spineHeightFromId(id) / 2;
+      const x = Math.min(
+        Math.max(WALL_WIDTH + halfW + i * (SPINE_WIDTH + SPINE_GAP), w.leftWall + halfW),
+        w.rightWall - halfW,
+      );
+      return makeBody(x, halfH * SPAWN_DROP_HEIGHT, halfW, halfH);
     });
-    world.value = { ...w, bodies: remapped };
+    // Anything already settled has to wake, or a new book would land on a
+    // sleeping row and be absorbed without it reacting.
+    for (let i = 0; i < bodies.length; i++) wake(bodies[i]);
+    world.value = { ...w, bodies };
   }, [books, world]);
 
   /** A drag settled: turn the body order the simulation ended up in back
