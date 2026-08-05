@@ -72,6 +72,17 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
 import { t, useLocaleStore } from '../lib/i18n';
+import {
+  horizontalExtent,
+  isAsleep,
+  makeBody,
+  makeKinematic,
+  orderByPosition,
+  restoreDynamics,
+  step,
+  wake,
+  type World,
+} from '../lib/shelfPhysics';
 
 type AccelerometerModule = {
   setUpdateInterval: (ms: number) => void;
@@ -251,6 +262,9 @@ const LIFT_GRAVITY = 1500; // 1.5x faster fall — 1000 felt too slow/floaty on 
 // real hardware; 900 gives a calmer, heavier slide once SLIDE_TILT_THRESHOLD
 // is crossed instead of a sudden lurch.
 const GRAVITY_STRENGTH = 900;
+// How much sensed tilt becomes sideways gravity. Below 1 because a phone at
+// a natural reading angle should lean the row, not empty it.
+const TILT_GRAVITY_SCALE = 0.85;
 const TILT_UPDATE_MS = 80;
 // Below this, treat the phone as "held level" — a real phone is essentially
 // never perfectly flat, and without a deadzone that ambient tilt would keep
@@ -307,6 +321,15 @@ function hueFromId(id: string): number {
  *  its own proportions each time you open it reads as broken, not organic.
  *  Only the HEIGHT varies: spine width is load-bearing for the slot maths,
  *  collision reach and shelf capacity, so varying that is a separate job. */
+/** Per-book spine thickness. Only possible now that collision is real: the
+ *  old model keyed slot maths, collision reach and shelf capacity off one
+ *  shared SPINE_WIDTH, so varying it would have broken all three. Bodies
+ *  carry their own half-extents, so a thin book is simply a thin box. */
+function spineWidthFromId(id: string): number {
+  const h = hashId(`w:${id}`);
+  return Math.round(SPINE_WIDTH * (0.68 + ((h % 1000) / 1000) * 0.5));
+}
+
 function spineHeightFromId(id: string): number {
   // A second, independent hash mix so height doesn't correlate with hue --
   // otherwise every blue book would also be the tallest.
@@ -384,136 +407,101 @@ function hapticSwipe() {
 function Spine({
   book,
   index,
-  spineWidth,
-  containerWidth,
-  xs,
-  order,
+  world,
   draggingIndex,
-  lastDragX,
-  liftYs,
-  lastDragLiftY,
   bounceY,
-  rotations,
-  grabOffsetFrac,
-  grabOffsetXPx,
-  grabOffsetYPx,
   shelfSwipeGesture,
   onOpen,
   onReordered,
 }: {
   book: BookSummary;
   index: number;
-  spineWidth: number;
-  containerWidth: number;
-  xs: SharedValue<number[]>;
-  order: SharedValue<number[]>;
+  /** The shared simulation. This spine reads its own body out of it every
+   *  frame and writes to it only while being dragged. */
+  world: SharedValue<World>;
   draggingIndex: SharedValue<number>;
-  /** x of the actively-dragged spine as of the last physics tick — lets the
-   *  frame loop finite-difference a real velocity, so letting go mid-shove
-   *  keeps that momentum instead of snapping straight to the spring. */
-  lastDragX: SharedValue<number>;
-  /** Per-spine height off the shelf line (negative = up). Kinematic (set
-   *  directly by the gesture) while this spine is being dragged; a real
-   *  gravity-driven fall in the frame loop the rest of the time — see
-   *  LIFT_GRAVITY above. */
-  liftYs: SharedValue<number[]>;
-  /** Vertical counterpart to lastDragX — lets the frame loop finite-difference
-   *  a real vertical velocity so a fast release carries its momentum into
-   *  the fall instead of starting the drop from a dead stop. */
-  lastDragLiftY: SharedValue<number>;
-  /** Whole-shelf vertical hop offset from a fast phone movement — applies to
-   *  every spine equally, on top of any individual drag-lift. */
+  /** Whole-shelf vertical hop — a view offset, not part of the simulation. */
   bounceY: SharedValue<number>;
-  /** Per-spine rotation (degrees), settled by its own spring-damper in the
-   *  frame loop — driven by grabOffsetFrac while this spine is being dragged. */
-  rotations: SharedValue<number[]>;
-  /** Where on the spine (-1 top .. +1 bottom, relative to its own center)
-   *  the currently-dragged spine was grabbed. Only meaningful while dragging. */
-  grabOffsetFrac: SharedValue<number>;
-  /** Raw pixel offset of the grab point from the spine's own center, on each
-   *  axis — used (together) for the diagonal corner-hang while lifted. */
-  grabOffsetXPx: SharedValue<number>;
-  grabOffsetYPx: SharedValue<number>;
-  /** The whole-shelf quick-swipe gesture (see SWIPE_IMPULSE above) — this
-   *  spine's own long-press drag is marked simultaneous with it so a fast
-   *  swipe across several books still registers even though it starts on
-   *  top of a spine's own gesture-handler view. */
   shelfSwipeGesture: GestureType;
   onOpen: (book: BookSummary) => void;
-  onReordered: (order: number[]) => void;
+  /** Called with the new left-to-right ORDER as body indices; the shelf
+   *  maps those back to ids. */
+  onReordered: (rankedIndices: number[]) => void;
 }) {
-  const startX = useSharedValue(0);
-  const slot = spineWidth + SPINE_GAP;
-  // This book's own height -- the grab-point normalization and the topple
-  // pivot below both have to use it rather than the shelf-wide maximum, or
-  // a short book would pivot around a point above its own top edge.
   const spineHeight = spineHeightFromId(book.id);
+  const spineWidth = spineWidthFromId(book.id);
+  const grabDX = useSharedValue(0);
+  const grabDY = useSharedValue(0);
 
-  const persist = (ord: number[]) => onReordered(ord);
+  function persist(ranked: number[]) {
+    onReordered(ranked);
+  }
 
   const pan = Gesture.Pan()
     .activateAfterLongPress(300)
     .simultaneousWithExternalGesture(shelfSwipeGesture)
-    .onStart((e) => {
-      startX.value = xs.value[index];
-      lastDragX.value = xs.value[index];
+    .onStart(() => {
+      const b = world.value.bodies[index];
+      if (!b) return;
       draggingIndex.value = index;
-      liftYs.value[index] = 0;
-      lastDragLiftY.value = 0;
-      grabOffsetFrac.value = Math.min(
-        1,
-        Math.max(-1, (e.y - spineHeight / 2) / (spineHeight / 2))
-      );
-      // Raw (unnormalized) pixel offsets from center, on BOTH axes — the
-      // spine's real aspect ratio (narrow width, tall height) matters for a
-      // believable corner-hang angle, which normalized fractions would lose.
-      grabOffsetXPx.value = e.x - spineWidth / 2;
-      grabOffsetYPx.value = e.y - spineHeight / 2;
+      // Hand the book to the finger. It stops being pushed by anything and
+      // starts pushing everything -- which is what picking one up does.
+      makeKinematic(b);
+      grabDX.value = b.x;
+      grabDY.value = b.y;
       runOnJS(hapticStart)();
     })
     .onUpdate((e) => {
-      let nx = startX.value + e.translationX;
-      nx = Math.min(Math.max(nx, WALL_WIDTH), containerWidth - spineWidth - WALL_WIDTH);
-      xs.value[index] = nx;
-      order.value = reorderForDrag(order.value, index, nx, slot);
-      liftYs.value[index] = Math.min(LIFT_MAX, Math.max(LIFT_MIN, e.translationY));
+      const w = world.value;
+      const b = w.bodies[index];
+      if (!b) return;
+      // Drive the body straight from the finger. Everything it runs into is
+      // resolved by the solver on the next step, so shoving a book through
+      // the row genuinely shoves the row.
+      b.x = Math.min(
+        Math.max(grabDX.value + e.translationX, w.leftWall + b.halfW),
+        w.rightWall - b.halfW,
+      );
+      // Screen y grows downward, the simulation's grows upward.
+      b.y = Math.max(b.halfH, grabDY.value - e.translationY);
+      b.vx = 0;
+      b.vy = 0;
+      b.omega = 0;
     })
-    .onEnd(() => {
-      const wasLifted = Math.abs(liftYs.value[index]) > LIFT_THRESHOLD;
+    .onEnd((e) => {
+      const w = world.value;
+      const b = w.bodies[index];
+      if (!b) return;
       draggingIndex.value = -1;
-      // No withSpring — leave it to the frame loop's real gravity fall (see
-      // LIFT_GRAVITY). Its current velocity (finite-differenced there from
-      // lastDragLiftY) carries over, so a fast downward release already
-      // falls with momentum instead of starting from rest.
-      runOnJS(persist)(order.value);
+      restoreDynamics(b);
+      // Carry the throw. Gesture velocity is px/s in screen space, so the
+      // vertical component flips sign coming into the simulation.
+      b.vx = e.velocityX;
+      b.vy = -e.velocityY;
+      const wasLifted = b.y > b.halfH + LIFT_THRESHOLD;
+      // Order is read back off where the books physically ARE -- the
+      // simulation is the source of truth, not a list kept beside it.
+      runOnJS(persist)(orderByPosition(w.bodies));
       if (wasLifted) runOnJS(hapticDrop)();
     });
 
   const style = useAnimatedStyle(() => {
+    const b = world.value.bodies[index];
+    if (!b) return { transform: [{ translateX: 0 }] };
     const isMe = draggingIndex.value === index;
-    const liftY = liftYs.value[index] ?? 0;
-    const lifted = Math.abs(liftY) > LIFT_THRESHOLD;
-    const rotation = rotations.value[index] ?? 0;
-    // A rectangle toppling over pivots on whichever bottom corner is still
-    // touching the shelf — not its own center. Rotating purely around
-    // center (the default) made a falling book visibly lift off/"float"
-    // above the shelf line as the angle grew, since the center itself
-    // doesn't move but the bottom edge swings up and away from it. Blend
-    // the pivot from center (gentle leans look natural rotating in place)
-    // toward the bottom corner in the fall direction as rotation approaches
-    // a full topple, so the grounded corner stays anchored to the shelf.
-    const pivotFrac = Math.min(1, Math.abs(rotation) / FALL_ROTATION_DEG);
-    const pivotX = Math.sign(rotation) * (spineWidth / 2) * pivotFrac;
-    const pivotY = (spineHeight / 2) * pivotFrac;
+    const lifted = b.y > b.halfH + LIFT_THRESHOLD;
+    // The element is laid out with its bottom on the shelf line, so both
+    // offsets are measured from there. No pivot juggling: the simulation
+    // rotates a body about its own centre, and so does RN, so they agree by
+    // construction -- the old code had to fake a grounded pivot because its
+    // "rotation" wasn't attached to a real body.
     return {
       transform: [
-        { translateX: xs.value[index] ?? index * slot },
-        { translateY: liftY + bounceY.value },
-        { translateX: pivotX },
-        { translateY: pivotY },
-        { rotate: `${rotation}deg` },
-        { translateX: -pivotX },
-        { translateY: -pivotY },
+        { translateX: b.x - b.halfW },
+        { translateY: -(b.y - b.halfH) + bounceY.value },
+        // Screen rotation is clockwise-positive with y down; the simulation
+        // is counter-clockwise-positive with y up. Hence the negation.
+        { rotate: `${(-b.angle * 180) / Math.PI}deg` },
         { scale: lifted ? 1.08 : 1 },
       ],
       zIndex: isMe ? 10 : 1,
@@ -528,8 +516,6 @@ function Spine({
     <Animated.View
       style={[
         styles.spine,
-        // height + bottom (styles.spine no longer pins top) so every book
-        // sits on the same shelf line and only its top edge varies.
         { width: spineWidth, height: spineHeight, backgroundColor: `hsl(${hue}, 42%, 34%)` },
         style,
       ]}
@@ -583,59 +569,38 @@ function ShelfPage({
   /** Called with the new left-to-right book ids (this page only) after a drag settles. */
   onReorder: (bookIds: string[]) => void;
 }) {
-  const spineWidth = SPINE_WIDTH;
-
-  // books arrives pre-sorted by shelf position, so initial rank == array
-  // index — these seed values already match, no snap-into-place on mount.
-  const xs = useSharedValue<number[]>(books.map((_, i) => WALL_WIDTH + i * (spineWidth + SPINE_GAP)));
-  const vxs = useSharedValue<number[]>(books.map(() => 0));
-  const order = useSharedValue<number[]>(books.map((_, i) => i));
+  // ONE simulation for the whole shelf, replacing the old parallel arrays
+  // (xs/vxs/rotations/rotationVs/liftYs/liftVYs/order/fallenDir). A book is
+  // now a rigid box that owns its own position, angle and momentum, so
+  // "leaning", "fallen" and "stacked" are places it can be rather than flags
+  // maintained beside it.
+  const world = useSharedValue<World>({
+    bodies: books.map((b, i) => {
+      const halfW = spineWidthFromId(b.id) / 2;
+      const halfH = spineHeightFromId(b.id) / 2;
+      // Seeded left-to-right at their resting height, so nothing drops into
+      // place on mount. books arrives pre-sorted by shelf position.
+      return makeBody(WALL_WIDTH + halfW + i * (SPINE_WIDTH + SPINE_GAP), halfH, halfW, halfH);
+    }),
+    leftWall: WALL_WIDTH,
+    rightWall: Math.max(WALL_WIDTH + 1, containerWidth - WALL_WIDTH),
+    gx: 0,
+    gy: -GRAVITY_STRENGTH,
+  });
   const draggingIndex = useSharedValue(-1);
-  const lastDragX = useSharedValue(0);
-  // Per-spine lift height — see the LIFT_GRAVITY note above the constants.
-  const liftYs = useSharedValue<number[]>(books.map(() => 0));
-  const liftVYs = useSharedValue<number[]>(books.map(() => 0));
-  const lastDragLiftY = useSharedValue(0);
-  const widthShared = useSharedValue(containerWidth);
   const tiltX = useSharedValue(0);
-  // How long the phone has been held past TOPPLE_TILT_THRESHOLD, and whether
-  // that's crossed TOPPLE_HOLD_MS -- see the frame loop.
-  const sustainedTiltMs = useSharedValue(0);
-  const toppleArmed = useSharedValue(false);
-  // Which books are lying down, and which way: -1 / 0 / +1 per book. A
-  // latched state, not something re-derived from the current tilt -- that
-  // re-derivation is exactly why a fallen book used to stand itself back up
-  // when the phone came level.
-  const fallenDir = useSharedValue<number[]>(books.map(() => 0));
-  // Grab-point-dependent tilt while dragging — see the constants above.
-  const rotations = useSharedValue<number[]>(books.map(() => 0));
-  const rotationVs = useSharedValue<number[]>(books.map(() => 0));
-  const grabOffsetFrac = useSharedValue(0);
-  // Raw pixel grab-point offsets for the diagonal corner-hang while lifted.
-  const grabOffsetXPx = useSharedValue(0);
-  const grabOffsetYPx = useSharedValue(0);
-  // Tracks which two books were most recently the dragged spine's immediate
-  // neighbors (-1 = none), so the frame loop can detect the MOMENT that
-  // changes and fire a one-time make-room kick + haptic, instead of
-  // reapplying it continuously every frame.
-  const gapLeft = useSharedValue(-1);
-  const gapRight = useSharedValue(-1);
-  // Which spines have already been impulsed during the CURRENT swipe pass —
-  // reset at the start of every swipe so each spine only gets hit once per
-  // continuous brush across the shelf, not once per frame it's under the
-  // finger.
+  // Which spines one swipe pass has already hit, so brushing across the
+  // shelf kicks each book once rather than once per frame under the finger.
   const swipedIndices = useSharedValue<number[]>([]);
 
-  // xs/vxs/order/rotations/rotationVs are all indexed by POSITION in the
-  // `books` array, but the parent re-sorts that array (by shelfPosition)
-  // every time a reorder is persisted — so a book's array position can
-  // change on the very next render after its own drag ends. Without this,
-  // whichever book ends up at a given position inherits the ANIMATED STATE
-  // (x, velocity, rotation) that used to belong to whoever was there before,
-  // which looks like two books' spines instantly swapping places/tilt the
-  // moment a reorder saves. Remap every per-book array from old position to
-  // new position whenever the id SEQUENCE changes (but the SET doesn't —
-  // a changed set already remounts the whole component via the parent's key).
+  // Bodies are indexed by POSITION in the `books` array, but the parent
+  // re-sorts that array every time a reorder is persisted — so a book's
+  // array position can change on the very next render after its own drag
+  // ends. Without remapping, whichever book lands at a given position
+  // inherits the PHYSICAL STATE (place, angle, momentum) of whoever was
+  // there before, which reads as two spines instantly swapping. Remap
+  // whenever the id SEQUENCE changes but the SET doesn't — a changed set
+  // already remounts the whole component via the parent's key.
   const prevIds = useRef<string[]>(books.map((b) => b.id));
   useEffect(() => {
     const newIds = books.map((b) => b.id);
@@ -644,42 +609,40 @@ function ShelfPage({
     if (newIds.length !== oldIds.length) return; // set changed — remount handles it
     let reordered = false;
     for (let i = 0; i < newIds.length; i++) {
-      if (newIds[i] !== oldIds[i]) {
-        reordered = true;
-        break;
-      }
+      if (newIds[i] !== oldIds[i]) { reordered = true; break; }
     }
     if (!reordered) return;
     const oldIndexOf = new Map(oldIds.map((id, i) => [id, i]));
-    const permute = (arr: number[]) =>
-      newIds.map((id) => {
-        const oldIndex = oldIndexOf.get(id);
-        return oldIndex !== undefined ? arr[oldIndex] : 0;
-      });
-    xs.value = permute(xs.value);
-    vxs.value = permute(vxs.value);
-    rotations.value = permute(rotations.value);
-    rotationVs.value = permute(rotationVs.value);
-    liftYs.value = permute(liftYs.value);
-    liftVYs.value = permute(liftVYs.value);
-    // `order` holds RANKS as old-index values — remap those values (not just
-    // their positions) through the same old->new lookup.
-    order.value = order.value.map((oldIndex) => {
-      const id = oldIds[oldIndex];
-      const newIndex = newIds.indexOf(id);
-      return newIndex >= 0 ? newIndex : oldIndex;
+    const w = world.value;
+    const remapped = newIds.map((id, i) => {
+      const oldIndex = oldIndexOf.get(id);
+      return oldIndex !== undefined ? w.bodies[oldIndex] : w.bodies[i];
     });
-  }, [books, xs, vxs, order, rotations, rotationVs, liftYs, liftVYs]);
+    world.value = { ...w, bodies: remapped };
+  }, [books, world]);
+
+  /** A drag settled: turn the body order the simulation ended up in back
+   *  into book ids. Order is an OUTCOME of where books physically are now,
+   *  not a list maintained in parallel with them. */
+  function handleRanked(ranked: number[]) {
+    onReorder(ranked.map((i) => books[i]?.id).filter((id): id is string => !!id));
+  }
+
   // Whole-shelf vertical hop from a fast phone movement — see the jerk/bounce
-  // note above the constants and the frame loop below.
+  // note above the constants and the frame loop below. Deliberately NOT part
+  // of the simulation: it moves the shelf, not the books on it.
   const jerkY = useSharedValue(0);
   const bounceY = useSharedValue(0);
   const bounceVY = useSharedValue(0);
-  // Shared-value writes must happen in an effect, not during render (Reanimated
-  // strict mode warns/misbehaves otherwise).
+
+  // The shelf can be re-measured (rotation, split screen) and the walls move
+  // with it. In an effect, not during render — Reanimated strict mode.
   useEffect(() => {
-    widthShared.value = containerWidth;
-  }, [containerWidth, widthShared]);
+    world.value = {
+      ...world.value,
+      rightWall: Math.max(WALL_WIDTH + 1, containerWidth - WALL_WIDTH),
+    };
+  }, [containerWidth, world]);
 
   const lastMagnitude = useRef(1);
   const lastShakeAt = useRef(0);
@@ -693,24 +656,20 @@ function ShelfPage({
    *  so they visibly tumble into their new slots instead of silently
    *  snapping — then persist the new order like a drag would. */
   function shuffleShelf() {
-    const len = xs.value.length;
-    if (len < 2) return;
-    const shuffled = order.value.slice();
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = shuffled[i];
-      shuffled[i] = shuffled[j];
-      shuffled[j] = tmp;
+    const w = world.value;
+    if (w.bodies.length < 2) return;
+    // Stand everything back up and kick it sideways; the solver sorts out
+    // where they actually end up, which is the point of shaking a shelf.
+    for (let i = 0; i < w.bodies.length; i++) {
+      const b = w.bodies[i];
+      b.angle = 0;
+      b.omega = 0;
+      b.y = b.halfH;
+      b.vy = 0;
+      b.vx = (Math.random() - 0.5) * 2 * SHAKE_KICK;
+      wake(b);
     }
-    order.value = shuffled;
-    // A shake re-shelves everything, so anything that was lying down is
-    // stood back up along with it.
-    fallenDir.value = fallenDir.value.map(() => 0);
-    const kicked = vxs.value.slice();
-    for (let i = 0; i < len; i++) kicked[i] = (Math.random() - 0.5) * 2 * SHAKE_KICK;
-    vxs.value = kicked;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-    handleReordered(shuffled);
   }
 
   // Tilt the phone, tilt the shelf's gravity; shake it hard enough and the
@@ -755,347 +714,63 @@ function ShelfPage({
 
   useFrameCallback((frame) => {
     const dt = Math.min((frame.timeSincePreviousFrame ?? 16) / 1000, MAX_DT);
-    const len = xs.value.length;
-    if (len === 0) return;
+    const w = world.value;
+    if (w.bodies.length === 0) return;
 
-    // Whole-shelf vertical hop — a tiny independent mass-spring-damper driven
-    // directly by the sensed jerk, always integrated (it's O(1), unlike the
-    // collision pass below) so a jerk registers even while the shelf is
-    // otherwise fully at rest.
-    // Deliberate-topple gate: the steep tilt has to be SUSTAINED. Held past
-    // TOPPLE_HOLD_MS the shelf arms, and any single frame back under the
-    // threshold disarms it immediately -- so a jolt while you shift position
-    // can't tip the shelf, only a deliberate hold can.
-    if (Math.abs(tiltX.value) > TOPPLE_TILT_THRESHOLD) {
-      sustainedTiltMs.value += dt * 1000;
-    } else {
-      sustainedTiltMs.value = 0;
-    }
-    toppleArmed.value = sustainedTiltMs.value >= TOPPLE_HOLD_MS;
-
+    // Whole-shelf vertical hop — its own tiny mass-spring-damper, driven by
+    // the sensed jerk. Always integrated (it's O(1)) so a jerk registers
+    // even with the shelf otherwise fully asleep.
     const bounceSpring = -bounceY.value * BOUNCE_STIFFNESS;
     const bounceDamping = -bounceVY.value * BOUNCE_DAMPING;
     bounceVY.value += (bounceSpring + bounceDamping + jerkY.value * BOUNCE_STRENGTH) * dt;
     bounceY.value = Math.min(BOUNCE_MAX, Math.max(-BOUNCE_MAX, bounceY.value + bounceVY.value * dt));
 
-    // Cheap early-out once everything's settled and nothing is being dragged —
-    // this callback runs for the lifetime of the component (including while
-    // the user has navigated elsewhere, since Expo Router keeps the screen
-    // mounted), so skip the array-clone/sort/spring work entirely when idle
-    // rather than paying it 60x/sec for no visible effect.
-    // Sliding is gated behind SLIDE_TILT_THRESHOLD specifically (~20°) — a
-    // lesser tilt only leans/topples books in place (see the rotation
-    // target below), it never translates them across the shelf. Also
-    // temporarily disabled outright via SLIDE_ENABLED (see its declaration).
-    const rawGravity =
-      SLIDE_ENABLED && Math.abs(tiltX.value) > SLIDE_TILT_THRESHOLD ? tiltX.value * GRAVITY_STRENGTH : 0;
-    // Friction: a book won't creep at all unless gravity's pull exceeds it,
-    // and even while sliding, friction keeps opposing the motion (Coulomb
-    // friction, not just velocity damping) — without this ANY tilt above the
-    // deadzone caused slow perpetual drift with no sense of "holding still."
-    const gravity =
-      rawGravity === 0
-        ? 0
-        : Math.abs(rawGravity) <= FRICTION
-          ? 0
-          : rawGravity - Math.sign(rawGravity) * FRICTION;
-    // Note: gravity can be 0 here even with a real tilt, if friction is
-    // canceling it out (see above) — but a tilt below FRICTION strength
-    // should still visibly lean the books, so also bail out of the early
-    // skip whenever there's ANY tilt past the deadzone, not just when it's
-    // strong enough to actually slide something.
-    if (draggingIndex.value === -1 && gravity === 0 && Math.abs(tiltX.value) <= TILT_DEADZONE) {
-      let settled = true;
-      for (let i = 0; i < len; i++) {
-        if (
-          Math.abs(vxs.value[i]) > 0.5 ||
-          Math.abs(rotations.value[i]) > 0.2 ||
-          Math.abs(rotationVs.value[i]) > 0.5 ||
-          Math.abs(liftYs.value[i]) > 0.5 ||
-          Math.abs(liftVYs.value[i]) > 0.5
-        ) {
-          settled = false;
-          break;
-        }
-      }
-      if (settled) return;
-    }
-    const nextXs = xs.value.slice();
-    const nextVxs = vxs.value.slice();
-    const nextRotations = rotations.value.slice();
-    const nextRotationVs = rotationVs.value.slice();
-    const nextLiftYs = liftYs.value.slice();
-    const nextLiftVYs = liftVYs.value.slice();
-    const maxX = Math.max(WALL_WIDTH, widthShared.value - spineWidth - WALL_WIDTH);
-
-    // Velocity of whichever spine is being dragged, finite-differenced against
-    // its position at the end of the LAST physics tick (lastDragX) — not the
-    // per-tick array copy, which would always diff against itself and read ~0.
-    const draggedVel =
-      draggingIndex.value >= 0 && dt > 0
-        ? (xs.value[draggingIndex.value] - lastDragX.value) / dt
-        : 0;
-    if (draggingIndex.value >= 0) lastDragX.value = xs.value[draggingIndex.value];
-    // Same finite-differencing for the vertical lift, so a fast release
-    // carries its momentum into the fall instead of starting from rest.
-    const draggedLiftVel =
-      draggingIndex.value >= 0 && dt > 0
-        ? (liftYs.value[draggingIndex.value] - lastDragLiftY.value) / dt
-        : 0;
-    if (draggingIndex.value >= 0) lastDragLiftY.value = liftYs.value[draggingIndex.value];
-    // Lifted "into the air" — floats free of horizontal collision until it's
-    // lowered back toward the shelf line, where it lands with a real bump.
-    const draggedLifted = draggingIndex.value >= 0 && Math.abs(liftYs.value[draggingIndex.value]) > LIFT_THRESHOLD;
-
-    // Make-room preview: the moment the dragged spine's live-reordered target
-    // rank puts it into a NEW gap, kick that gap's two neighbors apart (plus
-    // a small wiggle) and buzz once — a one-time reaction to the CHANGE, not
-    // a continuous force, so it doesn't linger into a restoring spring.
-    if (draggingIndex.value >= 0) {
-      const rank = order.value.indexOf(draggingIndex.value);
-      const newLeft = rank > 0 ? order.value[rank - 1] : -1;
-      const newRight = rank < order.value.length - 1 ? order.value[rank + 1] : -1;
-      if (newLeft !== gapLeft.value || newRight !== gapRight.value) {
-        gapLeft.value = newLeft;
-        gapRight.value = newRight;
-        if (newLeft >= 0) {
-          nextVxs[newLeft] -= GAP_NUDGE_KICK;
-          nextRotationVs[newLeft] -= GAP_WIGGLE_KICK;
-        }
-        if (newRight >= 0) {
-          nextVxs[newRight] += GAP_NUDGE_KICK;
-          nextRotationVs[newRight] += GAP_WIGGLE_KICK;
-        }
-        runOnJS(hapticGap)();
-      }
-    } else if (gapLeft.value !== -1 || gapRight.value !== -1) {
-      gapLeft.value = -1;
-      gapRight.value = -1;
+    // Gravity follows the phone. Past the deadzone the shelf's "down" tips
+    // sideways, and everything on it responds through the same contacts
+    // that hold it up — books lean on each other, slide, and if it gets
+    // steep enough, go over. Nothing here special-cases toppling; a book
+    // falls because gravity took its centre of mass past its own edge.
+    const tilt = Math.abs(tiltX.value) > TILT_DEADZONE ? tiltX.value : 0;
+    const gx = tilt * GRAVITY_STRENGTH * TILT_GRAVITY_SCALE;
+    if (gx !== w.gx) {
+      w.gx = gx;
+      // A change in gravity has to wake the shelf, or a settled row would
+      // sit through being tipped.
+      for (let i = 0; i < w.bodies.length; i++) wake(w.bodies[i]);
     }
 
-    for (let i = 0; i < len; i++) {
-      // Rotation always integrates, dragged spine or not — torque only while
-      // it's the one being dragged. When not dragged, the spring's TARGET
-      // isn't always level: it tracks the phone's tilt (ambient lean), and
-      // if this spine is pinned against a wall with nowhere left to slide
-      // and the tilt gets steep enough, the target becomes a full topple —
-      // same spring, just aimed somewhere other than 0. This is also what
-      // makes a released spine settle back down rather than snap to level.
-      const isDragged = i === draggingIndex.value;
-      const isLifted = Math.abs(liftYs.value[i]) > LIFT_THRESHOLD;
-      // Picking a fallen book up stands it back up -- the one physical way
-      // to undo a topple, and the reason latching it is safe.
-      if (isDragged && fallenDir.value[i] !== 0) {
-        const cleared = fallenDir.value.slice();
-        cleared[i] = 0;
-        fallenDir.value = cleared;
-      }
-      // Baseline: slump toward whichever side has open space. Zero when a
-      // book is packed between two neighbours, which is most of them --
-      // this only shows up around a gap or at the end of the row.
-      let restTarget = gapLeanFor(i, nextXs, len, spineWidth, maxX);
-      if (isDragged && isLifted) {
-        // Diagonal corner-hang: rotate toward wherever the grab point implies
-        // the center of mass should hang below it, plus however much the
-        // phone's own tilt has shifted "down" sideways on screen.
-        // Raw atan2 gives the FULL "ideal pendulum" angle, which swings
-        // toward ±90° for almost any grab near the vertical center (the
-        // denominator shrinks toward 0) — felt wild/uncontrolled on real
-        // hardware. A held book has enough rigidity/grip friction that it
-        // only leans PART of the way there, not a free-swinging pendulum —
-        // CORNER_HANG_STRENGTH scales it down to a believable slight lean.
-        const cornerHangDeg = Math.atan2(grabOffsetXPx.value, grabOffsetYPx.value) * (180 / Math.PI);
-        const tiltLean = Math.abs(tiltX.value) > TILT_DEADZONE ? tiltX.value * TILT_LEAN_DEG_PER_UNIT : 0;
-        restTarget = Math.min(
-          FALL_ROTATION_DEG,
-          Math.max(-FALL_ROTATION_DEG, cornerHangDeg * CORNER_HANG_STRENGTH + tiltLean)
-        );
-      } else if (!isDragged && Math.abs(tiltX.value) > TILT_DEADZONE) {
-        // A wall is rigid — a book resting against the wall it would be
-        // leaning INTO can't tilt that way at all, gentle lean or full
-        // topple alike (the far wall, if any, is irrelevant). Checked
-        // first and unconditionally, not just when FALL_ENABLED.
-        const atLeftWall = nextXs[i] <= WALL_WIDTH + 0.5;
-        const atRightWall = nextXs[i] >= maxX - 0.5;
-        const bracedByWall = (tiltX.value < 0 && atLeftWall) || (tiltX.value > 0 && atRightWall);
-        if (fallenDir.value[i] !== 0) {
-          // Already down. A fallen book has no reason to get back up when
-          // the phone levels out -- gravity doesn't work in reverse. It
-          // stays until something physically lifts it (a drag, or a shake).
-          restTarget = fallenDir.value[i] * FALL_ROTATION_DEG;
-        } else if (bracedByWall) {
-          restTarget = 0;
-        } else {
-          // Ambient lean stays hard-capped at MAX_LEAN_DEG no matter how
-          // far the phone is tilted -- that cap is what stopped the shelf
-          // sliding toward collapse just from being held at an angle.
-          const lean = Math.sign(tiltX.value) * Math.min(MAX_LEAN_DEG, Math.abs(tiltX.value) * TILT_LEAN_DEG_PER_UNIT);
-          // A full topple is its own deliberate act: steep AND held (see
-          // toppleArmed). Crossing that line LATCHES -- the book is now
-          // down and stays down (see the fallenDir branch above).
-          if (FALL_ENABLED && toppleArmed.value) {
-            const dir = Math.sign(tiltX.value);
-            const next = fallenDir.value.slice();
-            next[i] = dir;
-            fallenDir.value = next;
-            restTarget = dir * FALL_ROTATION_DEG;
-          } else {
-            restTarget = lean;
-          }
-        }
-      }
-      const torque = isDragged ? grabOffsetFrac.value * draggedVel * ROTATION_TORQUE : 0;
-      const rotSpring = -(nextRotations[i] - restTarget) * ROTATION_STIFFNESS;
-      const rotDamping = -nextRotationVs[i] * ROTATION_DAMPING;
-      nextRotationVs[i] += (rotSpring + rotDamping + torque) * dt;
-      // Dragging while still flat on the shelf keeps the tighter clamp (a
-      // shove shouldn't spin a book past a believable hand-tilt); lifted (or
-      // ambient lean/fall) gets the wider one so a hang/topple can actually
-      // reach a believable angle.
-      const clampMax = isDragged && !isLifted ? ROTATION_MAX : FALL_ROTATION_DEG;
-      nextRotations[i] = Math.min(clampMax, Math.max(-clampMax, nextRotations[i] + nextRotationVs[i] * dt));
-
-      // Lift height: kinematic (already set by the gesture) while dragged —
-      // just track its velocity so a release carries momentum. Otherwise
-      // real gravity pulls it down until it lands flush at the shelf line.
-      if (isDragged) {
-        nextLiftVYs[i] = draggedLiftVel;
-      } else {
-        const liftDamping = -nextLiftVYs[i] * DAMPING;
-        nextLiftVYs[i] += (liftDamping + LIFT_GRAVITY) * dt;
-        nextLiftYs[i] += nextLiftVYs[i] * dt;
-        if (nextLiftYs[i] > 0) {
-          nextLiftYs[i] = 0;
-          nextLiftVYs[i] = 0;
-        } else if (nextLiftYs[i] < LIFT_MIN) {
-          nextLiftYs[i] = LIFT_MIN;
-          if (nextLiftVYs[i] < 0) nextLiftVYs[i] = 0;
-        }
-      }
-
-      if (isDragged) {
-        // Kinematic: position already set by the gesture.
-        nextVxs[i] = draggedVel;
-        continue;
-      }
-      // No restoring "home slot" force — books never get pulled toward each
-      // other or snapped into a tidy packed row on their own. The only things
-      // that ever move a book are a direct drag, tilt-gravity, a shake, and
-      // the collision pass below keeping neighbors from overlapping; once
-      // those stop acting on it, it just stays wherever it physically is.
-      const dampingForce = -nextVxs[i] * DAMPING;
-      nextVxs[i] += (dampingForce + gravity) * dt;
-      nextXs[i] += nextVxs[i] * dt;
+    // Cheap early-out once everything has come to rest and nothing is being
+    // dragged. This callback lives as long as the component (including while
+    // the user is on another screen, since Expo Router keeps it mounted), so
+    // not burning a frame on a settled shelf matters.
+    if (draggingIndex.value === -1 && isAsleep(w)
+      && Math.abs(bounceY.value) < 0.1 && Math.abs(bounceVY.value) < 0.1) {
+      return;
     }
 
-    // A leaning/toppling book's effective footprint isn't just its upright
-    // spineWidth — as it rotates (around its grounded corner, see the style)
-    // its top edge sweeps sideways in the fall direction, like a falling
-    // rod, reaching into a neighbor's space even though its base x-position
-    // hasn't moved. Approximate the extra reach on whichever side it's
-    // currently leaning/falling toward as height*sin(angle) — but scaled by
-    // the SAME pivotFrac the render style uses (how far into a full topple
-    // the current rotation already is), not the raw sin() alone. Height is
-    // much bigger than width for these thin spines, so an un-scaled sin()
-    // made even a gentle ~7° ambient lean add ~15px of reach — since every
-    // spine leans the same direction under one tilt, that pushed the WHOLE
-    // shelf apart just from leaning, with no real topple involved. Scaling
-    // by pivotFrac makes a small lean's reach negligible while still giving
-    // a real topple (pivotFrac -> 1) the full sweep for genuine collisions.
-    const rightReach: number[] = [];
-    const leftReach: number[] = [];
-    for (let i = 0; i < len; i++) {
-      const pivotFrac = Math.min(1, Math.abs(nextRotations[i]) / FALL_ROTATION_DEG);
-      const rad = (Math.abs(nextRotations[i]) * Math.PI) / 180;
-      const sweep = Math.sin(rad) * SPINE_VISIBLE_HEIGHT * pivotFrac;
-      rightReach.push(spineWidth / 2 + (nextRotations[i] > 0 ? sweep : 0));
-      leftReach.push(spineWidth / 2 + (nextRotations[i] < 0 ? sweep : 0));
-    }
-
-    // Pairwise collision — a couple of relaxation passes keeps adjacent
-    // overlaps stable instead of jittering. The kick scales with the dragged
-    // spine's actual speed (plus a floor from sheer overlap) so a fast shove
-    // knocks a neighbor harder than a slow nudge.
-    for (let pass = 0; pass < 2; pass++) {
-      // Array.from() isn't safe to call from a worklet (crashes with "tried to
-      // synchronously call a Remote Function") — build the index list by hand.
-      const sortedByX: number[] = [];
-      for (let idx = 0; idx < len; idx++) sortedByX.push(idx);
-      sortedByX.sort((a, b) => nextXs[a] - nextXs[b]);
-      for (let k = 0; k < len - 1; k++) {
-        const i = sortedByX[k];
-        const j = sortedByX[k + 1];
-        // Same shape as the old `nextXs[i] + spineWidth - nextXs[j]` when
-        // neither is rotated (rightReach/leftReach both reduce to
-        // spineWidth/2) — but grows when either is leaning/toppling toward
-        // the other.
-        const overlap = nextXs[i] - nextXs[j] + rightReach[i] + leftReach[j];
-        if (overlap <= 0) continue;
-        const iDragged = i === draggingIndex.value;
-        const jDragged = j === draggingIndex.value;
-        if ((iDragged || jDragged) && draggedLifted) continue;
-        if (iDragged && !jDragged) {
-          nextXs[j] += overlap;
-          nextVxs[j] += overlap * BUMP + Math.max(0, draggedVel) * 0.5;
-          // Extra rotational jolt for the DRAGGED spine itself at the moment
-          // of impact — on top of the continuous shove torque — using the
-          // same grab-point lever-arm idea, scaled by how deep it hit.
-          nextRotationVs[i] += grabOffsetFrac.value * overlap * COLLISION_ROTATION_KICK;
-        } else if (jDragged && !iDragged) {
-          nextXs[i] -= overlap;
-          nextVxs[i] -= overlap * BUMP + Math.max(0, -draggedVel) * 0.5;
-          nextRotationVs[j] -= grabOffsetFrac.value * overlap * COLLISION_ROTATION_KICK;
-        } else if (!iDragged && !jDragged) {
-          nextXs[i] -= overlap / 2;
-          nextXs[j] += overlap / 2;
-          nextVxs[i] -= (overlap * BUMP) / 2;
-          nextVxs[j] += (overlap * BUMP) / 2;
-        }
-      }
-    }
-
-    for (let i = 0; i < len; i++) {
-      if (nextXs[i] < WALL_WIDTH) {
-        nextXs[i] = WALL_WIDTH;
-        if (nextVxs[i] < 0) nextVxs[i] = 0;
-      } else if (nextXs[i] > maxX) {
-        nextXs[i] = maxX;
-        if (nextVxs[i] > 0) nextVxs[i] = 0;
-      }
-    }
-
-    xs.value = nextXs;
-    vxs.value = nextVxs;
-    rotations.value = nextRotations;
-    rotationVs.value = nextRotationVs;
-    liftYs.value = nextLiftYs;
-    liftVYs.value = nextLiftVYs;
+    step(w, dt);
   });
 
-  function handleReordered(ord: number[]) {
-    onReorder(ord.map((bookIndex) => books[bookIndex].id));
-  }
-
-  // Quick swipe across the shelf — see SWIPE_IMPULSE above. No long-press
-  // requirement (unlike each spine's own drag gesture), and marked
-  // simultaneous with every spine's pan (via .simultaneousWithExternalGesture
-  // on the Spine side) so a fast brush still registers even though it
-  // begins on top of a spine's own gesture-handler view.
+  // Brush a finger across the shelf and books scatter out of the way. With
+  // real bodies this is just an impulse — the solver carries it through the
+  // row, so a shove can genuinely knock a leaning book over.
   const shelfSwipeGesture = Gesture.Pan()
-    .onStart(() => {
+    .minDistance(12)
+    .onBegin(() => {
       swipedIndices.value = [];
     })
     .onUpdate((e) => {
-      if (draggingIndex.value !== -1) return; // a real drag is in progress — don't also impulse
-      const dir = e.velocityX >= 0 ? 1 : -1;
-      const len = xs.value.length;
-      for (let i = 0; i < len; i++) {
-        if (swipedIndices.value.includes(i)) continue;
-        const left = xs.value[i];
-        const right = left + spineWidth;
-        if (e.x < left || e.x > right) continue;
-        vxs.value[i] += dir * SWIPE_IMPULSE;
-        rotationVs.value[i] += dir * SWIPE_WIGGLE;
+      const w = world.value;
+      if (draggingIndex.value !== -1) return;
+      for (let i = 0; i < w.bodies.length; i++) {
+        if (swipedIndices.value.indexOf(i) !== -1) continue;
+        const b = w.bodies[i];
+        const ext = horizontalExtent(b);
+        if (e.x < b.x - ext || e.x > b.x + ext) continue;
+        const dir = e.velocityX >= 0 ? 1 : -1;
+        b.vx += dir * SWIPE_IMPULSE;
+        b.omega += dir * SWIPE_WIGGLE * (Math.PI / 180);
+        wake(b);
         swipedIndices.value = [...swipedIndices.value, i];
         runOnJS(hapticSwipe)();
       }
@@ -1117,22 +792,12 @@ function ShelfPage({
             key={book.id}
             book={book}
             index={index}
-            spineWidth={spineWidth}
-            containerWidth={containerWidth}
-            xs={xs}
-            order={order}
+            world={world}
             draggingIndex={draggingIndex}
-            lastDragX={lastDragX}
-            liftYs={liftYs}
-            lastDragLiftY={lastDragLiftY}
             bounceY={bounceY}
-            rotations={rotations}
-            grabOffsetFrac={grabOffsetFrac}
-            grabOffsetXPx={grabOffsetXPx}
-            grabOffsetYPx={grabOffsetYPx}
             shelfSwipeGesture={shelfSwipeGesture}
             onOpen={onOpen}
-            onReordered={handleReordered}
+            onReordered={handleRanked}
           />
         ))}
       </View>
