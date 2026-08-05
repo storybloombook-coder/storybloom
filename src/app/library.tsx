@@ -6,7 +6,6 @@ import {
   FlatList,
   Modal,
   Pressable,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -75,7 +74,6 @@ export default function LibraryScreen() {
 
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [readinessByBook, setReadinessByBook] = useState<Map<string, ReadinessReport>>(new Map());
-  const [refreshing, setRefreshing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<BookSummary | null>(null);
   const [missingFor, setMissingFor] = useState<{ title: string; warnings: ReadinessWarning[] } | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -125,12 +123,6 @@ export default function LibraryScreen() {
       load();
     }, [load])
   );
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
-  }, [load]);
 
   function confirmDelete(book: BookSummary) {
     setPendingDelete(book);
@@ -260,9 +252,11 @@ export default function LibraryScreen() {
           data={visibleBooks}
           keyExtractor={(b) => b.id}
           contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={subColor} />
-          }
+          // No pull-to-refresh. The bookshelf sits in this list's header and
+          // is dragged with the finger, so a downward drag anywhere near it
+          // was being claimed by the refresh gesture. There's nothing to pull
+          // for either — the list reloads itself whenever the screen is
+          // focused (see the useFocusEffect above).
           ListHeaderComponent={
             <>
               {!favoritesOnly && shelfBooks.length > 0 && (

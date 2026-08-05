@@ -221,12 +221,11 @@ type SpineLook = {
   base: string;
   /** Stamped detail — foil on a dark spine, ink on a pale one. */
   foil: string;
-  /** Slightly off-base panel colour for layouts that inset one. */
-  panel: string;
-  /** True when the material is pale enough that white text would vanish. */
-  pale: boolean;
-  /** Which of the four spine layouts this book is bound in. */
-  layout: number;
+  /** The base colour's own HSL parts, so anything that needs to shade a piece
+   *  of this spine can do it in the same material (see shadeSpine). */
+  h: number;
+  s: number;
+  l: number;
 };
 
 /** Everything about how one book's spine is bound, derived from its id so a
@@ -239,14 +238,32 @@ function spineLook(id: string): SpineLook {
   // distinguishable side by side, without leaving the material's character.
   const light = m.l + ((h >>> 5) % 9) - 4;
   const sat = Math.max(8, m.s + ((h >>> 11) % 7) - 3);
+  // Pale materials (cream linen, ochre) need dark ink; everything else takes
+  // light foil.
   const pale = light > 50;
   return {
     base: `hsl(${m.h}, ${sat}%, ${light}%)`,
     foil: pale ? `hsl(${m.h}, ${Math.min(40, sat + 8)}%, 26%)` : `hsl(42, 38%, 78%)`,
-    panel: `hsl(${m.h}, ${sat}%, ${pale ? light - 9 : light + 8}%)`,
-    pale,
-    layout: (h >>> 17) % 4,
+    h: m.h,
+    s: sat,
+    l: light,
   };
+}
+
+/** The colour of one fragment of a spine. The spine's 3D read comes from
+ *  overlays that only exist while it's whole (see SpineBinding); once it's in
+ *  pieces each piece has to carry its own share of that shading, or the book
+ *  visibly goes flat in the moment before it comes apart. So the edges stay
+ *  dark, the crown stays bright, the head stays lit — baked into the
+ *  fragment's own colour, plus a little grain so the debris isn't uniform. */
+function shadeSpine(look: SpineLook, col: number, row: number): string {
+  let l = look.l;
+  if (col === 0) l -= 7;
+  if (col === CRUMBLE_COLS - 1) l -= 9;
+  if (col === 1) l += 4;
+  if (row === 0) l += 5;
+  l += (hashId(`grain:${col}:${row}`) % 5) - 2;
+  return `hsl(${look.h}, ${look.s}%, ${Math.min(94, Math.max(4, l))}%)`;
 }
 
 /** Per-book height, 84-100% of the shelf's usable height. Derived from the
@@ -445,7 +462,7 @@ function Spine({
     >
       <GestureDetector gesture={pan}>
         <Pressable style={styles.spinePressable} onPress={() => onOpen(book)}>
-          <SpineBinding look={look} />
+          <SpineBinding />
           <View style={styles.spineTitleWrap}>
             <Text
               // The wrap is rotated 90deg, so the Text's own WIDTH runs along
@@ -470,59 +487,22 @@ function Spine({
   );
 }
 
-/** The decoration on one spine: the shading that makes a flat rectangle read
- *  as the rounded back of a book, plus one of four bindings.
+/** What makes a flat rectangle read as the rounded back of a book: it's dark
+ *  where it turns away at both edges, brighter along the crown, and its head
+ *  catches the light from above.
  *
- *  Four layouts rather than one, because a row where every spine carries the
- *  same single band at the same height reads as one book repeated. These are
- *  the four things real spines actually do — rule off the title, inset a
- *  panel, raise leather bands, or stamp a publisher's mark at the foot — and
- *  which one a book gets is fixed by its id, so it's always bound the same way.
+ *  Only the form. Stamped decoration — ruled lines, inset panels, raised
+ *  leather bands, a publisher's mark at the foot — was tried here and taken
+ *  back out: at 40-66px wide it crowded the title rather than dressing it,
+ *  and the shelf reads better with the material and the shape doing the work.
  *  All plain Views: no gradients, no SVG, nothing measured. */
-function SpineBinding({ look }: { look: SpineLook }) {
-  const foil = { backgroundColor: look.foil };
+function SpineBinding() {
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* A spine is the curved back of a book: dark where it turns away at
-          both edges, brighter along the crown, with the head catching light. */}
       <View style={[styles.spineEdge, styles.spineEdgeLeft]} />
       <View style={[styles.spineEdge, styles.spineEdgeRight]} />
       <View style={styles.spineSheen} />
       <View style={styles.spineHead} />
-
-      {look.layout === 0 && (
-        <>
-          <View style={[styles.spineRule, foil, { top: 13 }]} />
-          <View style={[styles.spineRule, foil, { bottom: 22 }]} />
-          <View style={[styles.spineRule, foil, { bottom: 16 }]} />
-        </>
-      )}
-      {look.layout === 1 && (
-        <>
-          <View
-            style={[
-              styles.spinePanel,
-              { backgroundColor: look.panel, borderColor: look.foil },
-            ]}
-          />
-          <View style={[styles.spineRule, foil, { bottom: 12 }]} />
-        </>
-      )}
-      {look.layout === 2 && (
-        <>
-          <View style={[styles.spineBand, { top: 18 }]} />
-          <View style={[styles.spineBand, { top: '46%' }]} />
-          <View style={[styles.spineBand, { bottom: 24 }]} />
-          <View style={[styles.spineFootMark, foil]} />
-        </>
-      )}
-      {look.layout === 3 && (
-        <>
-          <View style={[styles.spineRule, foil, { top: 11 }]} />
-          <View style={[styles.spineRule, foil, { top: 15 }]} />
-          <View style={[styles.spineFootBlock, foil]} />
-        </>
-      )}
     </View>
   );
 }
@@ -540,9 +520,11 @@ type Departing = {
   height: number;
 };
 
-const CRUMBLE_MS = 1150;
-const CRUMBLE_COLS = 3;
-const CRUMBLE_ROWS = 5;
+const CRUMBLE_MS = 1840;
+// 45 fragments, at roughly 10x13px each on a typical spine. Fine enough that
+// the book comes apart into debris rather than into tiles.
+const CRUMBLE_COLS = 5;
+const CRUMBLE_ROWS = 9;
 
 /** One fragment of a disintegrating spine. Every piece derives its whole
  *  motion from a single shared progress value, so a book coming apart is one
@@ -581,13 +563,18 @@ function CrumbleFragment({
     // Gravity takes it first, then the wind gets under it and carries it off.
     const fall = 46 * p * p;
     const rise = lift * p;
+    // A fragment leaves by receding, not by dissolving: it keeps its full
+    // colour the whole way and simply gets smaller until there's nothing
+    // left of it. Squared so it holds its size while the wind is still
+    // carrying it, then goes quickly at the end. Never exactly zero — a
+    // zero-scale matrix isn't invertible and Android complains about it.
+    const scale = Math.max(0.001, 1 - p * p);
     return {
-      opacity: p > 0.55 ? Math.max(0, 1 - (p - 0.55) / 0.45) : 1,
       transform: [
         { translateX: driftX * p * p },
         { translateY: fall - rise + wobble * p },
         { rotate: `${spin * p}deg` },
-        { scale: 1 - 0.5 * p },
+        { scale },
       ],
     };
   });
@@ -655,9 +642,7 @@ function CrumblingSpine({ item, onDone }: { item: Departing; onDone: (key: strin
           row={row}
           width={item.width}
           height={item.height}
-          // Alternating shades so the pieces separate visually the instant
-          // they part, instead of moving as one flat silhouette.
-          color={(col + row) % 2 === 0 ? look.base : look.panel}
+          color={shadeSpine(look, col, row)}
         />
       ))}
     </View>
@@ -1171,44 +1156,6 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: '#fff',
     opacity: 0.14,
-  },
-  spineRule: { position: 'absolute', left: 5, right: 5, height: 1.5, opacity: 0.85 },
-  spinePanel: {
-    position: 'absolute',
-    top: 24,
-    bottom: 26,
-    left: 4,
-    right: 5,
-    borderWidth: 1,
-    borderRadius: 2,
-    opacity: 0.75,
-  },
-  /** Raised leather band — a ridge, so it's shaded rather than stamped. */
-  spineBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 5,
-    backgroundColor: '#000',
-    opacity: 0.26,
-  },
-  spineFootMark: {
-    position: 'absolute',
-    bottom: 10,
-    alignSelf: 'center',
-    width: 7,
-    height: 7,
-    borderRadius: 1,
-    opacity: 0.8,
-  },
-  spineFootBlock: {
-    position: 'absolute',
-    bottom: 9,
-    left: 9,
-    right: 9,
-    height: 7,
-    borderRadius: 1,
-    opacity: 0.7,
   },
   contactShadow: {
     position: 'absolute',
