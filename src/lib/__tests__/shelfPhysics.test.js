@@ -37,7 +37,7 @@ function loadModule() {
   code = code.replace(/\bexport /g, 'exports.__mark = 1; ');
   // Re-export by name at the end instead of parsing `export` properly.
   code += `
-module.exports = { makeBody, corners, horizontalExtent, lowestY, step, isAsleep, wake };
+module.exports = { makeBody, corners, horizontalExtent, lowestY, step, isAsleep, wake, makeKinematic, restoreDynamics, driveHeld, orderByPosition };
 `;
   const m = new Module(SRC, null);
   m._compile(code, SRC);
@@ -173,6 +173,36 @@ function PENETRATION_TOLERANCE() { return 1.5; }
   const w = makeWorld(bodies);
   run(w, 8);
   check('the shelf settles into sleep', P.isAsleep(w));
+}
+
+// 9. Held books hang from the finger. Grabbed dead centre there's no lever
+//    arm and the book stays level; grabbed near a corner gravity has a
+//    moment about the grip and it swings down — and either way the grabbed
+//    point stays exactly under the finger.
+{
+  const centre = P.makeBody(200, 40, 14, 40);
+  P.makeKinematic(centre);
+  for (let i = 0; i < 120; i++) P.driveHeld(centre, 200, 90, 0, 0, 0, -G, 1 / 60);
+  check('a book grabbed at its centre stays level', Math.abs(centre.angle) < 0.01,
+    `(angle ${centre.angle.toFixed(3)})`);
+
+  const corner = P.makeBody(200, 40, 14, 40);
+  P.makeKinematic(corner);
+  // Grabbed near the top corner: offset on BOTH axes, so gravity has a
+  // moment about the grip.
+  for (let i = 0; i < 120; i++) P.driveHeld(corner, 200, 90, 12, 34, 0, -G, 1 / 60);
+  check('a book grabbed off-centre swings under gravity', Math.abs(corner.angle) > 0.25,
+    `(angle ${corner.angle.toFixed(3)})`);
+  // Whatever it did, the grabbed point must still be under the finger.
+  const c = Math.cos(corner.angle);
+  const s = Math.sin(corner.angle);
+  const gx = corner.x + (12 * c - 34 * s);
+  const gy = corner.y + (12 * s + 34 * c);
+  check('the grabbed point stays under the finger',
+    Math.hypot(gx - 200, gy - 90) < 0.01, `(off by ${Math.hypot(gx - 200, gy - 90).toFixed(3)})`);
+  // And the swing has to settle rather than pendulum forever.
+  check('a held swing damps out', Math.abs(corner.omega) < 0.6,
+    `(omega ${corner.omega.toFixed(3)})`);
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`);

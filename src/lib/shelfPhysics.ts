@@ -538,6 +538,59 @@ export function restoreDynamics(b: Body): void {
   b.restFrames = 0;
 }
 
+// How quickly a held book's swing dies down. A hand isn't a frictionless
+// bearing -- without this a book grabbed by one corner would swing forever.
+const GRIP_DAMPING = 3.2;
+
+/** Drive a held body as a PENDULUM hanging from the finger, rather than
+ *  pinning it flat.
+ *
+ *  `localX/localY` is where it was grabbed, in the body's own frame (0,0 =
+ *  centre, +y up). Grab a book dead centre and there's no lever arm, so it
+ *  stays level exactly as before. Grab it near a corner and gravity has a
+ *  moment about your finger, so it swings down and hangs the way a real book
+ *  does — and because the pivot is the finger, not the centre, tilting the
+ *  phone swings it too.
+ *
+ *  Integrated here rather than left to the solver because a held body is
+ *  kinematic (zero inverse mass, so it shoves the row without being shoved),
+ *  and a kinematic body by definition doesn't respond to forces. Mass and
+ *  inertia are recomputed from the same formula makeBody uses, since the
+ *  stored inverses are zeroed while held. */
+export function driveHeld(
+  b: Body,
+  pivotX: number,
+  pivotY: number,
+  localX: number,
+  localY: number,
+  gx: number,
+  gy: number,
+  dt: number,
+): void {
+  'worklet';
+  const mass = (b.halfW * 2 * b.halfH * 2) / 1000;
+  const inertiaCm = (mass * ((b.halfW * 2) ** 2 + (b.halfH * 2) ** 2)) / 12;
+
+  // Vector from the finger to the centre of mass, world space.
+  const c = Math.cos(b.angle);
+  const s = Math.sin(b.angle);
+  const rx = -(localX * c - localY * s);
+  const ry = -(localX * s + localY * c);
+
+  // Parallel-axis theorem: swinging about the finger, not the centre.
+  const inertiaPivot = inertiaCm + mass * (rx * rx + ry * ry);
+  const torque = rx * (mass * gy) - ry * (mass * gx);
+  b.omega += (torque / inertiaPivot) * dt;
+  b.omega *= Math.exp(-GRIP_DAMPING * dt);
+  b.angle += b.omega * dt;
+
+  // Re-place the centre so the grabbed point stays exactly under the finger.
+  const c2 = Math.cos(b.angle);
+  const s2 = Math.sin(b.angle);
+  b.x = pivotX - (localX * c2 - localY * s2);
+  b.y = pivotY - (localX * s2 + localY * c2);
+}
+
 /** Left-to-right order by position — the shelf's order is wherever the
  *  books physically ended up, not a list the physics has to be told about. */
 export function orderByPosition(bodies: Body[]): number[] {

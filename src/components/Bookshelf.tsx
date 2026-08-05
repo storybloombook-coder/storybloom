@@ -47,6 +47,7 @@ import Animated, {
 import type { BookSummary } from '../lib/db';
 import { t, useLocaleStore } from '../lib/i18n';
 import {
+  driveHeld,
   horizontalExtent,
   isAsleep,
   makeBody,
@@ -100,6 +101,9 @@ const WALL_WIDTH = 6;
 // because gravity took its centre of mass past its own edge, so there is
 // nothing left to tune here. The knobs that remain live in shelfPhysics.ts
 // (restitution, friction, solver iterations, sleep thresholds).
+// Gesture updates arrive at screen rate but carry no timestamp; one frame
+// at 60Hz is the honest assumption for integrating the held swing.
+const DRAG_DT = 1 / 60;
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 
 // Quick swipe across the shelf (distinct from the long-press-to-drag
@@ -250,6 +254,10 @@ function Spine({
   const spineWidth = spineWidthFromId(book.id);
   const grabDX = useSharedValue(0);
   const grabDY = useSharedValue(0);
+  // Where on the book it was grabbed, in the body's own frame — this offset
+  // is the lever arm gravity swings it on. See driveHeld.
+  const grabLocalX = useSharedValue(0);
+  const grabLocalY = useSharedValue(0);
 
   function persist(ranked: number[]) {
     onReordered(ranked);
@@ -258,33 +266,43 @@ function Spine({
   const pan = Gesture.Pan()
     .activateAfterLongPress(300)
     .simultaneousWithExternalGesture(shelfSwipeGesture)
-    .onStart(() => {
+    .onStart((e) => {
       const b = world.value.bodies[index];
       if (!b) return;
       draggingIndex.value = index;
       // Hand the book to the finger. It stops being pushed by anything and
       // starts pushing everything -- which is what picking one up does.
       makeKinematic(b);
-      grabDX.value = b.x;
-      grabDY.value = b.y;
+      // WHERE it was grabbed, in the book's own frame: the gesture reports
+      // view coordinates (origin top-left, y down), the simulation works
+      // from the centre with y up. This offset is the lever arm gravity
+      // swings the book on -- see driveHeld.
+      grabLocalX.value = e.x - b.halfW;
+      grabLocalY.value = b.halfH - e.y;
+      // Where the finger is in world space right now, so translation can be
+      // measured from it.
+      grabDX.value = b.x + (grabLocalX.value * Math.cos(b.angle) - grabLocalY.value * Math.sin(b.angle));
+      grabDY.value = b.y + (grabLocalX.value * Math.sin(b.angle) + grabLocalY.value * Math.cos(b.angle));
       runOnJS(hapticStart)();
     })
     .onUpdate((e) => {
       const w = world.value;
       const b = w.bodies[index];
       if (!b) return;
-      // Drive the body straight from the finger. Everything it runs into is
-      // resolved by the solver on the next step, so shoving a book through
-      // the row genuinely shoves the row.
-      b.x = Math.min(
-        Math.max(grabDX.value + e.translationX, w.leftWall + b.halfW),
-        w.rightWall - b.halfW,
+      // Where the finger is now, in world space. Screen y grows downward,
+      // the simulation's grows upward, hence the negated translation.
+      const pivotX = Math.min(
+        Math.max(grabDX.value + e.translationX, w.leftWall),
+        w.rightWall,
       );
-      // Screen y grows downward, the simulation's grows upward.
-      b.y = Math.max(b.halfH, grabDY.value - e.translationY);
+      const pivotY = Math.max(0, grabDY.value - e.translationY);
+      // The book hangs from that point rather than being pinned level, so
+      // where you grabbed it decides whether it stays flat or swings.
+      // Everything it runs into is still resolved by the solver on the next
+      // step, so shoving a book through the row genuinely shoves the row.
+      driveHeld(b, pivotX, pivotY, grabLocalX.value, grabLocalY.value, w.gx, w.gy, DRAG_DT);
       b.vx = 0;
       b.vy = 0;
-      b.omega = 0;
     })
     .onEnd((e) => {
       const w = world.value;
