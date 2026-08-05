@@ -9,7 +9,7 @@ import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
 import { makeToonMaterial } from './materials/toonMaterial';
-import { makeNoiseGrain } from './textures/proceduralTextures';
+import { makeNoiseGrain, makeStripes } from './textures/proceduralTextures';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeRng } from './prng';
 import { BlobShadow, getSharedTexture } from './BlobShadow';
@@ -506,24 +506,136 @@ function IzbaChimney({ material }) {
   );
 }
 
-/** The izba's door -- live feedback: "make a door in the wall opposite the
- *  window". Same flat-plane-on-the-surface convention as IzbaWindow, on the
- *  -z wall (mirrors the window's +0.66 face offset) since the group's own
- *  a+PI yaw makes +z the center-facing side and -z the outward-facing back.
- *  Bottom aligned with the wall box's own bottom edge (position.y 0.85,
- *  half-height 0.55 -> bottom at 0.3) rather than world Y=0, so it reads as
- *  sitting on the same base the wall itself already does. */
+// The izba's door, on the -z wall (the group's own a+PI yaw makes +z the
+// center-facing side and -z the outward-facing back). The wall box's bottom
+// edge sits at local y=0.3, so the door starts there and the steps below
+// bridge the drop to the ground rather than leaving it floating.
+const DOOR_W = 0.42;
+const DOOR_H = 0.78;
+const DOOR_BOTTOM = 0.3;
+const DOOR_FACE_Z = -0.668;   // just proud of the wall's own outer face (-0.65)
+const DOOR_THICK = 0.036;
+const DOOR_PLANKS = 4;
+const DOOR_PLANK_GAP = 0.008;
+const DOOR_PLANK_W = (DOOR_W - DOOR_PLANK_GAP * (DOOR_PLANKS - 1)) / DOOR_PLANKS;
+// Per-plank tint. Real boards out of the same tree are close but never
+// identical, and the shared grain map (see doorGeometry's material) reads
+// differently over each of these -- which is what sells them as four
+// separate boards rather than one panel with lines scored in it.
+const DOOR_PLANK_TINTS = ['#7a5230', '#6b4423', '#82593a', '#5f3d1f'];
+const DOOR_FRAME_T = 0.055;
+const DOOR_FRAME_COLOR = '#4a3218';
+const DOOR_IRON = '#2f2a26';
+const STEP_COLOR_TOP = '#6d5a44';
+const STEP_COLOR_BOTTOM = '#5d4b38';
+
+/** Door, frame, ironwork and steps as ONE merged, vertex-colored mesh.
+ *  Individually that's 4 planks + 3 frame members + 2 hinges + handle +
+ *  2 steps = 12 boxes; merged it stays a single draw call, which matters
+ *  because this landmark exists once per zone visit and the scene is
+ *  already over CLAUDE.md's 40-call budget. */
 function IzbaDoor() {
+  const geometry = useMemo(() => {
+    const parts = [];
+
+    // Four vertical boards, each its own box so they catch light
+    // separately and read as real thickness at the edges.
+    for (let i = 0; i < DOOR_PLANKS; i += 1) {
+      const x = -DOOR_W / 2 + DOOR_PLANK_W / 2 + i * (DOOR_PLANK_W + DOOR_PLANK_GAP);
+      // A touch of depth variation so the face isn't mirror-flat -- hand-
+      // hewn boards never sit perfectly flush with each other.
+      const thick = DOOR_THICK * (i % 2 === 0 ? 1 : 0.88);
+      parts.push({
+        geometry: new BoxGeometry(DOOR_PLANK_W, DOOR_H, thick),
+        color: DOOR_PLANK_TINTS[i],
+        position: [x, DOOR_BOTTOM + DOOR_H / 2, DOOR_FACE_Z],
+      });
+    }
+
+    // Frame: two jambs and a lintel, standing proud of the boards so the
+    // door reads as set INTO an opening rather than stuck on the wall.
+    const frameZ = DOOR_FACE_Z - 0.012;
+    const jambH = DOOR_H + DOOR_FRAME_T;
+    const jambX = DOOR_W / 2 + DOOR_FRAME_T / 2;
+    parts.push(
+      {
+        geometry: new BoxGeometry(DOOR_FRAME_T, jambH, DOOR_FRAME_T),
+        color: DOOR_FRAME_COLOR,
+        position: [-jambX, DOOR_BOTTOM + jambH / 2, frameZ],
+      },
+      {
+        geometry: new BoxGeometry(DOOR_FRAME_T, jambH, DOOR_FRAME_T),
+        color: DOOR_FRAME_COLOR,
+        position: [jambX, DOOR_BOTTOM + jambH / 2, frameZ],
+      },
+      {
+        geometry: new BoxGeometry(DOOR_W + DOOR_FRAME_T * 2, DOOR_FRAME_T, DOOR_FRAME_T),
+        color: DOOR_FRAME_COLOR,
+        position: [0, DOOR_BOTTOM + jambH + DOOR_FRAME_T / 2, frameZ],
+      },
+    );
+
+    // Hinges on the left, handle on the right. Both sit forward of the
+    // boards so they catch a highlight against the wood.
+    const ironZ = DOOR_FACE_Z - DOOR_THICK / 2 - 0.008;
+    [0.22, 0.62].forEach((f) => {
+      parts.push({
+        geometry: new BoxGeometry(DOOR_W * 0.34, 0.045, 0.016),
+        color: DOOR_IRON,
+        position: [-DOOR_W / 2 + DOOR_W * 0.17, DOOR_BOTTOM + DOOR_H * f, ironZ],
+      });
+    });
+    // Pintle: the little barrel the leaf actually pivots on, right at the
+    // jamb edge -- without it the straps read as flat strips of paint.
+    [0.22, 0.62].forEach((f) => {
+      parts.push({
+        geometry: new CylinderGeometry(0.016, 0.016, 0.055, 6),
+        color: DOOR_IRON,
+        position: [-DOOR_W / 2 - 0.004, DOOR_BOTTOM + DOOR_H * f, ironZ],
+      });
+    });
+    parts.push(
+      {
+        geometry: new BoxGeometry(0.022, 0.13, 0.022),
+        color: DOOR_IRON,
+        position: [DOOR_W / 2 - 0.055, DOOR_BOTTOM + DOOR_H * 0.46, ironZ - 0.012],
+      },
+      // Two studs pinning the grip back to the boards.
+      ...[0.40, 0.52].map((f) => ({
+        geometry: new BoxGeometry(0.03, 0.022, 0.014),
+        color: DOOR_IRON,
+        position: [DOOR_W / 2 - 0.055, DOOR_BOTTOM + DOOR_H * f, ironZ],
+      })),
+    );
+
+    // Two steps bridging the 0.3 drop from the threshold to the ground.
+    // The lower one is wider and deeper and runs UNDER the upper, the way
+    // stacked slabs actually sit, so the pair reads as built rather than
+    // as two floating boards.
+    parts.push(
+      {
+        geometry: new BoxGeometry(DOOR_W + 0.16, 0.11, 0.18),
+        color: STEP_COLOR_TOP,
+        position: [0, 0.165, DOOR_FACE_Z - 0.09],
+      },
+      {
+        geometry: new BoxGeometry(DOOR_W + 0.3, 0.11, 0.3),
+        color: STEP_COLOR_BOTTOM,
+        position: [0, 0.055, DOOR_FACE_Z - 0.15],
+      },
+    );
+
+    return mergeColoredParts(parts);
+  }, []);
+
+  // Vertical grain, multiplied by each part's own vertex tint. Box UVs run
+  // 0..1 per face, so one map gives every board its own run of grain
+  // instead of a pattern stretched across the whole door.
+  const grain = useMemo(() => makeStripes('#8a6742', '#5c3d20', 64, 11, 0.045, false), []);
+
   return (
-    <mesh position={[0, 0.675, -0.66]}>
-      <planeGeometry args={[0.4, 0.75]} />
-      {/* Live feedback: door wasn't visible at all -- a plane's default
-          FrontSide material only renders from whichever direction its
-          normal happens to face (backface culling), and this one was never
-          rotated to face outward. DoubleSide sidesteps having to get that
-          direction right (same class of mistake as the eyelid/eyebrow
-          placement bugs earlier), rendering it from either side. */}
-      <meshStandardMaterial color="#4a2f1c" roughness={0.75} side={DoubleSide} />
+    <mesh geometry={geometry}>
+      <meshStandardMaterial map={grain} vertexColors roughness={0.85} />
     </mesh>
   );
 }

@@ -45,7 +45,6 @@ import {
   setSlotMuted,
   setAllSlotsMuted,
   isAnySlotUnmuted,
-  previewSlot,
   previewSlotLoop,
   stopPreviewSlotLoop,
   resetSlotToDefault,
@@ -66,6 +65,10 @@ const WAVEFORM_BARS = 56;
 // full 20s take -- comfortably more than WAVEFORM_BARS, so every bar has
 // several samples to take its peak from even on a short take.
 const METER_POLL_MS = 60;
+// ~12fps for playback position. Fast enough that a 2s clip's bar moves
+// smoothly, slow enough that it costs nothing -- and it only ever
+// re-renders the bar itself, never the menu.
+const PROGRESS_POLL_MS = 80;
 
 /** Buckets raw 0..1 amplitude samples down to WAVEFORM_BARS peaks, then
  *  normalizes to the loudest bar so a quiet take still shows shape. Falls
@@ -257,6 +260,65 @@ function RecordingTimer({ startedAt, durationMs, unlimited, locale, style }) {
  *  becomes this slot's sound. The window's width is the slot's own target
  *  duration, so it can't be resized -- only positioned, which is what makes
  *  every slot come out exactly the length the scene expects. */
+/** A scrub bar: filled progress, a draggable knob, and a live position that
+ *  tracks playback. Isolated as its own component so the position tick
+ *  re-renders this alone rather than the whole menu -- the same reason
+ *  RecordingTimer and TrimBars are split out. */
+function PlayheadBar({
+  player, startMs, durationMs, playing, onSeek,
+}) {
+  const [posMs, setPosMs] = useState(0);
+  const [width, setWidth] = useState(0);
+  const [scrubMs, setScrubMs] = useState(null);
+
+  useEffect(() => {
+    if (!playing) return undefined;
+    const id = setInterval(() => {
+      try {
+        setPosMs(Math.max(0, player.currentTime * 1000 - startMs));
+      } catch { /* released */ }
+    }, PROGRESS_POLL_MS);
+    return () => clearInterval(id);
+  }, [player, startMs, playing]);
+
+  const liveRef = useRef(null);
+  useEffect(() => { liveRef.current = { width, durationMs, onSeek }; });
+
+  const [pan] = useState(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderMove: (e) => {
+      const l = liveRef.current;
+      if (!l?.width) return;
+      setScrubMs(Math.max(0, Math.min(1, e.nativeEvent.locationX / l.width)) * l.durationMs);
+    },
+    onPanResponderRelease: (e) => {
+      const l = liveRef.current;
+      if (!l?.width) return;
+      const ms = Math.max(0, Math.min(1, e.nativeEvent.locationX / l.width)) * l.durationMs;
+      setScrubMs(null);
+      setPosMs(ms);
+      l.onSeek(ms);
+    },
+  }));
+
+  const shown = scrubMs ?? posMs;
+  const frac = Math.max(0, Math.min(1, shown / Math.max(1, durationMs)));
+
+  return (
+    <View
+      style={styles.scrubTrack}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      {...pan.panHandlers}
+    >
+      <View pointerEvents="none" style={[styles.scrubFill, { width: `${frac * 100}%` }]} />
+      {width > 0 && (
+        <View pointerEvents="none" style={[styles.scrubKnob, { left: Math.max(0, frac * width - 8) }]} />
+      )}
+    </View>
+  );
+}
+
 /** The bars alone, memoized on `waveform`. Live feedback: "bar movement
  *  lags." Dragging updates startMs on every move event, and the bars used to
  *  recolor themselves from it -- so all WAVEFORM_BARS re-rendered with fresh
@@ -278,8 +340,25 @@ const TrimBars = memo(function TrimBars({ waveform, height }) {
   );
 });
 
+/** Playhead line over the trim strip while a preview runs. Its own component
+ *  for the same reason as everything else here: the tick must not re-render
+ *  the bars or the parent. */
+function TrimPlayhead({ player, takeMs, playing }) {
+  const [atMs, setAtMs] = useState(0);
+  useEffect(() => {
+    if (!playing) return undefined;
+    const id = setInterval(() => {
+      try { setAtMs(player.currentTime * 1000); } catch { /* released */ }
+    }, PROGRESS_POLL_MS);
+    return () => clearInterval(id);
+  }, [player, playing]);
+  if (!playing) return null;
+  const frac = Math.max(0, Math.min(1, atMs / Math.max(1, takeMs)));
+  return <View pointerEvents="none" style={[styles.trimPlayhead, { left: `${frac * 100}%` }]} />;
+}
+
 function TrimStrip({
-  waveform, startMs, durMs, takeMs, locale, onChangeStart,
+  waveform, startMs, durMs, takeMs, locale, player, playing, onChangeStart,
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   // Live feedback (round 2): "sliding the piece of sound still feels laggy."
@@ -348,6 +427,7 @@ function TrimStrip({
             style={[styles.trimMask, { left: selLeft + selWidth, right: 0 }]}
           />
           <View pointerEvents="none" style={[styles.trimWindow, { left: selLeft, width: selWidth }]} />
+          <TrimPlayhead player={player} takeMs={takeMs} playing={playing} />
         </>
       )}
     </View>
@@ -390,6 +470,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [takeMs, setTakeMs] = useState(SEGMENT_MS);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const trimStopRef = useRef(null);
+  // Pop-up player: { slotId, startMs, durMs } while open, null when closed.
+  const [playerSlot, setPlayerSlot] = useState(null);
+  const [playerPlaying, setPlayerPlaying] = useState(false);
+  const playerStopRef = useRef(null);
   const scanPeaksRef = useRef([]);
   const [countdown, setCountdown] = useState(COUNTDOWN_START);
   // Wall-clock instant capture actually began -- drives RecordingTimer.
@@ -640,6 +724,47 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     try { editPlayer.remove(); } catch { /* already released */ }
   }, [editPlayer]);
 
+  /** Open the pop-up player on a slot: load it, seek to its trim window (so
+   *  what you hear is exactly what the scene plays), and start. */
+  const openPlayer = (slotId) => {
+    const uri = getSlotUri(slotId);
+    if (!uri) return;
+    const trim = getSlotTrim(slotId);
+    const slot = getSlotDefinition(slotId);
+    const startMs = trim?.startMs ?? 0;
+    const durMs = trim?.durMs ?? slot?.durationMs ?? 0;
+    setPlayerSlot({ slotId, startMs, durMs });
+    try {
+      editPlayer.loop = false;
+      editPlayer.volume = 1;
+      editPlayer.setPlaybackRate(1);
+      editPlayer.replace(uri);
+    } catch { /* released */ }
+    startPlayerAt(startMs, durMs);
+  };
+
+  const stopPlayer = () => {
+    if (playerStopRef.current) { clearTimeout(playerStopRef.current); playerStopRef.current = null; }
+    try { editPlayer.pause(); } catch { /* released */ }
+    setPlayerPlaying(false);
+  };
+
+  const startPlayerAt = (startMs, durMs) => {
+    if (playerStopRef.current) { clearTimeout(playerStopRef.current); playerStopRef.current = null; }
+    setPlayerPlaying(true);
+    editPlayer.seekTo(startMs / 1000).then(() => {
+      editPlayer.play();
+      // Stop at the end of the slot's own window rather than the end of the
+      // file -- a trimmed take still holds the whole 20s recording.
+      if (durMs > 0) playerStopRef.current = setTimeout(() => setPlayerPlaying(false), durMs);
+    }).catch(() => setPlayerPlaying(false));
+  };
+
+  const closePlayer = () => {
+    stopPlayer();
+    setPlayerSlot(null);
+  };
+
   const handlePlay = (slotId) => {
     const slot = getSlotDefinition(slotId);
     if (slot?.loop) {
@@ -653,7 +778,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       }
       return;
     }
-    previewSlot(slotId);
+    // One-shots open the pop-up player, which shows position on a scrub bar
+    // and lets you seek. Loops keep the plain toggle above: they're seamless
+    // ambience, so a position readout on one would be meaningless.
+    openPlayer(slotId);
   };
 
   const handleToggleMute = (slotId) => {
@@ -1012,6 +1140,8 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                     durMs={Math.min(flowSlot.durationMs, takeMs)}
                     takeMs={takeMs}
                     locale={locale}
+                    player={editPlayer}
+                    playing={trimPlaying}
                     onChangeStart={setTrimStartMs}
                   />
                   <View style={styles.trimActions}>
@@ -1070,6 +1200,59 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                   </Pressable>
                 </>
               )}
+            </View>
+          </View>
+        )}
+
+        {playerSlot && (
+          <View style={styles.recordOverlay} pointerEvents="box-none">
+            {/* Tap outside to close, same convention as the record popup. */}
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              accessibilityRole="button"
+              accessibilityLabel={t('sound.close', locale)}
+              onPress={closePlayer}
+            />
+            <View style={styles.playerCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.recordSlotLabel}>
+                {t(DIALOGUE_FULL_TEXT_KEY[playerSlot.slotId] ?? getSlotLabelKey(playerSlot.slotId), locale)}
+              </Text>
+              <PlayheadBar
+                // Remount per clip so the bar starts at the head, rather
+                // than an effect resetting it after the fact.
+                key={`${playerSlot.slotId}:${playerSlot.startMs}`}
+                player={editPlayer}
+                startMs={playerSlot.startMs}
+                durationMs={playerSlot.durMs}
+                playing={playerPlaying}
+                onSeek={(ms) => startPlayerAt(playerSlot.startMs + ms, Math.max(1, playerSlot.durMs - ms))}
+              />
+              <Text style={styles.trimReadout}>
+                {formatSeconds(playerSlot.durMs)}
+                {t('sound.unit.seconds', locale)}
+              </Text>
+              <View style={styles.trimActions}>
+                <TactileButton
+                  accessibilityRole="button"
+                  accessibilityLabel={t(playerPlaying ? 'sound.action.stop' : 'sound.action.play', locale)}
+                  style={styles.trimBtnOuter}
+                  innerStyle={styles.trimBtnInner}
+                  onPress={() => (playerPlaying
+                    ? stopPlayer()
+                    : startPlayerAt(playerSlot.startMs, playerSlot.durMs))}
+                >
+                  <Text style={styles.trimBtnIcon}>{playerPlaying ? '⏹' : '▶'}</Text>
+                </TactileButton>
+                <TactileButton
+                  accessibilityRole="button"
+                  accessibilityLabel={t('sound.close', locale)}
+                  style={styles.trimBtnOuter}
+                  innerStyle={styles.trimBtnInner}
+                  onPress={closePlayer}
+                >
+                  <Text style={styles.trimBtnIcon}>✕</Text>
+                </TactileButton>
+              </View>
             </View>
           </View>
         )}
@@ -1261,6 +1444,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopBtnIcon: { fontSize: 26, color: '#fff' },
+  // Pop-up player -----------------------------------------------------------
+  playerCard: {
+    width: '100%',
+    marginTop: 40,
+    backgroundColor: '#ffd6e8',
+    borderRadius: 20,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    gap: 10,
+  },
+  scrubTrack: {
+    width: '100%',
+    height: 26,
+    justifyContent: 'center',
+    // The visible rail is thinner than this; the extra height is touch
+    // target, so the knob stays grabbable without a hairline-thin hitbox.
+    marginTop: 2,
+  },
+  scrubFill: {
+    position: 'absolute',
+    left: 0,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#7a3350',
+  },
+  scrubKnob: {
+    position: 'absolute',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#7a3350',
+    borderWidth: 2,
+    borderColor: '#ffd6e8',
+  },
   // Trim editor -------------------------------------------------------------
   trimStrip: {
     width: '100%',
@@ -1299,6 +1517,13 @@ const styles = StyleSheet.create({
     borderColor: '#7a3350',
     borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  trimPlayhead: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    backgroundColor: '#2e2a22',
   },
   trimReadout: {
     fontSize: 12,
