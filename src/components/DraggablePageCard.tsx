@@ -26,6 +26,7 @@ import Animated, {
   Easing,
   LinearTransition,
   runOnJS,
+  runOnUI,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -288,10 +289,24 @@ export default function DraggablePageCard({
     onMeasured(index, e.nativeEvent.layout.height);
     if (hasPendingCorrection.value) {
       hasPendingCorrection.value = false;
-      translateY.value = translateY.value - pendingSnapCorrection.value;
-      translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING }, (finished) => {
-        if (finished) isSettlingOut.value = false;
-      });
+      // The rebase MUST happen on the UI thread. onLayout is a JS-thread
+      // callback, and translateY is mid-flight in a UI-thread withTiming at
+      // this exact moment -- reading `.value` from JS there gives whatever
+      // was last committed across the bridge, not the live value. Rebasing
+      // against a stale reading leaves the card offset by however far the
+      // animation advanced in between, which is precisely the "drops, then
+      // the movement starts from the page's original position" symptom:
+      // the further the drag, the bigger the settleOffset, the bigger the
+      // in-flight delta, and the more it looks like a jump back to the
+      // start. Read and rewrite it in one worklet and it can't drift.
+      const correction = pendingSnapCorrection.value;
+      runOnUI(() => {
+        'worklet';
+        translateY.value -= correction;
+        translateY.value = withTiming(0, { duration: SETTLE_DURATION, easing: SETTLE_EASING }, (finished) => {
+          if (finished) isSettlingOut.value = false;
+        });
+      })();
       setSuppressLayoutAnim(false);
     }
   }

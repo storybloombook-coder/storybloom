@@ -381,6 +381,17 @@ export default function BookDetailScreen() {
   }
 
   async function handleReorder(from: number, to: number) {
+    // itemHeights is indexed by POSITION, so it has to move with the pages.
+    // Without this it kept describing the old order until every card
+    // happened to re-fire onLayout -- and a drag started inside that window
+    // measured its slot boundaries and its settle distance against stale
+    // heights, which is what made a second drag land wrong or jump.
+    const heights = itemHeights.value.slice();
+    if (heights.length > 0) {
+      const [movedHeight] = heights.splice(from, 1);
+      heights.splice(to, 0, movedHeight);
+      itemHeights.value = heights;
+    }
     setPages((prev) => {
       const next = prev.slice();
       const [moved] = next.splice(from, 1);
