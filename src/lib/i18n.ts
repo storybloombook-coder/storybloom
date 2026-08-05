@@ -65,6 +65,9 @@ const STRINGS = {
       createStory: 'Create a Story',
       myLibrary: 'My Library',
       switchLanguage: 'Switch to Russian',
+      infoLabel: 'About & contact',
+      infoTitle: 'Get in touch',
+      infoBody: 'Questions, requests or suggestions? We would love to hear from you:',
     },
     library: {
       today: 'Today',
@@ -336,6 +339,9 @@ const STRINGS = {
       createStory: 'Своя история',
       myLibrary: 'Библиотека',
       switchLanguage: 'Switch to English',
+      infoLabel: 'О приложении и контакты',
+      infoTitle: 'Свяжитесь с нами',
+      infoBody: 'Вопросы, пожелания или предложения? Будем рады услышать вас:',
     },
     library: {
       today: 'Сегодня',

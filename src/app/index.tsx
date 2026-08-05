@@ -1,6 +1,9 @@
 import { Link, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
-import { StyleSheet, Text, View, useColorScheme } from 'react-native';
+import { useCallback, useState } from 'react';
+import {
+  Modal, Pressable, StyleSheet, Text, View,
+  type StyleProp, type ViewStyle, useColorScheme,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { BlurView } from 'expo-blur';
@@ -9,12 +12,32 @@ import TactileButton from '../components/TactileButton';
 import { t, useLocaleStore } from '../lib/i18n';
 import { useDeviceTilt } from '../lib/useDeviceTilt';
 
+// TEMPORARY: the dev-client APK currently installed for on-device testing
+// predates expo-blur being added, so it has no native ExpoBlurView linked --
+// rendering one crashes to the dev-client's own blank error screen. Flip
+// this back to true (and delete GlassPane, using BlurView directly again)
+// once a rebuilt dev-client/preview is available.
+const USE_BLUR = false;
+
+/** Swaps between the real frosted-glass BlurView and a flat semi-transparent
+ *  tint with the exact same footprint, so every call site below doesn't
+ *  need its own if/else -- see USE_BLUR above. */
+function GlassPane({ tint, style }: { tint: 'light' | 'dark'; style: StyleProp<ViewStyle> }) {
+  if (USE_BLUR) return <BlurView intensity={40} tint={tint} style={style} />;
+  return <View style={[style, { backgroundColor: tint === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)' }]} />;
+}
+
 // Looping background: a short (10s, already 2x slow-motion), cropped,
 // blurred, and darkened capture of the 3D scene's own opening establishing
 // shot (the crossroads stone + izba, static camera -- see
 // assets/videos/menu-background.mp4's own history for how it was made).
 // Muted and non-interactive -- purely decorative behind the menu.
 const BACKGROUND_VIDEO = require('../../assets/videos/menu-background.mp4');
+
+// Kept out of the string table on purpose: it's an address, identical in
+// every language, and duplicating it per locale is how one copy quietly
+// goes stale.
+const SUPPORT_EMAIL = 'storybloombook@gmail.com';
 
 export default function HomeScreen() {
   const isDark = useColorScheme() === 'dark';
@@ -25,6 +48,7 @@ export default function HomeScreen() {
   // One accelerometer subscription shared by every glass button's own
   // GlassGlare overlay below -- see lib/useDeviceTilt's own comment for why.
   const { tiltX, tiltY } = useDeviceTilt();
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const backgroundPlayer = useVideoPlayer(BACKGROUND_VIDEO, (player) => {
     player.loop = true;
@@ -60,21 +84,21 @@ export default function HomeScreen() {
         <View style={styles.menu}>
           <Link href="/add-book" asChild>
             <TactileButton style={styles.button}>
-              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.addBook', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/create-story" asChild>
             <TactileButton style={styles.button}>
-              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.createStory', locale)}</Text>
             </TactileButton>
           </Link>
           <Link href="/library" asChild>
             <TactileButton style={styles.button}>
-              <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
+              <GlassPane tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
               <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={12} intensity={0.4} />
               <Text style={StyleSheet.flatten([styles.buttonLabel, { color: textColor }])}>{t('home.myLibrary', locale)}</Text>
             </TactileButton>
@@ -85,7 +109,7 @@ export default function HomeScreen() {
       <View style={styles.cornerButtonWrap}>
         <Link href="/kolobok-preview" asChild>
           <TactileButton style={styles.cornerButton}>
-            <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+            <GlassPane tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
             <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
             <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>3D</Text>
           </TactileButton>
@@ -103,13 +127,52 @@ export default function HomeScreen() {
           onPress={() => setLocale(locale === 'ru' ? 'en' : 'ru')}
           style={styles.cornerButton}
         >
-          <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+          <GlassPane tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
           <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
           <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>
             {locale === 'ru' ? 'EN' : 'RU'}
           </Text>
         </TactileButton>
       </View>
+
+      {/* Info: mirrors the 3D scene's burger exactly -- same size, same
+          bottom offset, opposite corner -- so the two screens' controls
+          land in the same places. */}
+      <View style={styles.infoButtonWrap}>
+        <TactileButton
+          accessibilityRole="button"
+          accessibilityLabel={t('home.infoLabel', locale)}
+          onPress={() => setInfoOpen(true)}
+          style={styles.cornerButton}
+        >
+          <GlassPane tint={isDark ? 'dark' : 'light'} style={styles.cornerButtonBlur} />
+          <GlassGlare tiltX={tiltX} tiltY={tiltY} radius={20} intensity={0.4} />
+          <Text style={StyleSheet.flatten([styles.cornerButtonLabel, { color: textColor }])}>i</Text>
+        </TactileButton>
+      </View>
+
+      <Modal
+        visible={infoOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInfoOpen(false)}
+      >
+        <Pressable style={styles.infoBackdrop} onPress={() => setInfoOpen(false)}>
+          {/* Claims the responder so taps on the card itself don't dismiss. */}
+          <View style={styles.infoCard} onStartShouldSetResponder={() => true}>
+            <Text style={styles.infoTitle}>{t('home.infoTitle', locale)}</Text>
+            <Text style={styles.infoBody}>{t('home.infoBody', locale)}</Text>
+            <Text selectable style={styles.infoEmail}>{SUPPORT_EMAIL}</Text>
+            <Pressable
+              accessibilityRole="button"
+              style={styles.infoDismiss}
+              onPress={() => setInfoOpen(false)}
+            >
+              <Text style={styles.infoDismissText}>{t('common.close', locale)}</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -196,4 +259,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  // Opposite corner to the 3D/language pair, at the same bottom offset the
+  // 3D scene's burger uses, so the two screens' controls line up.
+  infoButtonWrap: {
+    position: 'absolute',
+    right: 14,
+    bottom: 144,
+    width: 40,
+    height: 40,
+  },
+  infoBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20,16,10,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  infoCard: {
+    backgroundColor: '#fffbf4',
+    borderRadius: 18,
+    paddingVertical: 22,
+    paddingHorizontal: 22,
+    gap: 10,
+    alignItems: 'center',
+  },
+  infoTitle: { fontSize: 17, fontWeight: '700', color: '#2e2a22', textAlign: 'center' },
+  infoBody: { fontSize: 14, lineHeight: 20, color: '#4a463c', textAlign: 'center' },
+  // selectable on the <Text> itself so the address can be copied -- there's
+  // no mail client guaranteed on a test device, and a dead mailto: link
+  // would be worse than plain copyable text.
+  infoEmail: { fontSize: 15, fontWeight: '700', color: '#8a5a2b', textAlign: 'center' },
+  infoDismiss: { marginTop: 6, paddingHorizontal: 16, paddingVertical: 8 },
+  infoDismissText: { fontSize: 14, fontWeight: '600', color: '#8a5a2b' },
 });

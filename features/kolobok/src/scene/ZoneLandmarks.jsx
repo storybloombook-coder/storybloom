@@ -71,6 +71,46 @@ const LOG_COLOR = '#c29d72';
 // frame (not relative to a separate roof-group offset), matching how
 // door/window/chimney already place themselves directly.
 const WALL_TOP_Y = LOG_ROWS * LOG_R * 2; // exact top of the log stack (1.10)
+
+// The izba's door, on the -z wall (the group's own a+PI yaw makes +z the
+// center-facing side and -z the outward-facing back). The wall box's bottom
+// edge sits at local y=0.3, so the door starts there and the steps below
+// bridge the drop to the ground rather than leaving it floating.
+//
+// Declared up here, above IzbaLogWalls, because the logs need the opening's
+// footprint to notch themselves around it (live feedback: "cut out the logs
+// along the perimeter of the door frame").
+const DOOR_W = 0.42;
+const DOOR_H = 0.78;
+const DOOR_BOTTOM = 0.3;
+const DOOR_FACE_Z = -0.668;   // just proud of the wall's own outer face (-0.65)
+const DOOR_THICK = 0.036;
+const DOOR_PLANKS = 4;
+const DOOR_PLANK_GAP = 0.008;
+const DOOR_PLANK_W = (DOOR_W - DOOR_PLANK_GAP * (DOOR_PLANKS - 1)) / DOOR_PLANKS;
+// Per-plank tint. Real boards out of the same tree are close but never
+// identical, and the shared grain map (see the material below) reads
+// differently over each of these -- which is what sells them as four
+// separate boards rather than one panel with lines scored in it.
+// Live feedback: "make the colour a few tones brighter" -- lifted from the
+// original 5f-82 range so the door reads against the dark log wall instead
+// of sinking into it.
+const DOOR_PLANK_TINTS = ['#9a6f45', '#8b5f34', '#a4794f', '#7f5730'];
+const DOOR_FRAME_T = 0.055;
+const DOOR_FRAME_COLOR = '#6a4a26';
+// Ledge-and-brace boards on the inner face -- same stock as the door's own
+// planks, one tone down so the two layers read apart in the doorway.
+const DOOR_BRACE_H = 0.085;
+const DOOR_BRACE_T = 0.026;
+const DOOR_BRACE_TINT = '#8b6039';
+const DOOR_IRON = '#2f2a26';
+const STEP_COLOR_TOP = '#8a7358';
+const STEP_COLOR_BOTTOM = '#7a664e';
+// Opening the logs are notched around: the door plus its frame, so the
+// jambs sit in bare space rather than clipping through log ends.
+const DOOR_OPENING_HALF_W = DOOR_W / 2 + DOOR_FRAME_T;
+const DOOR_OPENING_MIN_Y = DOOR_BOTTOM;
+const DOOR_OPENING_MAX_Y = DOOR_BOTTOM + DOOR_H + DOOR_FRAME_T;
 const ROOF_EAVE_Y = 1.15; // small soffit gap above the wall top
 const ROOF_RIDGE_Y = 1.75; // peak height
 const ROOF_HALF_SPAN_X = WALL_W / 2 + 0.12; // eave overhang past the side walls
@@ -135,14 +175,37 @@ function IzbaLogWalls({ material }) {
     // need to be able to see inside the house" -- only the window's OWN
     // wall (z=WALL_D/2-LOG_R, the same one IzbaWindow sits on) gets a
     // hasWindow flag; the door's wall is unaffected.
+    // `opening` notches the courses that cross it, leaving a real hole in
+    // the wall rather than logs running behind the window/door. The door's
+    // own wall got one per live feedback ("cut out the logs along the
+    // perimeter of the door frame") -- its jambs used to clip straight
+    // through whole logs.
     const walls = [
-      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: WALL_D / 2 - LOG_R, hasWindow: true },
-      { runAlong: 'x', len: FRONT_BACK_LOG_LEN, x: 0, z: -(WALL_D / 2 - LOG_R) },
+      {
+        runAlong: 'x',
+        len: FRONT_BACK_LOG_LEN,
+        x: 0,
+        z: WALL_D / 2 - LOG_R,
+        opening: {
+          halfW: WINDOW_W / 2,
+          minY: WINDOW_Y - WINDOW_H / 2,
+          maxY: WINDOW_Y + WINDOW_H / 2,
+        },
+      },
+      {
+        runAlong: 'x',
+        len: FRONT_BACK_LOG_LEN,
+        x: 0,
+        z: -(WALL_D / 2 - LOG_R),
+        opening: {
+          halfW: DOOR_OPENING_HALF_W,
+          minY: DOOR_OPENING_MIN_Y,
+          maxY: DOOR_OPENING_MAX_Y,
+        },
+      },
       { runAlong: 'z', len: SIDE_LOG_LEN, x: WALL_W / 2 - LOG_R, z: 0 },
       { runAlong: 'z', len: SIDE_LOG_LEN, x: -(WALL_W / 2 - LOG_R), z: 0 },
     ];
-    const windowMinY = WINDOW_Y - WINDOW_H / 2;
-    const windowMaxY = WINDOW_Y + WINDOW_H / 2;
     const pushLog = (x, y, z, runAlong, len) => {
       const lenVariance = 1 + (rng() * 2 - 1) * 0.04; // +/-4%, within the asked 3-5%
       d.position.set(x, y, z);
@@ -163,12 +226,13 @@ function IzbaLogWalls({ material }) {
         const y = LOG_R + i * LOG_R * 2;
         const rowMinY = y - LOG_R;
         const rowMaxY = y + LOG_R;
-        if (w.hasWindow && rowMaxY > windowMinY && rowMinY < windowMaxY) {
-          // This row crosses the window -- split into a left and right
-          // segment, skipping the window's own width in the middle
+        const op = w.opening;
+        if (op && rowMaxY > op.minY && rowMinY < op.maxY) {
+          // This row crosses the opening -- split into a left and right
+          // segment, skipping the opening's own width in the middle
           // (WINDOW_OPENING_MIN/MAX_Y quantize this same gap vertically,
           // to whole rows, for the frame/shutters below).
-          const halfGap = WINDOW_W / 2;
+          const halfGap = op.halfW;
           const segLen = w.len / 2 - halfGap;
           [-1, 1].forEach((segSide) => {
             pushLog(segSide * (halfGap + segLen / 2), y, w.z, w.runAlong, segLen);
@@ -506,28 +570,6 @@ function IzbaChimney({ material }) {
   );
 }
 
-// The izba's door, on the -z wall (the group's own a+PI yaw makes +z the
-// center-facing side and -z the outward-facing back). The wall box's bottom
-// edge sits at local y=0.3, so the door starts there and the steps below
-// bridge the drop to the ground rather than leaving it floating.
-const DOOR_W = 0.42;
-const DOOR_H = 0.78;
-const DOOR_BOTTOM = 0.3;
-const DOOR_FACE_Z = -0.668;   // just proud of the wall's own outer face (-0.65)
-const DOOR_THICK = 0.036;
-const DOOR_PLANKS = 4;
-const DOOR_PLANK_GAP = 0.008;
-const DOOR_PLANK_W = (DOOR_W - DOOR_PLANK_GAP * (DOOR_PLANKS - 1)) / DOOR_PLANKS;
-// Per-plank tint. Real boards out of the same tree are close but never
-// identical, and the shared grain map (see doorGeometry's material) reads
-// differently over each of these -- which is what sells them as four
-// separate boards rather than one panel with lines scored in it.
-const DOOR_PLANK_TINTS = ['#7a5230', '#6b4423', '#82593a', '#5f3d1f'];
-const DOOR_FRAME_T = 0.055;
-const DOOR_FRAME_COLOR = '#4a3218';
-const DOOR_IRON = '#2f2a26';
-const STEP_COLOR_TOP = '#6d5a44';
-const STEP_COLOR_BOTTOM = '#5d4b38';
 
 /** Door, frame, ironwork and steps as ONE merged, vertex-colored mesh.
  *  Individually that's 4 planks + 3 frame members + 2 hinges + handle +
@@ -551,6 +593,37 @@ function IzbaDoor() {
         position: [x, DOOR_BOTTOM + DOOR_H / 2, DOOR_FACE_Z],
       });
     }
+
+    // Ledge-and-brace on the INSIDE face: two rails across the full width
+    // (top and bottom edges) and a diagonal from the upper right down to
+    // the lower left. This is what actually holds a plank door together --
+    // without it four loose boards would have nothing tying them.
+    // Behind the planks (+z of their back face) so it's only visible from
+    // inside the doorway, and built from the same boards as the face.
+    const braceZ = DOOR_FACE_Z + DOOR_THICK / 2 + DOOR_BRACE_T / 2;
+    const railY = [
+      DOOR_BOTTOM + DOOR_H - DOOR_BRACE_H / 2, // top edge
+      DOOR_BOTTOM + DOOR_BRACE_H / 2,          // bottom edge
+    ];
+    railY.forEach((y) => {
+      parts.push({
+        geometry: new BoxGeometry(DOOR_W, DOOR_BRACE_H, DOOR_BRACE_T),
+        color: DOOR_BRACE_TINT,
+        position: [0, y, braceZ],
+      });
+    });
+    // The diagonal spans corner to corner of the gap BETWEEN the rails, so
+    // it butts into them rather than crossing over. Its length is that
+    // diagonal's true hypotenuse and its tilt the matching angle -- upper
+    // right to lower left is the same line as lower left to upper right, so
+    // the rotation is positive.
+    const innerH = DOOR_H - DOOR_BRACE_H * 2;
+    parts.push({
+      geometry: new BoxGeometry(Math.hypot(DOOR_W, innerH), DOOR_BRACE_H, DOOR_BRACE_T),
+      color: DOOR_BRACE_TINT,
+      position: [0, DOOR_BOTTOM + DOOR_H / 2, braceZ],
+      rotation: [0, 0, Math.atan2(innerH, DOOR_W)],
+    });
 
     // Frame: two jambs and a lintel, standing proud of the boards so the
     // door reads as set INTO an opening rather than stuck on the wall.
@@ -631,7 +704,7 @@ function IzbaDoor() {
   // Vertical grain, multiplied by each part's own vertex tint. Box UVs run
   // 0..1 per face, so one map gives every board its own run of grain
   // instead of a pattern stretched across the whole door.
-  const grain = useMemo(() => makeStripes('#8a6742', '#5c3d20', 64, 11, 0.045, false), []);
+  const grain = useMemo(() => makeStripes('#b08a5e', '#8a6440', 64, 11, 0.045, false), []);
 
   return (
     <mesh geometry={geometry}>
