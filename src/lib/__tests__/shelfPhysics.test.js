@@ -186,6 +186,14 @@ function PENETRATION_TOLERANCE() { return 1.5; }
   check('a book grabbed at its centre stays level', Math.abs(centre.angle) < 0.01,
     `(angle ${centre.angle.toFixed(3)})`);
 
+  // Anywhere in the middle of the book is a "hold it steady" zone, not just
+  // the exact centre pixel — a finger covers most of a 50px spine.
+  const nearCentre = P.makeBody(200, 40, 14, 40);
+  P.makeKinematic(nearCentre);
+  for (let i = 0; i < 120; i++) P.driveHeld(nearCentre, 200, 90, 5, 14, 0, -G, 1 / 60);
+  check('a book grabbed anywhere in its middle stays level',
+    Math.abs(nearCentre.angle) < 0.01, `(angle ${nearCentre.angle.toFixed(3)})`);
+
   const corner = P.makeBody(200, 40, 14, 40);
   P.makeKinematic(corner);
   // Grabbed near the top corner: offset on BOTH axes, so gravity has a

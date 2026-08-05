@@ -17,9 +17,9 @@
 // с/c, у/y, х/x), so the combined model was introducing extra confusion on
 // top of the stylized/italic fonts already common in children's books.
 // Loading just the one language the book actually is eliminates that source
-// of ambiguity, and only needs to download one ~15MB file instead of two.
+// of ambiguity, and only needs to download one file instead of two.
 //
-// Traineddata (~5-15 MB per language) is NOT committed (see CHANGES-TODO.md
+// Traineddata (~2-4 MB per language) is NOT committed (see CHANGES-TODO.md
 // guardrails). It's downloaded once on first use into app storage, then cached
 // offline forever. Override the source with EXPO_PUBLIC_TESSDATA_URL, or
 // side-load the file into <documents>/tesseract/tessdata/ for a fully offline
@@ -32,10 +32,21 @@ import type { OcrProvider, OcrRecognizeInput, OcrResult, VisionLang } from './ty
 
 /** VisionLang -> Tesseract language code -> traineddata filename. */
 const TESS_LANG_CODE: Record<VisionLang, string> = { en: 'eng', ru: 'rus' };
-// _best (not _fast): OCR only runs once per page during prep, never during
-// reading, so the slower/larger/more-accurate LSTM models are worth it —
-// especially for the stylized/italic fonts common in children's books.
-const DEFAULT_BASE_URL = 'https://github.com/tesseract-ocr/tessdata_best/raw/main';
+// raw.githubusercontent.com, NOT github.com/.../raw/... — the latter answers
+// 302 and redirects here. Live feedback: text recognition sat "continuously
+// loading" and the tessdata directory was created but stayed empty, which is
+// exactly what a download that doesn't follow the redirect looks like.
+//
+// _fast (not _best): _best is 15MB for English alone and more for Russian,
+// which is a long silent wait on a phone before anything can happen at all.
+// _fast is the integer-quantised model built for mobile — 4MB, and quicker
+// to run as well as to fetch. The accuracy argument for _best assumed the
+// download was free; it isn't, and a first run that never finishes is worth
+// less than one that's slightly less accurate.
+const DEFAULT_BASE_URL = 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main';
+// Smallest real traineddata is a couple of MB; anything under this is a
+// redirect stub or an error page, not a model.
+const MIN_TRAINEDDATA_BYTES = 500_000;
 
 /** Root passed to Tesseract's init() — it must be the PARENT of `tessdata/`. */
 function ocrRoot(): Directory {
@@ -57,10 +68,27 @@ async function ensureTessdata(lang: VisionLang): Promise<string> {
     try {
       await ExpoFile.downloadFileAsync(`${baseUrl}/${name}`, dest);
     } catch (err: any) {
+      // A failed download can still leave a partial (or HTML-error-page)
+      // file behind. Left in place it would satisfy the `exists` check on
+      // every future run, so OCR would fail forever with no way back short
+      // of clearing app data -- delete it and let the next attempt retry.
+      try { if (dest.exists) dest.delete(); } catch { /* nothing to undo */ }
       throw new Error(
         `Failed to download OCR language data "${name}" from ${baseUrl}. ` +
           `Connect to the internet for the one-time download, or side-load the ` +
           `file into ${tessdata.uri}. Cause: ${err?.message ?? err}`
+      );
+    }
+    // Sanity-check the result. A redirect stub or an error page is a few
+    // hundred bytes; a real traineddata file is megabytes. Catching that
+    // here turns "OCR silently never works" into a message that says why.
+    if (dest.exists && dest.size < MIN_TRAINEDDATA_BYTES) {
+      const got = dest.size;
+      try { dest.delete(); } catch { /* nothing to undo */ }
+      throw new Error(
+        `OCR language data "${name}" downloaded as only ${got} bytes, which is ` +
+          `too small to be a real model — the source probably returned a redirect ` +
+          `or an error page rather than the file. Source: ${baseUrl}`
       );
     }
   }

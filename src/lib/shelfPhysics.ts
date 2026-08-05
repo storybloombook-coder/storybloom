@@ -541,6 +541,22 @@ export function restoreDynamics(b: Body): void {
 // How quickly a held book's swing dies down. A hand isn't a frictionless
 // bearing -- without this a book grabbed by one corner would swing forever.
 const GRIP_DAMPING = 3.2;
+// Fraction of each half-extent, measured from the centre, that produces no
+// torque at all — the "hold it here and it stays put" zone.
+const GRIP_DEADZONE = 0.45;
+
+/** Maps a grab offset to the lever arm it should actually swing on: zero
+ *  inside the deadzone, then ramping to the full offset at the edge. Squared
+ *  so it comes in gently rather than switching on at the boundary. */
+function deadzone(offset: number, halfExtent: number): number {
+  'worklet';
+  if (halfExtent <= 0) return 0;
+  const n = offset / halfExtent;              // -1..1 across the book
+  const mag = Math.abs(n);
+  if (mag <= GRIP_DEADZONE) return 0;
+  const t = (mag - GRIP_DEADZONE) / (1 - GRIP_DEADZONE);
+  return Math.sign(n) * t * t * halfExtent;
+}
 
 /** Drive a held body as a PENDULUM hanging from the finger, rather than
  *  pinning it flat.
@@ -571,11 +587,23 @@ export function driveHeld(
   const mass = (b.halfW * 2 * b.halfH * 2) / 1000;
   const inertiaCm = (mass * ((b.halfW * 2) ** 2 + (b.halfH * 2) ** 2)) / 12;
 
+  // The lever arm is DEADZONED, while the attachment point is not: grab
+  // anywhere in the middle of a book and it hangs balanced and level, and
+  // the swing only comes in as you move out toward the edges and corners,
+  // growing from nothing at the deadzone edge to full at the corner.
+  // Physically a real book pivots about wherever you pinch it, but a spine
+  // is only ~50px wide on screen and a finger covers most of it, so a raw
+  // lever arm made a centre grab a coin-flip between level and swinging.
+  // Deadzoning the TORQUE while still attaching at the true point means a
+  // centred grab is reliably steady without the book jumping in your hand.
+  const leverX = deadzone(localX, b.halfW);
+  const leverY = deadzone(localY, b.halfH);
+
   // Vector from the finger to the centre of mass, world space.
   const c = Math.cos(b.angle);
   const s = Math.sin(b.angle);
-  const rx = -(localX * c - localY * s);
-  const ry = -(localX * s + localY * c);
+  const rx = -(leverX * c - leverY * s);
+  const ry = -(leverX * s + leverY * c);
 
   // Parallel-axis theorem: swinging about the finger, not the centre.
   const inertiaPivot = inertiaCm + mass * (rx * rx + ry * ry);
