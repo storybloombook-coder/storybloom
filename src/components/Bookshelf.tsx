@@ -1,59 +1,33 @@
 // Bookshelf.tsx — a physical shelf of favorited books, spines facing out.
 //
-// Real 1D physics (not a discrete reorder-and-snap): each spine has a
-// position + velocity, damped like a real object settling. There is NO
-// restoring force pulling books toward a tidy packed position or toward each
-// other — the only things that ever move a spine are a direct drag,
-// tilt-gravity, a shake, or a collision with a neighbor; once those stop
-// acting on it, it just stays wherever that leaves it (falling horizontally
-// and stacking unevenly is the intended, physical look, not a bug). Dragging
-// a spine moves it kinematically under your finger; every other spine it
-// overlaps gets shoved — an actual velocity kick, not a teleport — and
-// settles back with its own momentum. Dragging one spine through the row
-// continuously re-ranks the order, so neighbors slide out of the way to open
-// a gap, matching a real "push books along a shelf" gesture. The MOMENT that
-// live-reordered target rank changes, the two spines now adjacent to the gap
-// get a one-time outward kick + a small wiggle + a haptic tick — a preview
-// of where it'll land, not just a reaction once you actually drop it in
-// (see GAP_NUDGE_KICK/GAP_WIGGLE_KICK).
+// Every book is a real rigid body — an oriented rectangle with position,
+// angle and momentum — simulated by src/lib/shelfPhysics.ts. This file owns
+// the shelf's INPUTS (drag, tilt, swipe, shake) and its rendering; it owns no
+// physics of its own.
 //
-// Interaction: LONG-PRESS a spine to pick it up and drag; a quick tap opens
-// the book (same activateAfterLongPress + nested Pressable pattern already
-// used for page cards — see DraggablePageCard.tsx / book/[id].tsx). Dragging
-// it vertically lifts it "into the air" — past LIFT_THRESHOLD it stops
-// colliding with neighbors so it can hover freely over a gap, then lowering
-// it back (while still holding it) squeezes it in with a real collision bump
-// at wherever it lands. Letting go while it's still lifted doesn't snap it
-// back to the shelf line — real gravity (LIFT_GRAVITY) takes over and it
-// actually FALLS the rest of the way down, landing with its fall velocity
-// zeroed at the shelf surface, same physics-in-the-frame-loop approach as
-// everything else here (see the lift/fall note above LIFT_GRAVITY). Grabbing
-// it off-center from its own midpoint (like picking up a real book near one
-// end) makes it rotate/tilt as it's shoved, via its own small rotational
-// spring-damper — see ROTATION_* below. Once it's actually LIFTED (not just
-// being shoved along the shelf), a grab point that's off-center on BOTH axes
-// (a corner) makes it hang at a natural diagonal angle instead — like a real
-// book suspended from an off-center point, rotating until its center of
-// mass ends up below the grip, further skewed by the phone's own sensed
-// tilt (see the "Diagonal corner-hang" note near ROTATION_TORQUE below).
+// That split matters, because the behaviour people expect from a shelf falls
+// out of it rather than being scripted. A book leans because contacts hold it
+// at an angle. It topples because gravity took its centre of mass past its
+// own edge — no threshold, no timer, no "fallen" flag. It stays down
+// afterwards because gravity doesn't run backwards. A book on its side
+// occupies its full length, so the row has to make room for it, and books
+// can come to rest on top of each other. The previous model — a 1D particle
+// with a rotation spring aimed at a tilt-derived target — could express none
+// of those, which is why each was reported as a bug in turn.
 //
-// Tilt the PHONE (via expo-sensors' Accelerometer, not a true gyroscope, but
-// it's the axis that matters for left-right tilt) and the shelf's own
-// "gravity" tilts with it — past a deadzone AND past static friction (real
-// shelves have friction; see FRICTION below), books slide toward the low
-// side and pile against the wall through the same collision system as a
-// drag. Every spine also visibly LEANS in proportion to the current tilt,
-// even before anything actually slides, so you can see gravity's direction
-// on the shelf itself — and a spine that's pinned against a wall (nowhere
-// left to slide) with the tilt still getting steeper topples fully onto its
-// side instead of just leaning (see TILT_LEAN_DEG_PER_UNIT/FALL_* below;
-// same rotational spring-damper as the grab-point tilt, just aimed at a
-// tilt-driven target instead of level). Shake the phone hard enough (a
-// sudden jolt in total acceleration) and the whole shelf mixes itself up —
-// randomized order, each spine kicked outward so they tumble into place
-// rather than silently snapping. A fast vertical phone movement also gives
-// the whole shelf a physically-real vertical hop, driven directly by the
-// sensed jerk — see BOUNCE_* below.
+// Shelf ORDER is likewise an outcome, not a list: it's read back off where
+// the books physically ended up (orderByPosition) whenever a drag settles.
+//
+// Interaction: LONG-PRESS a spine to pick it up, a quick tap opens the book
+// (same activateAfterLongPress + nested Pressable pattern as page cards, see
+// DraggablePageCard.tsx). While held, a book becomes kinematic — nothing can
+// push it, it pushes everything — so shoving one through the row genuinely
+// shoves the row. Release hands it back to the simulation carrying the
+// throw's velocity. Tilt the phone and gravity tips with it. Brush a finger
+// across the shelf and each book it passes gets one impulse. Shake hard and
+// the shelf re-shelves itself. A fast vertical movement hops the whole shelf
+// (BOUNCE_*) — that one is a view offset, deliberately not part of the
+// simulation, since it moves the shelf rather than the books on it.
 // NEEDS A DEV-CLIENT BUILD WITH expo-sensors LINKED — a static `import` of it
 // crashes the WHOLE APP at launch on a build that doesn't have it (the
 // package touches a native module eagerly at import time), so it's required
@@ -118,91 +92,14 @@ const SPINE_VISIBLE_HEIGHT = SHELF_HEIGHT - 8;
 // altogether.
 const WALL_WIDTH = 6;
 
-// Grab-point-dependent tilt: picking a spine up off-center from its own
-// midpoint (like a real book grabbed near one end) makes it rotate as it's
-// shoved around, pivoting harder the farther from center you grabbed it —
-// a lightweight rotational spring-damper, same shape as the horizontal
-// physics, with the drag supplying "torque" instead of a driving force.
-const ROTATION_MAX = 22; // degrees, clamp WHILE BEING DRAGGED
-// Cut hard again from 70/14 — even that still read as "way too crazy and
-// fast" on real hardware. Real books settle calmly, not snappily; lower
-// stiffness + more damping means a slower, heavier-feeling approach to
-// whatever the current target is (gentle lean, drag-torque, or a topple).
-const ROTATION_STIFFNESS = 32;
-const ROTATION_DAMPING = 20;
-// Scales (how far off-center you grabbed) * (how fast it's being shoved)
-// into a torque. Sign is a first pass, not yet confirmed on hardware — if a
-// book tips the wrong way for where it was grabbed, flip this to negative.
-const ROTATION_TORQUE = 0.16;
-// How much of the "ideal pendulum" corner-hang angle to actually use — see
-// the note at its use site. Confirmed on hardware to need taming from 1.0;
-// 0.3 was still "way too much" on a second pass, cut hard again.
-const CORNER_HANG_STRENGTH = 0.12;
-// Collision-impact rotation: on top of the continuous shove torque above,
-// the dragged spine gets an extra instantaneous rotational jolt exactly
-// when it hits another book — scaled by the grab point (same lever-arm
-// idea as ROTATION_TORQUE) and how deep the impact is. First pass, not yet
-// confirmed on hardware.
-const COLLISION_ROTATION_KICK = 1.0;
-
-// Ambient tilt lean: even without touching a book, every spine visibly
-// tilts a little as the phone tilts — the same rotation spring-damper above,
-// just aimed at a target that tracks tiltX instead of always being level, so
-// you can SEE gravity's direction on the shelf even before anything falls or
-// slides. Three deliberately separate stages as tilt increases (tiltX is
-// roughly sin(tilt angle) in g's). The two thresholds below are derived from
-// real physics, not just feel:
-//   - TOPPLE angle: a rigid block standing on edge tips over once its center
-//     of mass passes beyond its base — tan(θ) = thickness / height. Typical
-//     books: paperback (~2cm / 20cm) ≈ 5.7°, hardcover novel (~3.5cm / 24cm)
-//     ≈ 8.3°, thick hardcover (~5cm / 26cm) ≈ 10.9°. Averaging these gives
-//     ~8.5° for an "average" book.
-//   - SLIDE angle: an object on an incline slides once tan(θ) exceeds the
-//     static friction coefficient. Paper/cloth book covers on a wood or
-//     laminate shelf are typically μ ≈ 0.35, giving arctan(0.35) ≈ 19.3°.
-//   1. Past TILT_DEADZONE (~7°)          — just the proportional lean, above.
-//   2. Past FALL_TILT_THRESHOLD (~8.5°)  — topples fully onto its side, UNLESS
-//      it's pinned against a wall — a rigid wall holds a book upright rather
-//      than being what tips it over (see the "pinned" check at its use site).
-//   3. Past SLIDE_TILT_THRESHOLD (~19°)  — gravity ALSO starts actually
-//      sliding books across the shelf (see the `gravity` computation below),
-//      not just leaning/toppling them in place.
-const TILT_LEAN_DEG_PER_UNIT = 11; // degrees of lean per unit of tiltX — calmer baseline
-// Toppling is back on, but DELIBERATE now rather than incidental. It was
-// switched off because a book going over at 8.5° meant the shelf collapsed
-// while you were just holding the phone. It now needs the tilt held past a
-// much steeper angle for TOPPLE_HOLD_MS before it triggers, so it reads as
-// something you chose to do. Sliding stays off -- that was never asked for.
-const FALL_ENABLED = true;
-const SLIDE_ENABLED = false;
-// ~15deg, and it has to be held. Well past any angle you'd reach reading in
-// bed, and the hold is what separates "I tipped the shelf over" from "I
-// shifted in my chair".
-const TOPPLE_TILT_THRESHOLD = 0.259; // sin(15deg)
-const TOPPLE_HOLD_MS = 500;
-
-// Resting lean: a book with open space beside it slumps toward it, the way
-// a row does when you pull one out. Because the last book on a shelf always
-// has the run-out to the end wall on its right, this also produces the
-// classic leaning end book for free -- one mechanism, both behaviours.
-const GAP_LEAN_MAX_DEG = 7;
-const GAP_LEAN_IGNORE_PX = 10;  // hairline gaps read as "packed", not open
-const GAP_LEAN_FULL_PX = 46;    // gap at which the lean maxes out
-// Hard cap on the ambient lean angle while FALL_ENABLED is off — "just a
-// little tilt," not a progression toward toppling.
-const MAX_LEAN_DEG = 7;
-// (The old incidental-topple threshold, sin(8.5deg), is gone -- toppling is
-// gated on TOPPLE_TILT_THRESHOLD + a hold now, not on a bare angle.)
-const FALL_ROTATION_DEG = 78; // not quite 90 — reads as "fallen", not glued flat
-const SLIDE_TILT_THRESHOLD = 0.33; // sin(19.3°) — arctan(0.35) friction coefficient
-
-// Physics tuning — soft enough to feel weighty, damped enough not to jitter.
-// No home-slot spring — books never get pulled toward a tidy packed
-// position or toward each other; they only move via drag, tilt-gravity, a
-// shake, or a collision, and just stay wherever that leaves them (falling
-// horizontally and stacking unevenly is the intended, physical look).
-const DAMPING = 22; // velocity drag — heavier/calmer settling than the original 14
-const BUMP = 1.6; // extra velocity kick imparted on collision — gentler than the original 3
+// Everything that used to live here — the rotation spring-damper, the
+// corner-hang strength, the topple/slide angle thresholds, the lean cap, the
+// collision bump — described a model where a book was a 1D particle with a
+// rotation SPRING bolted on. None of it survived the move to real rigid
+// bodies: a book now leans because contacts hold it at an angle and topples
+// because gravity took its centre of mass past its own edge, so there is
+// nothing left to tune here. The knobs that remain live in shelfPhysics.ts
+// (restitution, friction, solver iterations, sleep thresholds).
 const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 
 // Quick swipe across the shelf (distinct from the long-press-to-drag
@@ -215,43 +112,22 @@ const MAX_DT = 0.032; // clamp huge frame gaps (e.g. after a background pause)
 const SWIPE_IMPULSE = 160; // outward velocity kick
 const SWIPE_WIGGLE = 100; // rotational velocity kick, degrees/sec
 
-// Make-room reaction: while dragging a spine (especially while lifted,
-// hovering to insert it into a gap), the moment its live-reordered target
-// rank changes, the two spines that are now its immediate neighbors get a
-// one-time outward velocity kick (part apart to open the gap) plus a small
-// rotational wiggle — a preview that "this is where it'll land" instead of
-// only reacting once you actually drop it in. A one-time KICK, not a
-// restoring force, so it doesn't reintroduce the "drawn toward a slot"
-// behavior that was deliberately removed elsewhere.
-const GAP_NUDGE_KICK = 50; // outward velocity kick, same order as collision BUMP
-const GAP_WIGGLE_KICK = 35; // small rotational velocity kick, degrees/sec
+// (The old "make room" kick is gone: neighbours are now pushed out of the
+// way by the dragged book actually colliding with them, so a preview of
+// where it will land isn't something that has to be faked.)
 
 // Lift-out-of-the-shelf tuning. Past LIFT_THRESHOLD the dragged spine is
 // "in the air" — it stops colliding with neighbors (so it can hover freely
 // over a gap) while still live-reordering, then squeezes back in with a real
 // collision bump the moment it's lowered back below the threshold.
 const LIFT_THRESHOLD = 20;
-// How high a spine can be lifted. Widened from -80 to -120 for more headroom
-// off the shelf line. NOTE: the shelf sits inside a scrollable list
-// (library.tsx's FlatList), and a ScrollView clips its own content at its own
-// top edge — with the list scrolled to the top (its normal resting
-// position), lifting far enough eventually hits that clip boundary regardless
-// of how large LIFT_MIN is, since the boundary is a fixed amount of reserved
-// space above the shelf, not proportional to LIFT_MIN. A reserved-headroom
-// spacer that expanded/retracted while lifting was tried to push that
-// boundary further out, but was reverted — it looked worse (a distracting
-// zone visibly growing/shrinking) than the clipping itself.
-const LIFT_MIN = -120;
-const LIFT_MAX = 24; // a little downward give too
-// Releasing a lifted spine used to withSpring(0) it back down — but that
-// spring was gated behind `isMe` in the style, which flips false the instant
-// the drag ends, so the animation was invisible and it just snapped to the
-// shelf line instantly ("stuck to the shelf" instead of falling). Lift is
-// now a per-spine value physically integrated in the frame loop like
-// everything else: real gravity pulls a released spine down, it lands with
-// its velocity zeroed at the shelf line, and it's visible the whole time
-// because nothing gates it on which spine is currently being dragged.
-const LIFT_GRAVITY = 1500; // 1.5x faster fall — 1000 felt too slow/floaty on release
+// (No LIFT_MIN/MAX/GRAVITY any more: how high a book can be held is just how
+// far your finger goes, and a released one falls under the simulation's own
+// gravity like anything else. Note the shelf sits inside library.tsx's
+// FlatList, which clips its content at its own top edge — lift far enough
+// and a book still disappears behind that boundary. A reserved-headroom
+// spacer was tried once and reverted: a zone visibly growing and shrinking
+// looked worse than the clipping.)
 
 // Tilt the phone and the shelf's own "gravity" tips with it — books slide
 // toward the low side and pile against the wall, same collision system as a
@@ -271,14 +147,9 @@ const TILT_UPDATE_MS = 80;
 // the physics loop (and its battery cost) running permanently. Above it, a
 // deliberate tilt is unambiguous.
 const TILT_DEADZONE = 0.12;
-// Real shelves have friction: a book doesn't creep the instant gravity is
-// non-zero, it needs enough tilt to overcome static friction first, and even
-// while sliding, friction (not just velocity damping) constantly opposes the
-// motion. Modeled as a Coulomb-friction force that's subtracted from gravity's
-// pull — below this magnitude gravity can't move anything at all. Kept at the
-// same μ≈0.35 (paper/cloth-on-wood) ratio to GRAVITY_STRENGTH as before, just
-// rescaled down with it: 0.35 * 900 ≈ 315.
-const FRICTION = 315;
+// (Friction moved into shelfPhysics.ts, where it belongs: it's now a real
+// Coulomb cone on each contact rather than a force subtracted from gravity,
+// which is also what lets a leaning book stay leaning.)
 
 // Shake-to-mix: a sudden jolt in total acceleration (not just tilt) shuffles
 // the whole shelf, same physics as everything else — a randomized order plus
@@ -337,56 +208,6 @@ function spineHeightFromId(id: string): number {
   return Math.round(SPINE_VISIBLE_HEIGHT * (0.84 + ((h % 1000) / 1000) * 0.16));
 }
 
-/** Resting lean for one book, in degrees (+ = leaning right). Measures the
- *  clear space either side and slumps toward the more open one, scaled by
- *  how open it is. A book packed between neighbours gets 0, so on a full
- *  shelf this is invisible; pull one out and its neighbours sag into the
- *  hole, and the book at the end of the row leans into the run-out toward
- *  the wall the way the last book on a real shelf always does. */
-function gapLeanFor(
-  i: number,
-  xs: number[],
-  len: number,
-  spineWidth: number,
-  maxX: number,
-): number {
-  'worklet';
-  const myLeft = xs[i];
-  const myRight = myLeft + spineWidth;
-  // Nearest neighbour edge on each side, falling back to the end walls.
-  let leftEdge = WALL_WIDTH;
-  let rightEdge = maxX + spineWidth;
-  for (let j = 0; j < len; j++) {
-    if (j === i) continue;
-    const jLeft = xs[j];
-    const jRight = jLeft + spineWidth;
-    if (jRight <= myLeft && jRight > leftEdge) leftEdge = jRight;
-    if (jLeft >= myRight && jLeft < rightEdge) rightEdge = jLeft;
-  }
-  const openness = (gap: number) => {
-    const g = gap - GAP_LEAN_IGNORE_PX;
-    if (g <= 0) return 0;
-    return Math.min(1, g / (GAP_LEAN_FULL_PX - GAP_LEAN_IGNORE_PX));
-  };
-  // Net: a book with space on BOTH sides (a lone book) stays upright,
-  // because the two pulls cancel -- which is right, nothing to lean on.
-  return (openness(rightEdge - myRight) - openness(myLeft - leftEdge)) * GAP_LEAN_MAX_DEG;
-}
-
-/** Move `bookIndex` to the rank implied by its current x, shifting the rest —
- *  called continuously while dragging so neighbors "make room" live. */
-function reorderForDrag(order: number[], bookIndex: number, x: number, slot: number): number[] {
-  'worklet';
-  const currentRank = order.indexOf(bookIndex);
-  // x is offset by WALL_WIDTH (the inset sliding range) — subtract it back
-  // out so rank 0 lines up with x === WALL_WIDTH, not x === 0.
-  const targetRank = Math.min(order.length - 1, Math.max(0, Math.round((x - WALL_WIDTH) / slot)));
-  if (targetRank === currentRank) return order;
-  const next = order.slice();
-  next.splice(currentRank, 1);
-  next.splice(targetRank, 0, bookIndex);
-  return next;
-}
 
 function hapticStart() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -396,9 +217,6 @@ function hapticDrop() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
 }
 
-function hapticGap() {
-  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-}
 
 function hapticSwipe() {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
