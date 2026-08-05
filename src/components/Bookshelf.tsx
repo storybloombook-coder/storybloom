@@ -38,13 +38,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Pressable, StyleSheet, Text, useColorScheme, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import Animated, {
-  Easing,
   runOnJS,
   runOnUI,
   useAnimatedStyle,
   useFrameCallback,
   useSharedValue,
-  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import type { BookSummary } from '../lib/db';
@@ -255,19 +253,22 @@ function spineLook(id: string): SpineLook {
   };
 }
 
-/** The colour of one fragment of a spine. The spine's 3D read comes from
- *  overlays that only exist while it's whole (see SpineBinding); once it's in
- *  pieces each piece has to carry its own share of that shading, or the book
- *  visibly goes flat in the moment before it comes apart. So the edges stay
- *  dark, the crown stays bright, the head stays lit — baked into the
- *  fragment's own colour, plus a little grain so the debris isn't uniform. */
-function shadeSpine(look: SpineLook, col: number, row: number): string {
+/** The colour of one piece of a spine, given where on it the piece sat —
+ *  `u` across (0 at the left edge), `v` down (0 at the head).
+ *
+ *  The spine's 3D read comes from overlays that only exist while it's whole
+ *  (see SpineBinding); once it's in pieces each piece has to carry its own
+ *  share of that shading, or the book visibly goes flat in the moment before
+ *  it comes apart. So the edges stay dark, the crown stays bright, the head
+ *  stays lit — baked into the piece's colour, plus a little grain so the
+ *  debris isn't uniform. */
+function shadeSpine(look: SpineLook, u: number, v: number, seed: number): string {
   let l = look.l;
-  if (col === 0) l -= 7;
-  if (col === CRUMBLE_COLS - 1) l -= 9;
-  if (col === 1) l += 4;
-  if (row === 0) l += 5;
-  l += (hashId(`grain:${col}:${row}`) % 5) - 2;
+  if (u < 0.1) l -= 7;
+  else if (u > 0.88) l -= 9;
+  else if (u < 0.28) l += 4;
+  if (v < 0.05) l += 5;
+  l += (seed % 5) - 2;
   return `hsl(${look.h}, ${look.s}%, ${Math.min(94, Math.max(4, l))}%)`;
 }
 
@@ -562,16 +563,13 @@ type Departing = {
   height: number;
 };
 
-// 45 fragments, at roughly 10x13px each on a typical spine. Fine enough that
-// the book comes apart into debris rather than into tiles.
-const CRUMBLE_COLS = 5;
-const CRUMBLE_ROWS = 9;
-// The debris has its own gravity rather than borrowing the shelf's, because
-// it isn't in the simulation — 45 boxes colliding with each other would cost
-// more per frame than the whole shelf does, to decide where some rubble lands.
-const DEBRIS_G = 1500; // px/s²
-const DEBRIS_RESTITUTION = 0.3;
-const DEBRIS_SCATTER = 34; // px/s sideways, while airborne
+/** Roughly how many pieces a book breaks into. Fewer if the spine is too
+ *  narrow to cut that many out of without going under MIN_SHARD. */
+const SHARD_COUNT = 45;
+/** No sliver narrower than this: below a few pixels a shard is invisible, and
+ *  a very thin box is the one shape this solver handles badly. */
+const MIN_SHARD = 3;
+const DEBRIS_G = 1500; // px/s², the debris's own gravity
 /** How long the pieces lie on the shelf before the shelf lets go of them. */
 const DEBRIS_HOLD_S = 2.2;
 /** They don't all go at once — each piece leaves at its own moment inside
@@ -580,66 +578,119 @@ const DEBRIS_RAIN_SPREAD_S = 2.2;
 /** Long enough for the last piece to be well past the bottom of any phone. */
 const DEBRIS_RAIN_FALL_S = 1.3;
 const CRUMBLE_S = DEBRIS_HOLD_S + DEBRIS_RAIN_SPREAD_S + DEBRIS_RAIN_FALL_S;
+/** Enough stand-ins for the books still on the shelf that the debris can pile
+ *  against them. More than fit on one shelf at SPINE_WIDTH. */
+const MAX_PROXIES = 14;
 
-/** One piece of a broken book. Everything about its flight is fixed the
- *  moment the book breaks, so the whole thing is a closed-form function of
- *  elapsed time — no integration, no state. */
-type Debris = {
-  key: string;
-  /** Laid out in shelf-area coordinates, already where the intact spine was. */
-  left: number;
-  top: number;
-  w: number;
-  h: number;
-  color: string;
-  /** The book's own angle, in degrees, so the pieces start as the book. */
-  rot0: number;
-  /** Distance to the shelf below it, and the ballistics of getting there. */
-  drop: number;
-  tLand: number;
-  tRest: number;
-  vBounce: number;
-  vx: number;
-  spinFall: number;
-  /** When the shelf lets go of this piece, and how it turns on the way down. */
-  tRain: number;
-  spinRain: number;
+type Shard = { x: number; y: number; w: number; h: number };
+
+/** Break a rectangle into irregular pieces, the way glass goes: recursive
+ *  cuts at uneven places, so the pieces come out different sizes and no two
+ *  books shatter alike. Rectangles rather than true angular shards because
+ *  there's no SVG or Skia here to draw a polygon with — and because a
+ *  rectangle is exactly what the solver already knows how to collide, so
+ *  every piece can be a real body. They still tile the spine perfectly, which
+ *  is what lets the book look whole right up until it doesn't. */
+function shatter(width: number, height: number, count: number, seed: string): Shard[] {
+  const pieces: Shard[] = [{ x: 0, y: 0, w: width, h: height }];
+  let cut = 0;
+  while (pieces.length < count) {
+    // Which piece gets cut next is only WEAKLY biased toward the big ones.
+    // The fourth root is the whole trick: weight by area and the debris comes
+    // out suspiciously even (barely 2x between the biggest piece and the
+    // smallest); ignore size entirely and one plate survives whole while the
+    // rest turns to dust (100x). At this exponent it lands where broken
+    // things actually land — a few big pieces, a lot of chips, roughly 8x.
+    let pick = -1;
+    let best = 0;
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      if (Math.min(p.w, p.h) < MIN_SHARD * 2) continue;
+      const jitter = 0.15 + (hashId(`${seed}:pick:${cut}:${i}`) % 1000) / 1000;
+      const score = Math.pow(p.w * p.h, 0.25) * jitter;
+      if (score > best) {
+        best = score;
+        pick = i;
+      }
+    }
+    if (pick < 0) break; // nothing left big enough to cut
+    const p = pieces[pick];
+    // Cut across the longer side, well off-centre. Always taking the long
+    // side is what keeps pieces from degenerating into needles.
+    const f = 0.2 + ((hashId(`${seed}:cut:${cut}`) % 1000) / 1000) * 0.6;
+    cut += 1;
+    if (p.w >= p.h) {
+      const at = Math.max(MIN_SHARD, Math.min(p.w - MIN_SHARD, p.w * f));
+      pieces[pick] = { x: p.x, y: p.y, w: at, h: p.h };
+      pieces.push({ x: p.x + at, y: p.y, w: p.w - at, h: p.h });
+    } else {
+      const at = Math.max(MIN_SHARD, Math.min(p.h - MIN_SHARD, p.h * f));
+      pieces[pick] = { x: p.x, y: p.y, w: p.w, h: at };
+      pieces.push({ x: p.x, y: p.y + at, w: p.w, h: p.h - at });
+    }
+  }
+  return pieces;
+}
+
+/** The debris of one broken book: real bodies in a world of their own. */
+type DebrisState = {
+  /** Same walls and floor as the shelf, its own gravity, and a body list
+   *  rebuilt every frame from whichever shards are still on the shelf. */
+  world: World;
+  /** Every shard, index-stable for the whole animation. */
+  shards: Body[];
+  /** When the shelf lets go of each shard, and how it turns on the way down. */
+  freeAt: number[];
+  spinRain: number[];
+  /** Kinematic stand-ins for the books still on the shelf, so debris piles
+   *  against them. Kinematic and not dynamic on purpose: paper chips settling
+   *  against a book shouldn't be able to push it over. */
+  proxies: Body[];
+  t: number;
 };
 
-/** One piece, in flight. All 45 read the same clock, so a book breaking up is
- *  one animation driving 45 styles rather than 45 animations to keep in step.
- *
- *  Two acts. It falls to the shelf, bounces once and lies there — that's why
- *  the bottom of the book barely moves while the top comes down, which is
- *  what a thing collapsing looks like. Then, a couple of seconds later, the
- *  shelf lets go of it and it drops off the bottom of the screen. */
-function DebrisPiece({ clock, d }: { clock: SharedValue<number>; d: Debris }) {
+/** One shard, drawn from its body. Reads the same shared state as the other
+ *  44 and re-runs off the same per-frame tick. */
+function ShardPiece({
+  state,
+  tick,
+  index,
+  color,
+}: {
+  state: SharedValue<DebrisState>;
+  tick: SharedValue<number>;
+  index: number;
+  color: string;
+}) {
   const style = useAnimatedStyle(() => {
-    const t = clock.value;
-    let down: number;
-    if (t < d.tLand) down = 0.5 * DEBRIS_G * t * t;
-    else if (t < d.tRest) {
-      const u = t - d.tLand;
-      down = d.drop - (d.vBounce * u - 0.5 * DEBRIS_G * u * u);
-    } else down = d.drop;
-    // Scatter and tumble only while it's off the ground; once it's down it's
-    // down, the same way a fallen book stays fallen.
-    const air = t < d.tRest ? t : d.tRest;
-    let rot = d.rot0 + d.spinFall * air;
-    if (t > d.tRain) {
-      const u = t - d.tRain;
-      down += 0.5 * DEBRIS_G * u * u;
-      rot += d.spinRain * u;
-    }
+    // Reading the frame counter is what subscribes this style to the debris
+    // loop: the state object is mutated in place and never reassigned, so it
+    // can't wake anything by itself. The test is always true — it's there so
+    // the read is a use rather than a bare expression.
+    const b = tick.value >= 0 ? state.value.shards[index] : undefined;
+    // Laid out exactly as a spine is (see Spine's style), so at the moment
+    // the book breaks the shards are the book, to the pixel.
     return {
-      transform: [{ translateX: d.vx * air }, { translateY: down }, { rotate: `${rot}deg` }],
+      opacity: b ? 1 : 0,
+      transform: [
+        { translateX: b ? b.x - b.halfW : 0 },
+        { translateY: b ? -(b.y - b.halfH) : 0 },
+        { rotate: b ? `${(-b.angle * 180) / Math.PI}deg` : '0deg' },
+      ],
     };
   });
 
+  const b = state.value.shards[index];
   return (
     <Animated.View
       style={[
-        { position: 'absolute', left: d.left, top: d.top, width: d.w, height: d.h, backgroundColor: d.color },
+        {
+          position: 'absolute',
+          bottom: 8,
+          width: b ? b.halfW * 2 : 0,
+          height: b ? b.halfH * 2 : 0,
+          backgroundColor: color,
+        },
         style,
       ]}
     />
@@ -648,85 +699,164 @@ function DebrisPiece({ clock, d }: { clock: SharedValue<number>; d: Debris }) {
 
 /** An un-favorited book leaving the shelf. Taking a star off is the one shelf
  *  action with no physical counterpart — the book doesn't go anywhere, it
- *  simply stops being a shelf book — so rather than blink out, it collapses
- *  where it stood, lies there in pieces, and then the shelf lets the pieces
- *  go one at a time until there's nothing left.
+ *  simply stops being a shelf book — so rather than blink out, it shatters
+ *  where it stood, the pieces fall and settle on the shelf, and then the
+ *  shelf lets them go one at a time until there's nothing left.
  *
- *  The pieces are flat chips of the spine's own material, not a jigsaw of the
- *  rendered spine: they tumble and are gone within seconds, so copying the
- *  title into each of 45 of them would cost 45 laid-out text nodes to show
- *  something nobody can read. Each one does carry its share of the spine's
- *  shading (see shadeSpine), which is what stops the book going visibly flat
- *  in the instant before it comes apart. */
-function CrumblingSpine({ item, onDone }: { item: Departing; onDone: (key: string) => void }) {
-  const clock = useSharedValue(0);
+ *  The pieces are real rigid bodies until they're released: they land on the
+ *  shelf, tumble, pile up against each other and against the books still
+ *  standing. They run in their OWN world rather than being added to the
+ *  shelf's, so debris can never destabilise the shelf itself, and so the
+ *  whole lot can be thrown away at the end by dropping one object.
+ *
+ *  They're flat chips of the spine's own material rather than a jigsaw of the
+ *  rendered spine — copying the title into 45 pieces would cost 45 laid-out
+ *  text nodes to show something nobody can read. Each does carry its share of
+ *  the spine's shading (see shadeSpine), which is what stops the book going
+ *  visibly flat in the instant before it comes apart. */
+function CrumblingSpine({
+  item,
+  shelf,
+  rightWall,
+  onDone,
+}: {
+  item: Departing;
+  /** The shelf's own simulation, read (never written) to keep the stand-in
+   *  books in step with the real ones. */
+  shelf: SharedValue<World>;
+  rightWall: number;
+  onDone: (key: string) => void;
+}) {
+  const tick = useSharedValue(0);
 
-  const pieces = useMemo(() => {
+  const { initial, colors } = useMemo(() => {
     const look = spineLook(item.id);
-    const w = item.width / CRUMBLE_COLS;
-    const h = item.height / CRUMBLE_ROWS;
-    // The book's pose, in the shelf area's own coordinates. A spine hangs off
-    // `bottom: 8`, so its centre sits that far above the shelf line plus the
-    // body's own height off the shelf.
-    const phi = -item.angle; // screen rotation: clockwise-positive, y down
+    const shards = shatter(item.width, item.height, SHARD_COUNT, item.id);
+    // The book's pose. Its own frame is y-down (the shard rectangles were cut
+    // in screen terms); the simulation's is y-up, hence the negated angle.
+    const phi = -item.angle;
     const cos = Math.cos(phi);
     const sin = Math.sin(phi);
-    const bookCentreFromBottom = 8 + item.y;
 
-    const out: Debris[] = [];
-    for (let row = 0; row < CRUMBLE_ROWS; row++) {
-      for (let col = 0; col < CRUMBLE_COLS; col++) {
-        const seed = hashId(`debris:${item.id}:${col}:${row}`);
-        // Cell centre relative to the book's centre, then turned with the
-        // book — so a book that was leaning breaks up leaning.
-        const lx = (col + 0.5) * w - item.width / 2;
-        const ly = (row + 0.5) * h - item.height / 2; // screen-down
-        const cx = item.x + (lx * cos - ly * sin);
-        const cyFromBottom = bookCentreFromBottom - (lx * sin + ly * cos);
-
-        // Where it comes to rest: on the shelf, in a slightly uneven pile.
-        const pile = (seed >>> 3) % 6;
-        const drop = Math.max(0, cyFromBottom - (8 + h / 2 + pile));
-        const tLand = Math.sqrt((2 * drop) / DEBRIS_G);
-        const vBounce = DEBRIS_G * tLand * DEBRIS_RESTITUTION;
-        out.push({
-          key: `${col}:${row}`,
-          left: cx - w / 2,
-          top: SHELF_HEIGHT - cyFromBottom - h / 2,
-          // Half a pixel of overlap, so the seams don't shimmer while intact.
-          w: w + 0.5,
-          h: h + 0.5,
-          color: shadeSpine(look, col, row),
-          rot0: (phi * 180) / Math.PI,
-          drop,
-          tLand,
-          tRest: tLand + (2 * vBounce) / DEBRIS_G,
-          vBounce,
-          vx: (((seed >>> 7) % 200) / 100 - 1) * DEBRIS_SCATTER,
-          spinFall: (((seed >>> 11) % 200) / 100 - 1) * 150,
-          tRain: DEBRIS_HOLD_S + (((seed >>> 15) % 1000) / 1000) * DEBRIS_RAIN_SPREAD_S,
-          spinRain: (((seed >>> 21) % 200) / 100 - 1) * 260,
-        });
-      }
+    const bodies: Body[] = [];
+    const freeAt: number[] = [];
+    const spinRain: number[] = [];
+    const paint: string[] = [];
+    for (let i = 0; i < shards.length; i++) {
+      const s = shards[i];
+      const seed = hashId(`shard:${item.id}:${i}`);
+      // Shard centre relative to the book's centre, turned with the book —
+      // so a book that was leaning shatters leaning.
+      const lx = s.x + s.w / 2 - item.width / 2;
+      const ly = s.y + s.h / 2 - item.height / 2; // y down
+      bodies.push(
+        makeBody(
+          item.x + (lx * cos - ly * sin),
+          item.y - (lx * sin + ly * cos),
+          s.w / 2,
+          s.h / 2,
+          item.angle,
+        ),
+      );
+      freeAt.push(DEBRIS_HOLD_S + ((seed % 1000) / 1000) * DEBRIS_RAIN_SPREAD_S);
+      spinRain.push((((seed >>> 11) % 200) / 100 - 1) * 5);
+      paint.push(
+        shadeSpine(look, (s.x + s.w / 2) / item.width, (s.y + s.h / 2) / item.height, seed >>> 3),
+      );
     }
-    return out;
+
+    const proxies: Body[] = [];
+    for (let i = 0; i < MAX_PROXIES; i++) {
+      const p = makeBody(0, 0, 1, 1);
+      makeKinematic(p);
+      proxies.push(p);
+    }
+
+    return {
+      initial: {
+        world: { bodies: [], leftWall: WALL_WIDTH, rightWall, gx: 0, gy: -DEBRIS_G },
+        shards: bodies,
+        freeAt,
+        spinRain,
+        proxies,
+        t: 0,
+      } as DebrisState,
+      colors: paint,
+    };
+    // Built once per departing book; `rightWall` only moves on a re-measure,
+    // which can't happen inside the couple of seconds this lives for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
 
+  const state = useSharedValue<DebrisState>(initial);
+
+  useFrameCallback((frame) => {
+    const dt = Math.min((frame.timeSincePreviousFrame ?? 16) / 1000, MAX_DT);
+    const s = state.value;
+    const was = s.t;
+    s.t += dt;
+    // Debris leans the way the shelf leans.
+    s.world.gx = shelf.value.gx;
+
+    // The stand-in books track the real ones, so a shard can come to rest
+    // against a book that is itself still settling.
+    const books = shelf.value.bodies;
+    const shown = Math.min(books.length, s.proxies.length);
+    for (let i = 0; i < shown; i++) {
+      const src = books[i];
+      const p = s.proxies[i];
+      p.x = src.x;
+      p.y = src.y;
+      p.angle = src.angle;
+      p.halfW = src.halfW;
+      p.halfH = src.halfH;
+    }
+
+    // A shard is in the simulation until its moment comes; after that nothing
+    // catches it and it simply falls, which is the whole point of the second
+    // act. Rebuilt per frame rather than spliced, so indices stay stable.
+    const active: Body[] = [];
+    for (let i = 0; i < s.shards.length; i++) {
+      const b = s.shards[i];
+      if (s.t < s.freeAt[i]) {
+        active.push(b);
+        continue;
+      }
+      if (was < s.freeAt[i]) {
+        // The frame it's released: it stops resting and starts tumbling.
+        b.vx = 0;
+        b.vy = 0;
+        b.omega = s.spinRain[i];
+        b.sleeping = false;
+      }
+      b.vy -= DEBRIS_G * dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.angle += b.omega * dt;
+    }
+    for (let i = 0; i < shown; i++) active.push(s.proxies[i]);
+    s.world.bodies = active;
+    // Also step while the SHELF is moving, even if the debris has settled: a
+    // book toppling into a pile has to be able to scatter it, and a stand-in
+    // moving can't wake anything on its own (it's kinematic, so isAsleep
+    // ignores it).
+    if (!isAsleep(s.world) || !isAsleep(shelf.value)) step(s.world, dt);
+
+    tick.value += 1;
+  });
+
   useEffect(() => {
-    // Linear, because the clock IS elapsed seconds — every piece does its own
-    // easing by falling. Cleanup is a plain timer rather than the animation's
-    // completion callback: a callback that hops back to the JS thread has to
-    // survive this component being unmounted mid-flight (deleting the book
-    // outright does exactly that), and a timer just gets cleared.
-    clock.value = withTiming(CRUMBLE_S, { duration: CRUMBLE_S * 1000, easing: Easing.linear });
-    const timer = setTimeout(() => onDone(item.key), CRUMBLE_S * 1000 + 80);
+    // A plain timer rather than an animation callback: this has to survive the
+    // component being unmounted mid-flight (deleting the book outright does
+    // exactly that), and a timer just gets cleared.
+    const timer = setTimeout(() => onDone(item.key), CRUMBLE_S * 1000);
     return () => clearTimeout(timer);
-  }, [clock, onDone, item.key]);
+  }, [onDone, item.key]);
 
   return (
     <View pointerEvents="none" style={styles.debrisLayer}>
-      {pieces.map((d) => (
-        <DebrisPiece key={d.key} clock={clock} d={d} />
+      {colors.map((color, i) => (
+        <ShardPiece key={i} state={state} tick={tick} index={i} color={color} />
       ))}
     </View>
   );
@@ -820,8 +950,8 @@ function ShelfPage({
   // Reanimated's shareable conversion. Everything that touches a body now
   // happens where the bodies live.
   const applySlots = useCallback(
-    (slots: { from: number; x: number; halfW: number; halfH: number }[]) => {
-      runOnUI((s: { from: number; x: number; halfW: number; halfH: number }[]) => {
+    (slots: { from: number; halfW: number; halfH: number }[]) => {
+      runOnUI((s: { from: number; halfW: number; halfH: number }[]) => {
         'worklet';
         const w = world.value;
         const bodies: Body[] = [];
@@ -836,9 +966,18 @@ function ShelfPage({
           }
           // A book that wasn't here before: give it a body ABOVE the shelf and
           // let it fall into place, rather than materialising already seated.
+          // Where it drops is measured off the book it lands NEXT TO, not off
+          // a uniform slot grid — books are different widths and a settled row
+          // packs tighter than the grid assumes, so grid maths put a new
+          // favorite down somewhere the row wasn't, well to the left of its
+          // actual end.
           const halfW = s[i].halfW;
           const halfH = s[i].halfH;
-          const x = Math.min(Math.max(s[i].x, w.leftWall + halfW), w.rightWall - halfW);
+          const prev = i > 0 ? bodies[i - 1] : null;
+          const want = prev
+            ? prev.x + horizontalExtent(prev) + SPINE_GAP + halfW
+            : w.leftWall + halfW;
+          const x = Math.min(Math.max(want, w.leftWall + halfW), w.rightWall - halfW);
           bodies.push(makeBody(x, halfH * SPAWN_DROP_HEIGHT, halfW, halfH));
         }
         // Anything already settled has to wake, or a new book would land on a
@@ -893,17 +1032,11 @@ function ShelfPage({
 
     const oldIndexOf = new Map(oldIds.map((id, i) => [id, i]));
     applySlots(
-      newIds.map((id, i) => {
-        const from = oldIndexOf.get(id);
-        const halfW = spineWidthFromId(id) / 2;
-        const halfH = spineHeightFromId(id) / 2;
-        return {
-          from: from === undefined ? -1 : from,
-          x: WALL_WIDTH + halfW + i * (SPINE_WIDTH + SPINE_GAP),
-          halfW,
-          halfH,
-        };
-      }),
+      newIds.map((id) => ({
+        from: oldIndexOf.get(id) ?? -1,
+        halfW: spineWidthFromId(id) / 2,
+        halfH: spineHeightFromId(id) / 2,
+      })),
     );
   }, [books, applySlots]);
 
@@ -1100,7 +1233,13 @@ function ShelfPage({
           <WoodGrain vertical />
         </View>
         {departing.map((d) => (
-          <CrumblingSpine key={d.key} item={d} onDone={dropDeparted} />
+          <CrumblingSpine
+            key={d.key}
+            item={d}
+            shelf={world}
+            rightWall={Math.max(WALL_WIDTH + 1, containerWidth - WALL_WIDTH)}
+            onDone={dropDeparted}
+          />
         ))}
         {books.map((book, index) => (
           <Spine

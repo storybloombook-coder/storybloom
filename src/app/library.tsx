@@ -86,9 +86,21 @@ export default function LibraryScreen() {
 
   const favoriteCount = books.filter((b) => b.isFavorite).length;
   const visibleBooks = favoritesOnly ? books.filter((b) => b.isFavorite) : books;
+  // Left-to-right shelf order. A book starred just now has no shelf position
+  // yet (the write that assigns one hasn't been read back), so it sorts to the
+  // right-hand end — but two of them would compare Infinity against Infinity,
+  // which is NaN and leaves the sort free to put them anywhere. Hence the
+  // explicit unplaced-last rule and the id tie-break.
   const shelfBooks = books
     .filter((b) => b.isFavorite)
-    .sort((a, b) => (a.shelfPosition ?? Infinity) - (b.shelfPosition ?? Infinity));
+    .sort((a, b) => {
+      const pa = a.shelfPosition;
+      const pb = b.shelfPosition;
+      if (pa == null && pb == null) return a.id < b.id ? -1 : 1;
+      if (pa == null) return 1;
+      if (pb == null) return -1;
+      return pa - pb;
+    });
 
   const load = useCallback(async () => {
     const [summaries, allPages, allCues] = await Promise.all([
