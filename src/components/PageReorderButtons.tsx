@@ -59,6 +59,7 @@ export default function PageReorderButtons({
         }}
         style={({ pressed }) => [
           styles.button,
+          styles.buttonDivider,
           !canMoveUp && styles.buttonDisabled,
           pressed && canMoveUp && styles.buttonPressed,
         ]}
@@ -91,17 +92,22 @@ export default function PageReorderButtons({
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  // The two buttons split the revealed strip in half, top and bottom, and
+  // fill it completely. Small floating buttons in the middle of an otherwise
+  // empty panel left most of the revealed area doing nothing and gave the
+  // finger a much smaller target than the gesture had just opened up.
+  wrap: { flex: 1, width: '100%', alignSelf: 'stretch' },
   button: {
-    width: 34,
-    height: 30,
-    borderRadius: 8,
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(120,150,255,0.22)',
   },
-  buttonPressed: { backgroundColor: 'rgba(120,150,255,0.5)', transform: [{ scale: 0.94 }] },
-  buttonDisabled: { backgroundColor: 'rgba(128,128,128,0.12)' },
-  glyph: { fontSize: 13, color: '#dbe4ff', fontWeight: '700' },
-  glyphDisabled: { color: 'rgba(160,160,160,0.5)' },
+  // A hairline between the halves, so it reads as two controls rather than
+  // one tall panel with two glyphs on it.
+  buttonDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.25)' },
+  buttonPressed: { backgroundColor: 'rgba(120,150,255,0.55)' },
+  buttonDisabled: { backgroundColor: 'rgba(128,128,128,0.1)' },
+  glyph: { fontSize: 16, color: '#dbe4ff', fontWeight: '700' },
+  glyphDisabled: { color: 'rgba(160,160,160,0.45)' },
 });

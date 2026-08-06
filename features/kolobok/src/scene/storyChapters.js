@@ -98,7 +98,13 @@ const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2],
 // actually visible in the window for a few seconds, not just implied by the
 // glow -- every beat from the old "pop" onward shifts back by this same
 // amount so their relative pacing is unchanged.
-const COOKING_DELTA = 3200;
+// Live feedback: "по амбару метено, по сусекам скребено" was too short to
+// read -- it held 1800ms before bake1b replaced it. BAKE1_HOLD doubles that
+// window, and is folded into COOKING_DELTA so every beat from the pop onward
+// keeps its own relative pacing (same trick, same reason). The matching sound
+// slot (dialogue.bake1) was doubled to suit.
+const BAKE1_HOLD = 1800;
+const COOKING_DELTA = 3200 + BAKE1_HOLD;
 
 /** Chapter 0 — Birth (~11s, STORY_SPEC §3 + a visible cooking lead-in). */
 function buildBirth(ctx) {
@@ -106,7 +112,7 @@ function buildBirth(ctx) {
     { at: 0, dur: 800, update: (t) => { storyMotion.windowGlow = t; } },
     { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; storyMotion.grandmaCooking = true; } },
     { at: 400, call: () => ctx.setNarration('story.bake1') },
-    { at: 2200, call: () => ctx.setNarration('story.bake1b') },
+    { at: 2200 + BAKE1_HOLD, call: () => ctx.setNarration('story.bake1b') },
     // Kneading stops just before the dough appears on the sill.
     { at: 1600 + COOKING_DELTA - 200, call: () => { storyMotion.grandmaCooking = false; } },
     { at: 1600 + COOKING_DELTA, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
@@ -181,8 +187,14 @@ function buildAnimalChapter(zoneId, bragKey) {
       { at: 4800, dur: 900, ease: 'easeInOutSine', update: (t) => { storyMotion.kolobokAngle = angle + rad(6) * t; } },
       { at: 5900, dur: 500, ease: 'easeInOutSine', update: (t) => { storyMotion.faceYaw = rad(30) * Math.sin(t * Math.PI); } },
       { at: 6100, call: () => { storyMotion.blinkBurst += 1; } },
+      // Live feedback on "и от зайца ушёл": the narrator's brag held only
+      // 1600ms before the chapter ended. 1.5x that. This is the shared
+      // animal chapter, so the hare, the wolf and the bear all get the same
+      // breathing room -- the beat is the same length for each of them, so
+      // it was the same 1600ms everywhere. The matching sound slots
+      // (dialogue.brag*) were stretched to suit.
       { at: 6400, call: () => ctx.setNarration(bragKey) },
-      { at: 8000, call: () => {} },
+      { at: 6400 + Math.round(1600 * 1.5), call: () => {} },
     ]);
     return { composite: composeTimelines(beat, pads), startAngle: angle, framing: { ...FRAMING[zoneId] } };
   };
@@ -297,6 +309,37 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
 }
 
 /** Chapter 8 — Fox finale (12s): the one time the tale wins. */
+// Live feedback on the finale: "the three fox phrases at the end are too
+// close to each other -- give it a little pause in between, and increase the
+// animation and sound time by 20%". Her intro landed at 0 and "what a lovely
+// song" only 800ms later, so the second line arrived while the first was
+// still being read.
+//
+// Applied as a transform over the finished beat list rather than by editing
+// every `at` by hand: the finale is one continuous piece of staging (glide,
+// roll-up, song, hop, wobble, toss, gulp), so a pause inserted at a line has
+// to move everything after it or the choreography desynchronises from the
+// words. Doing it this way also keeps the literal timings below readable as
+// the beat sheet they came from.
+const FOX_PHRASE_GAP = 700; // extra breath after each of her first two lines
+const FOX_FINALE_SCALE = 1.2; // and then +20% over the whole thing
+
+/** Push every beat at or after `from` back by `by` ms. */
+function delayFrom(beats, from, by) {
+  return beats.map((b) => (b.at >= from ? { ...b, at: b.at + by } : b));
+}
+
+function stretchFinale(beats) {
+  // Gaps first, at the original timings, then one scale over the result.
+  let out = delayFrom(beats, 800, FOX_PHRASE_GAP); // after "so this is Kolobok"
+  out = delayFrom(out, 3400 + FOX_PHRASE_GAP, FOX_PHRASE_GAP); // before "come closer"
+  return out.map((b) => ({
+    ...b,
+    at: Math.round(b.at * FOX_FINALE_SCALE),
+    ...(typeof b.dur === 'number' ? { dur: Math.round(b.dur * FOX_FINALE_SCALE) } : {}),
+  }));
+}
+
 function buildFoxFinale(ctx) {
   const foxAngle = ZONE_ANGLE.fox;
   // Fox glides 0.5 toward the path during the intro; her snout surface ends
@@ -309,7 +352,7 @@ function buildFoxFinale(ctx) {
   const pathPoint = pointOnCircle(PATH_RADIUS, foxAngle);
   pathPoint[1] = PATH_Y;
 
-  const tl = createTimeline([
+  const tl = createTimeline(stretchFinale([
     { at: 0, call: () => { ctx.setStoryEncounter('fox'); encounterMotion.zoneId = 'fox'; encounterMotion.phase = 'approach'; ctx.setNarration('story.fox.intro'); } },
     { at: 0, dur: 500, ease: 'easeInOutSine', update: (t) => { encounterMotion.phaseT = t; } },
     { at: 800, call: () => ctx.setNarration('line.fox.flatter') },
@@ -341,7 +384,7 @@ function buildFoxFinale(ctx) {
     // Only the ▶ press (StoryDirector's startRebirthResume) plays
     // foxCatchRebirthSteps (the "Grandma just smiled..." pop) from here.
     ...foxCatchGulpSteps(ctx, 5800),
-  ]);
+  ]));
   return { composite: composeTimelines(tl), startAngle: foxAngle, framing: { ...FRAMING.foxStart } };
 }
 

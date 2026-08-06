@@ -34,16 +34,24 @@ export function buildSharedBeat({ setPhase, setLine, timeScale = 1 }) {
  *  (The story finale is NOT this stretched -- it's its own §3-chapter-8
  *  script in storyChapters.js; this stays interactive-only.) */
 export function buildFoxBeat({ setPhase, setLine }) {
+  // Live feedback: "What a lovely song, come closer" was gone before it could
+  // be read -- it held for 1900ms between the two setLine calls. FLATTER_HOLD
+  // doubles that window; everything downstream of the line shifts with it so
+  // the spin, the song and the react keep their own relative pacing. The
+  // matching sound slot (dialogue.foxFlatter) was doubled to suit.
+  const FLATTER_HOLD = 1900;
   return createTimeline([
     { at: 0, dur: 500, ease: 'easeInOutSine', update: (v) => { encounterMotion.phaseT = v; encounterMotion.cameraPushT = v * 0.7; } },
     { at: 0, call: () => setPhase('approach') },
     { at: 500, call: () => setLine('flatter') },
+    // She leans in while she's still flattering -- this one stays put, it
+    // belongs to the line rather than following it.
     { at: 1500, dur: 600, ease: 'easeOutBack', update: (v) => { encounterMotion.leanSpringT = v; } },
-    { at: 2000, dur: 600, ease: 'easeInOutSine', update: (v) => { encounterMotion.spinT = v; } },
-    { at: 2400, call: () => setLine('song') },
-    { at: 3100, dur: 400, update: (v) => { encounterMotion.phase = 'react'; encounterMotion.phaseT = v; } },
-    { at: 3100, call: () => setPhase('react') },
-    { at: 3500, call: () => {} },
+    { at: 2000 + FLATTER_HOLD, dur: 600, ease: 'easeInOutSine', update: (v) => { encounterMotion.spinT = v; } },
+    { at: 2400 + FLATTER_HOLD, call: () => setLine('song') },
+    { at: 3100 + FLATTER_HOLD, dur: 400, update: (v) => { encounterMotion.phase = 'react'; encounterMotion.phaseT = v; } },
+    { at: 3100 + FLATTER_HOLD, call: () => setPhase('react') },
+    { at: 3500 + FLATTER_HOLD, call: () => {} },
   ]);
 }
 
