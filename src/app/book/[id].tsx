@@ -17,10 +17,10 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import { useSharedValue } from 'react-native-reanimated';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ConfirmDeleteModal from '../../components/ConfirmDeleteModal';
-import DraggablePageCard, { PAGE_LIST_GAP } from '../../components/DraggablePageCard';
+import PageReorderButtons from '../../components/PageReorderButtons';
 import PhotoEditor from '../../components/PhotoEditor';
 import PulsingDot from '../../components/PulsingDot';
 import SwipeableRow from '../../components/SwipeableRow';
@@ -97,10 +97,6 @@ export default function BookDetailScreen() {
     await updateBookTitle(book.id, next);
   }
 
-  const draggingIndex = useSharedValue(-1);
-  const targetIndex = useSharedValue(-1);
-  const itemHeights = useSharedValue<number[]>([]);
-
   // Adding more pages to this already-saved book: multi-select library picks
   // (or a single camera shot) queue up one at a time in the same PhotoEditor
   // used at creation time; once the queue's empty, every edited photo is run
@@ -153,10 +149,6 @@ export default function BookDetailScreen() {
       load();
     }, [load])
   );
-
-  useEffect(() => {
-    itemHeights.value = new Array(pages.length).fill(0);
-  }, [pages.length]);
 
   // Once the edit queue drains (every queued photo confirmed or skipped),
   // run the accumulated batch through the vision pipeline and append it.
@@ -374,24 +366,11 @@ export default function BookDetailScreen() {
     }
   }
 
-  function onMeasured(index: number, height: number) {
-    const next = itemHeights.value.slice();
-    next[index] = height;
-    itemHeights.value = next;
-  }
-
+  /** Move one page from `from` to `to`. Bounds are the caller's job (the
+   *  reorder buttons disable themselves at the ends), but guard anyway —
+   *  this is the only thing standing between a bad index and a lost page. */
   async function handleReorder(from: number, to: number) {
-    // itemHeights is indexed by POSITION, so it has to move with the pages.
-    // Without this it kept describing the old order until every card
-    // happened to re-fire onLayout -- and a drag started inside that window
-    // measured its slot boundaries and its settle distance against stale
-    // heights, which is what made a second drag land wrong or jump.
-    const heights = itemHeights.value.slice();
-    if (heights.length > 0) {
-      const [movedHeight] = heights.splice(from, 1);
-      heights.splice(to, 0, movedHeight);
-      itemHeights.value = heights;
-    }
+    if (from === to || to < 0 || to >= pages.length) return;
     setPages((prev) => {
       const next = prev.slice();
       const [moved] = next.splice(from, 1);
@@ -502,16 +481,23 @@ export default function BookDetailScreen() {
           const cues = cuesByPage.get(item.id) ?? [];
           const activeCueCount = cues.filter((c) => c.reviewState !== 'removed').length;
           return (
-            <DraggablePageCard
-              key={item.id}
-              index={index}
-              draggingIndex={draggingIndex}
-              targetIndex={targetIndex}
-              itemHeights={itemHeights}
-              onReorder={handleReorder}
-              onMeasured={onMeasured}
-            >
-              <SwipeableRow onDelete={() => setPendingDeletePage(item)}>
+            <Animated.View key={item.id} layout={LinearTransition.duration(220)}>
+              <SwipeableRow
+                onDelete={() => setPendingDeletePage(item)}
+                leftActions={(close) => (
+                  <PageReorderButtons
+                    canMoveUp={index > 0}
+                    canMoveDown={index < pages.length - 1}
+                    // The row stays open, so a page can be walked several
+                    // slots without re-swiping. It's the page that moves,
+                    // not the row.
+                    onMoveUp={() => handleReorder(index, index - 1)}
+                    onMoveDown={() => handleReorder(index, index + 1)}
+                    upLabel={t('book.movePageUp', locale)}
+                    downLabel={t('book.movePageDown', locale)}
+                  />
+                )}
+              >
                 <Pressable
                   onPress={() => router.push({ pathname: '/page/[id]', params: { id: item.id } })}
                   style={({ pressed }) => [styles.pageCard, { backgroundColor: cardBackground, opacity: pressed ? 0.7 : 1 }]}
@@ -546,7 +532,7 @@ export default function BookDetailScreen() {
                   )}
                 </Pressable>
               </SwipeableRow>
-            </DraggablePageCard>
+            </Animated.View>
           );
         })}
 
@@ -800,7 +786,7 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
 
-  list: { padding: 16, gap: PAGE_LIST_GAP },
+  list: { padding: 16, gap: 12 },
   header: { marginBottom: 8, gap: 6 },
 
   readBar: {

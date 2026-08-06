@@ -1,8 +1,14 @@
-// SwipeableRow.tsx — swipe-left-to-reveal-a-delete-bin wrapper, shared by the
-// library screen (books) and the book-detail page list (pages). It slides
-// ~20% and holds; tapping the revealed bin deletes, tapping the held-open
-// row snaps it closed. Vertical list scrolling is preserved (the pan only
-// claims horizontal drags) — safe to nest inside a ScrollView or FlatList.
+// SwipeableRow.tsx — swipe-to-reveal-an-action wrapper, shared by the library
+// screen (books) and the book-detail page list (pages). It slides ~20% and
+// holds; tapping the revealed action fires it, tapping the held-open row snaps
+// it closed. Vertical list scrolling is preserved (the pan only claims
+// horizontal drags) — safe to nest inside a ScrollView or FlatList.
+//
+// Swiping LEFT reveals the delete bin on the right. Swiping RIGHT reveals
+// whatever `leftActions` renders on the left — the page list uses that for
+// move-up/move-down, so reordering is the same physical gesture as deleting,
+// just the other way. Each side only exists if its prop was given, and the
+// slide clamps at 0 on any side that wasn't.
 
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
@@ -27,17 +33,25 @@ const REVEAL_DELAY_MS = 140;
 
 export default function SwipeableRow({
   onDelete,
+  leftActions,
   children,
 }: {
-  onDelete: () => void;
+  /** Omit to disable the swipe-left delete side entirely. */
+  onDelete?: () => void;
+  /** Rendered behind the row's LEFT edge, revealed by swiping right. Given
+   *  the row's `close` so an action can dismiss the row after firing. */
+  leftActions?: (close: () => void) => ReactNode;
   children: ReactNode;
 }) {
   const translateX = useSharedValue(0);
   const startX = useSharedValue(0);
   const width = useSharedValue(0);
-  // -1 open / 0 closed — so we buzz once each time the slide crosses into the
-  // open zone, not every frame.
+  // -1 open-left (bin showing) / 0 closed / 1 open-right (left actions
+  // showing) — so we buzz once each time the slide crosses into an open zone,
+  // not every frame.
   const zone = useSharedValue(0);
+  const hasRight = !!onDelete;
+  const hasLeft = !!leftActions;
   // 0 until REVEAL_DELAY_MS after a FRESH touch, then animates to 1 — driven
   // by withDelay/withTiming (not a Date.now() check inside the style
   // worklet) specifically because a style's `useAnimatedStyle` only
@@ -82,10 +96,11 @@ export default function SwipeableRow({
     .onUpdate((e) => {
       const reveal = width.value * REVEAL_FRACTION;
       let next = startX.value + e.translationX;
-      if (next > 0) next = 0;
-      if (next < -reveal) next = -reveal;
+      // Each side is only reachable if the caller gave it something to show.
+      if (next > (hasLeft ? reveal : 0)) next = hasLeft ? reveal : 0;
+      if (next < (hasRight ? -reveal : 0)) next = hasRight ? -reveal : 0;
       translateX.value = next;
-      const z = next <= -reveal / 2 ? -1 : 0;
+      const z = next <= -reveal / 2 ? -1 : next >= reveal / 2 ? 1 : 0;
       if (z !== zone.value) {
         zone.value = z;
         runOnJS(tick)();
@@ -93,8 +108,9 @@ export default function SwipeableRow({
     })
     .onEnd(() => {
       const reveal = width.value * REVEAL_FRACTION;
-      const target = translateX.value <= -reveal / 2 ? -reveal : 0;
-      zone.value = target === 0 ? 0 : -1;
+      const target =
+        translateX.value <= -reveal / 2 ? -reveal : translateX.value >= reveal / 2 ? reveal : 0;
+      zone.value = target === 0 ? 0 : target < 0 ? -1 : 1;
       translateX.value = withSpring(target, { damping: 22, stiffness: 220 });
       runOnJS(setOpenJS)(target !== 0);
     });
@@ -106,6 +122,10 @@ export default function SwipeableRow({
   // an actual slide.
   const binStyle = useAnimatedStyle(() => ({
     opacity: revealArmed.value < 1 ? 0 : Math.min(1, Math.max(0, -translateX.value / 8)),
+  }));
+  // Mirror image of the bin: fades in as the row slides the other way.
+  const leftStyle = useAnimatedStyle(() => ({
+    opacity: revealArmed.value < 1 ? 0 : Math.min(1, Math.max(0, translateX.value / 8)),
   }));
 
   const close = () => {
@@ -134,18 +154,25 @@ export default function SwipeableRow({
         setRevealW(w * REVEAL_FRACTION);
       }}
     >
-      <Animated.View style={[styles.binBehind, { width: revealW }, binStyle]}>
-        <Pressable
-          style={styles.actionFill}
-          hitSlop={4}
-          onPress={() => {
-            close();
-            onDelete();
-          }}
-        >
-          <Text style={styles.binIcon}>🗑️</Text>
-        </Pressable>
-      </Animated.View>
+      {hasLeft && (
+        <Animated.View style={[styles.actionBehind, styles.leftBehind, { width: revealW }, leftStyle]}>
+          {leftActions!(close)}
+        </Animated.View>
+      )}
+      {hasRight && (
+        <Animated.View style={[styles.actionBehind, styles.rightBehind, { width: revealW }, binStyle]}>
+          <Pressable
+            style={styles.actionFill}
+            hitSlop={4}
+            onPress={() => {
+              close();
+              onDelete!();
+            }}
+          >
+            <Text style={styles.binIcon}>🗑️</Text>
+          </Pressable>
+        </Animated.View>
+      )}
       <GestureDetector gesture={pan}>
         <Animated.View style={cardStyle}>
           {children}
@@ -161,15 +188,16 @@ const styles = StyleSheet.create({
   // layout (e.g. a `gap` on the list's contentContainerStyle), not this
   // component's concern; hardcoding one here would double up with it.
   swipeWrap: { borderRadius: 14, overflow: 'hidden' },
-  binBehind: {
+  actionBehind: {
     position: 'absolute',
     top: 0,
-    right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(255,69,58,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  rightBehind: { right: 0, backgroundColor: 'rgba(255,69,58,0.18)' },
+  // Deliberately not red — this side moves a page, it doesn't destroy one.
+  leftBehind: { left: 0, backgroundColor: 'rgba(120,150,255,0.16)' },
   actionFill: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
   binIcon: { fontSize: 24 },
 });
