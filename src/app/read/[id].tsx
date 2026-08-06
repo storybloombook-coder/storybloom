@@ -53,6 +53,7 @@ import { playFull, playLooping, playRange, playRangeLooping } from '../../lib/au
 import { resolveSoundSource } from '../../lib/audio/soundResolver';
 import { getBook, getCuesForBook, getPagesForBook } from '../../lib/db';
 import { t, useLocaleStore, type Locale } from '../../lib/i18n';
+import { chooseOccurrence } from '../../lib/reader/align';
 import { cueAtRange, tokenize, type Token } from '../../lib/reader/text';
 import { createVoskRecognizer } from '../../lib/speech/vosk';
 import { NEXT_PAGE_PHRASES, type RecognizedWord, type SpeechLang } from '../../lib/speech/types';
@@ -146,6 +147,29 @@ function matchWordInWindow(
   const idx = findWordFrom(ocrLower, word, from);
   if (idx >= 0 && idx <= from + lookahead) return { start: idx, end: idx + word.length };
   return findWordFuzzy(tokens, word, from, lookahead);
+}
+
+/** Every place `word` occurs in the window, in reading order — the set the
+ *  context scorer then chooses between. Exact matches only: a fuzzy near-miss
+ *  is worth following when it's the ONLY thing nearby (see matchWordInWindow),
+ *  but as one candidate among several it would just add noise to a decision
+ *  that's already about telling near-identical options apart. */
+function collectOccurrences(
+  ocrLower: string,
+  tokens: Token[],
+  word: string,
+  from: number,
+  lookahead: number
+): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let at = from;
+  for (;;) {
+    const idx = findWordFrom(ocrLower, word, at);
+    if (idx < 0 || idx > from + lookahead) break;
+    out.push({ start: idx, end: idx + word.length });
+    at = idx + word.length;
+  }
+  return out;
 }
 
 // How far ahead of the current read position a recognized word is still
@@ -669,12 +693,42 @@ export default function ReaderScreen() {
           // itself, and let the earlier ones fire (as normal) if their own
           // trigger words get recognized directly.
           const nextSame = matchWordInWindow(ocrLower, tokens, word, newCursor, from + ALIGN_LOOKAHEAD - newCursor);
-          const ambiguous = nextSame !== null;
-          const fireFrom = ambiguous ? idx : from;
+          // The word occurs more than once in reach. On its own that's
+          // genuinely ambiguous evidence — but the words AROUND it usually
+          // aren't, and Vosk hands over the whole utterance so far, so
+          // "от зайца ушёл" identifies which "ушёл" was meant even though
+          // none of those three words would do it alone. See lib/reader/align.
+          let ambiguous = nextSame !== null;
+          let chosen = { start: idx, end: newCursor };
+          if (ambiguous) {
+            const occurrences = collectOccurrences(
+              ocrLower, tokens, word, from, ALIGN_LOOKAHEAD,
+            );
+            if (occurrences.length > 1) {
+              const pageWords = tokens.filter((t) => !t.isSpace).map((t) => t.text.toLowerCase());
+              const wordIndexOf = new Map<number, number>();
+              tokens.filter((t) => !t.isSpace).forEach((t, i) => wordIndexOf.set(t.start, i));
+              const candidates = occurrences
+                .map((o) => wordIndexOf.get(o.start))
+                .filter((i): i is number => i !== undefined);
+              if (candidates.length === occurrences.length) {
+                const pick = chooseOccurrence(pageWords, candidates, words, already + wi);
+                chosen = occurrences[pick.index];
+                // Only a context-backed pick earns the right to advance
+                // normally. Without one we stay exactly as cautious as
+                // before: take the earliest, fire only the cues sitting on
+                // it, and stop rather than walk past the rest.
+                ambiguous = !pick.confident;
+              }
+            }
+          }
+          const chosenStart = chosen.start;
+          const chosenEnd = chosen.end;
+          const fireFrom = ambiguous ? chosenStart : from;
           for (const cue of cuesRef.current) {
             if (cue.reviewState === 'removed' || !cue.soundId || cue.charStart == null) continue;
             if (firedCueIdsRef.current.has(cue.id)) continue;
-            if (cue.charStart >= fireFrom && cue.charStart < newCursor) {
+            if (cue.charStart >= fireFrom && cue.charStart < chosenEnd) {
               firedCueIdsRef.current.add(cue.id);
               const tokenIndex = tokens.findIndex(
                 (t) => !t.isSpace && cue.charStart! >= t.start && cue.charStart! < t.end
@@ -682,7 +736,7 @@ export default function ReaderScreen() {
               fireCue(cue, tokenIndex);
             }
           }
-          readCursorRef.current = newCursor;
+          readCursorRef.current = chosenEnd;
           // setReadCursor below only fires ONCE, after this whole loop —
           // so if the batch of words in this single callback contains this
           // same word again (its own cumulative partial hypothesis
