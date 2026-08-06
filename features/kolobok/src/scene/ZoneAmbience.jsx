@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber/native';
+import { useZoneFrame } from './useZoneFrame';
 import * as Haptics from 'expo-haptics';
 import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide, Object3D, SphereGeometry,
@@ -257,7 +257,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     birdPhase: 'land', // land -> peck -> fly
   });
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
     const now = Date.now();
@@ -587,7 +587,7 @@ export function HareAmbience({ isActiveZone }) {
     })),
   );
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const mesh = butterfliesRef.current;
     if (!mesh) return;
@@ -647,7 +647,7 @@ export function WolfAmbience({ isActiveZone }) {
 
   const state = useRef({ wispPhase: [0, 2, 4].map((v) => v), crowNextIn: 20 + Math.random() * 10, crowT: -1 });
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
 
@@ -739,7 +739,7 @@ export function BearAmbience({ isActiveZone }) {
     { geometry: new SphereGeometry(0.08, 6, 6), color: '#e8c04a', position: [0.15, 0.1, 0], scale: [1, 0.4, 1] },
   ]), []);
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
 
     if (leavesRef.current) {
@@ -797,7 +797,7 @@ export function FoxAmbience({ isActiveZone }) {
   const featherRef = useRef();
   const state = useRef({ nextIn: 20, t: -1, driftAngle: 0 });
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
     if (isActiveZone) {

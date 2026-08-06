@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber/native';
+import { useZoneFrame } from '../useZoneFrame';
 import { CapsuleGeometry, ConeGeometry, SphereGeometry } from 'three';
 import { mergeColoredParts } from '../builders/mergeColoredParts';
 import { encounterMotion } from '../../state/sceneStore';
@@ -62,7 +62,7 @@ export function Wolf({ mode, isActiveZone }) {
     greetWave: initGreetWaveState(),
   });
 
-  useFrame((_, delta) => {
+  useZoneFrame(isActiveZone || mode !== 'idle', (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
     const s = state.current;
     const activeMult = isActiveZone ? 1.3 : 1;
