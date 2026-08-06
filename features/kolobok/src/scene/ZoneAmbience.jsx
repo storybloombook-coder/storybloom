@@ -5,6 +5,7 @@ import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide, Object3D, SphereGeometry,
 } from 'three';
 import { storyMotion } from '../state/sceneStore';
+import { playSlot } from '../services/soundLibrary';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
@@ -195,6 +196,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     if (!p || p.t < 0 || p.t >= 1 + PUFF_SHRINK_FRAC || eggMotion.chimneyHeld) return;
     e.stopPropagation();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    playSlot('chimney.bubbleShrink');
     // Retire the bubble instantly -- past the shrink tail, so the shared
     // loop parks it this frame AND the slot reads as free for the next
     // burst to claim.

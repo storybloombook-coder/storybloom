@@ -12,6 +12,7 @@ import { scatterAngles, scatterNonOverlappingTrees } from './builders/placement'
 import { makeRng } from './prng';
 import { makeStripes, makeNoiseGrain, makeSpeckle, makeRadialAlphaTexture } from './textures/proceduralTextures';
 import { storyMotion, useSceneStore, atmosphereLive } from '../state/sceneStore';
+import { playSlot } from '../services/soundLibrary';
 import { windSway, wind } from './wind';
 import { polish } from '../config/devFlags';
 import { getSharedTexture } from './BlobShadow';
@@ -513,6 +514,7 @@ export function Vegetation() {
     slot.endZ = ez;
     slot.seed = Math.random();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    playSlot('egg.mushroomPop');
     useSceneStore.getState().recordEggFound('hedgehog');
   };
 

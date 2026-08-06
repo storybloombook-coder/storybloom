@@ -111,6 +111,7 @@ function runFishing(ctx) {
   const s = (ms) => ms * slow;
   const lineKey = roll === 'gold' ? 'egg.goldfish' : roll === 'boot' ? 'egg.boot' : 'egg.fish';
   return createTimeline([
+    { at: 0, call: () => playSlot('grandpa.castLine') },
     { at: 0, dur: s(300), ease: 'easeOutCubic', update: (t) => { eggMotion.rodPitch = -(18 * Math.PI / 180) * t; } },
     { at: s(300), dur: s(400), ease: 'easeOutBack', update: (t) => { eggMotion.rodPitch = -(18 * Math.PI / 180) * (1 - t); } },
     // Live feedback: "just one upward movement and one downward movement."
@@ -125,6 +126,13 @@ function runFishing(ctx) {
     },
     { at: s(300), call: () => { eggMotion.rippleBurst += 1; } },
     { at: s(700), dur: s(800), update: (t) => { eggMotion.fishT = t; } },
+    // The catch is heard as well as seen: a splash for a fish, a dull thud
+    // for the boot, a sparkle for the rare gold one. These slots existed
+    // from the start and nothing had ever played them.
+    { at: s(700), call: () => playSlot(roll === 'boot' ? 'egg.bootThud' : 'egg.fishSplash') },
+    ...(roll === 'gold' ? [{ at: s(900), call: () => playSlot('egg.goldSparkle') }] : []),
+    // Grandpa reacts before he speaks -- a cheer for a catch, a sigh for a boot.
+    { at: s(550), call: () => playSlot(roll === 'boot' ? 'grandpa.sighBoot' : 'grandpa.catchCheer') },
     { at: s(700), call: () => ctx.setNarration(lineKey, 'grandpa') },
     ...(roll === 'boot' ? [
       { at: s(900), dur: s(600), update: (t) => { eggMotion.headShake = Math.sin(t * Math.PI * 4) * (10 * Math.PI / 180); } },
@@ -161,7 +169,7 @@ function runOwl(ctx, treeIdx) {
 
 function runMoonWink(ctx) {
   return createTimeline([
-    { at: 0, call: () => { eggMotion.moonWinkBurst += 1; } },
+    { at: 0, call: () => { eggMotion.moonWinkBurst += 1; playSlot('egg.moonTwinkle'); } },
     { at: 400, call: () => {} },
   ]);
 }
@@ -263,6 +271,7 @@ export const eggManager = {
   // above -- every release now fires, no exceptions.
   tapChimney() {
     eggMotion.chimneySmokeBurst += 1;
+    playSlot('chimney.bubbleRelease');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     useSceneStore.getState().recordEggFound('smoke-rings');
     useSceneStore.getState().onEasterEgg?.('smoke-rings');

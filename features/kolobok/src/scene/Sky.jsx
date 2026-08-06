@@ -11,6 +11,7 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeRng } from './prng';
 import { eggManager, eggMotion } from './easterEggs';
+import { playSlot } from '../services/soundLibrary';
 
 const SKY_RADIUS = 28;
 const SUN_MOON_RADIUS = 24;
@@ -447,6 +448,7 @@ export function Sky() {
           c.isRaining = true;
           c.rainMs = 0;
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          playSlot('egg.cloudDrizzle');
           useSceneStore.getState().recordEggFound('cloud-drizzle');
         }}
       />

@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { ZONES, ZONE_RADIUS, rad } from '../config/zones';
 import { atmosphereLive, storyMotion, useSceneStore } from '../state/sceneStore';
 import { eggManager } from './easterEggs';
+import { playSlot } from '../services/soundLibrary';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeNoiseGrain, makeStripes } from './textures/proceduralTextures';
 import { mergeColoredParts } from './builders/mergeColoredParts';
@@ -948,6 +949,7 @@ function Landmark({ zone }) {
       if (encounter.story) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       return;
     }
+    playSlot('ui.tapBlip');
     startEncounter(zone);
   };
 

@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber/native';
 import * as Haptics from 'expo-haptics';
+import { playSlot } from '../services/soundLibrary';
 import {
   BufferAttribute, BufferGeometry, Color, Object3D, SphereGeometry,
 } from 'three';
@@ -314,6 +315,7 @@ function Plaque({
     const s = state.current;
     if (s.timeline && !s.timeline.done) return; // already mid-beat
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    playSlot('ui.plaqueBlip');
     onDust(index);
     // Camera-lock mode ("so a kid can tap everywhere on the screen and not
     // be interrupted"): the plaque still presses in, glows, kicks up dust
@@ -330,7 +332,7 @@ function Plaque({
         update: (v) => { s.press = PRESS_DEPTH * (1 - v); },
       },
       { at: 0, dur: NAV_AT_MS, update: (v) => { s.emissive = EMISSIVE_IDLE + (EMISSIVE_PEAK - EMISSIVE_IDLE) * Math.sin(v * Math.PI); } },
-      ...(navigates ? [{ at: NAV_AT_MS, call: () => { requestNavigation(item.route); } }] : []),
+      ...(navigates ? [{ at: NAV_AT_MS, call: () => { playSlot('nav.crossroadsOpen'); requestNavigation(item.route); } }] : []),
     ]);
   };
 

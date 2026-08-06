@@ -13,6 +13,7 @@ import {
   ZONE_RADIUS, PATH_RADIUS, KOLOBOK_RADIUS, ZONES, rad, pointOnCircle,
 } from '../config/zones';
 import { encounterMotion, storyMotion } from '../state/sceneStore';
+import { playSlot } from '../services/soundLibrary';
 import { createTimeline } from './timeline';
 import { buildSharedBeat } from './encounterBeats';
 
@@ -114,12 +115,14 @@ const COOKING_DELTA = 3200 + BAKE1_HOLD;
 /** Chapter 0 — Birth (~11s, STORY_SPEC §3 + a visible cooking lead-in). */
 function buildBirth(ctx) {
   const tl = createTimeline([
+    { at: 0, call: () => playSlot('story.windowGlowSwell') },
     { at: 0, dur: 800, update: (t) => { storyMotion.windowGlow = t; } },
     { at: 0, call: () => { storyMotion.smokeBoost = 2; storyMotion.scale = 0; storyMotion.posOverride = [...SILL_POS]; storyMotion.grandmaCooking = true; } },
     { at: 400, call: () => ctx.setNarration('story.bake1') },
     { at: 2200 + BAKE1_HOLD, call: () => ctx.setNarration('story.bake1b') },
     // Kneading stops just before the dough appears on the sill.
     { at: 1600 + COOKING_DELTA - 200, call: () => { storyMotion.grandmaCooking = false; } },
+    { at: 1600 + COOKING_DELTA, call: () => playSlot('story.doughAppear') },
     { at: 1600 + COOKING_DELTA, dur: 500, ease: 'easeOutBack', update: (t) => { storyMotion.scale = Math.max(0, t); } },
     // Look around: -20 deg -> +20 deg, two blinks along the way.
     { at: 2400 + COOKING_DELTA, dur: 1200, ease: 'easeInOutSine', update: (t) => { storyMotion.faceYaw = rad(-20 + 40 * t); } },
@@ -240,6 +243,7 @@ export function foxCatchGulpSteps(ctx, at0 = 0) {
     {
       at: at0 + 600,
       call: () => {
+        playSlot('story.fadeToBlack');
         ctx.setFadeBlack(true);
         ctx.onGulp?.();
         storyMotion.catchBurstId += 1;
@@ -285,6 +289,7 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
     {
       at: at0 + 900,
       call: () => {
+        playSlot('story.rebirthChime');
         ctx.setNarration('story.rebirth');
         storyMotion.posOverride = [...SILL_POS];
         ctx.onRebirth?.();

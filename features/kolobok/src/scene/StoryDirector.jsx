@@ -238,6 +238,11 @@ export function StoryDirector() {
             story.idleClock = 0;
             return;
           }
+          // One page-turn of a sound between chapters, so the tale reads as
+          // moving on rather than just cutting. Only on this generic advance:
+          // the fox finale STOPS rather than advancing, and the rebirth
+          // resume has its own chime.
+          playSlot('story.loopTransition');
           startChapter(story.chapter + 1);
         }
       }
