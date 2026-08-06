@@ -31,22 +31,29 @@ import {
 // display string. Category ids double as the 2nd segment of every slot's
 // own labelKey (`sound.slot.<category>.<name>` == `sound.slot.<slotId>`
 // since slot ids are already `<category>.<name>`).
+// ORDER IS DELIBERATE and set by live feedback: the categories people
+// actually record into come first, and the procedural sound banks they rarely
+// touch come last. It runs story lines -> story -> my ambience (everything
+// that voices the tale or sets its mood), then kolobok -> animals -> nature
+// -> interactions -> ui (the built-in effects, from most to least
+// story-specific). Reordering this array reorders the menu; nothing else
+// depends on the sequence.
 export const CATEGORIES = [
-  { id: 'kolobok', labelKey: 'sound.category.kolobok' },
-  { id: 'animals', labelKey: 'sound.category.animals' },
-  { id: 'nature', labelKey: 'sound.category.nature' },
-  { id: 'interactions', labelKey: 'sound.category.interactions' },
-  { id: 'ui', labelKey: 'sound.category.ui' },
-  { id: 'story', labelKey: 'sound.category.story' },
   // Live feedback: "a separate section for all the lines in the fairy tale,
   // so the entire story can be voiced" -- every quoted/narrated line in the
   // tale (STRINGS.md's song/line/story keys), one recordable slot each.
   { id: 'dialogue', labelKey: 'sound.category.dialogue' },
+  { id: 'story', labelKey: 'sound.category.story' },
   // Live feedback: "record and play ambient sound -- no recording limits...
   // two sounds, day and night... should loop." User-recordable, NOT
   // procedurally defaulted the way every other category is -- see the
   // `unlimited` flag and myAmbienceDefault() below.
   { id: 'myAmbience', labelKey: 'sound.category.myAmbience' },
+  { id: 'kolobok', labelKey: 'sound.category.kolobok' },
+  { id: 'animals', labelKey: 'sound.category.animals' },
+  { id: 'nature', labelKey: 'sound.category.nature' },
+  { id: 'interactions', labelKey: 'sound.category.interactions' },
+  { id: 'ui', labelKey: 'sound.category.ui' },
 ];
 
 // ---------------------------------------------------------- recipe helpers

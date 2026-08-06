@@ -1277,12 +1277,12 @@ export default function ReaderScreen() {
                   style={[styles.navBack, { opacity: index === 0 ? 0.4 : 1 }]}
                   onPress={goPrev}
                 >
-                  <Text style={styles.navBackLabel}>{t('read.previousPage', locale)}</Text>
+                  <Text style={styles.navBackLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{t('read.previousPage', locale)}</Text>
                 </TactileButton>
               </View>
               <View style={styles.footerHalf}>
                 <TactileButton style={styles.navNext} onPress={goNext}>
-                  <Text style={styles.navNextLabel}>{isLast ? t('read.finish', locale) : t('read.nextPage', locale)}</Text>
+                  <Text style={styles.navNextLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{isLast ? t('read.finish', locale) : t('read.nextPage', locale)}</Text>
                 </TactileButton>
               </View>
             </View>
@@ -1292,7 +1292,7 @@ export default function ReaderScreen() {
                   style={[styles.toLibraryBtn, { backgroundColor: cardBackground }]}
                   onPress={() => router.replace('/library')}
                 >
-                  <Text style={[styles.toLibraryLabel, { color: textColor }]}>{t('read.toLibrary', locale)}</Text>
+                  <Text style={[styles.toLibraryLabel, { color: textColor }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{t('read.toLibrary', locale)}</Text>
                 </TactileButton>
               </View>
               <View style={styles.footerHalf}>
@@ -1301,7 +1301,7 @@ export default function ReaderScreen() {
                   onPress={toggleMic}
                   disabled={micStatus === 'loading'}
                 >
-                  <Text style={[styles.toLibraryLabel, { color: listen.color }]}>{listen.label}</Text>
+                  <Text style={[styles.toLibraryLabel, { color: listen.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{listen.label}</Text>
                 </TactileButton>
               </View>
             </View>

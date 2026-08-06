@@ -163,13 +163,18 @@ export default function HomeScreen() {
             <Text style={styles.infoTitle}>{t('home.infoTitle', locale)}</Text>
             <Text style={styles.infoBody}>{t('home.infoBody', locale)}</Text>
             <Text selectable style={styles.infoEmail}>{SUPPORT_EMAIL}</Text>
-            <Pressable
+            {/* A real button, not bare text. It was a plain Pressable with
+                no surface and no press feedback, so it read as a caption you
+                happened to be able to tap. TactileButton is what every other
+                control on this screen uses — it darkens and shrinks under the
+                finger and ticks the haptics. */}
+            <TactileButton
               accessibilityRole="button"
               style={styles.infoDismiss}
               onPress={() => setInfoOpen(false)}
             >
               <Text style={styles.infoDismissText}>{t('common.close', locale)}</Text>
-            </Pressable>
+            </TactileButton>
           </View>
         </Pressable>
       </Modal>
@@ -289,6 +294,17 @@ const styles = StyleSheet.create({
   // no mail client guaranteed on a test device, and a dead mailto: link
   // would be worse than plain copyable text.
   infoEmail: { fontSize: 15, fontWeight: '700', color: '#8a5a2b', textAlign: 'center' },
-  infoDismiss: { marginTop: 6, paddingHorizontal: 16, paddingVertical: 8 },
-  infoDismissText: { fontSize: 14, fontWeight: '600', color: '#8a5a2b' },
+  infoDismiss: {
+    marginTop: 14,
+    alignSelf: 'stretch',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(138,90,43,0.14)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(138,90,43,0.45)',
+  },
+  infoDismissText: { fontSize: 15, fontWeight: '700', color: '#8a5a2b' },
 });
