@@ -430,6 +430,34 @@ export default function ReaderScreen() {
     };
   }, [bookId]);
 
+  // A native player is freed on a DELAY, so its fade-out can finish first.
+  // That delay has to be cancellable. The screen can go away inside the
+  // window — a back tap, a page turn, the tale ending — and a bare setTimeout
+  // would still fire afterwards and call remove() on a player whose React
+  // tree is already gone. The try/catch around it protects nothing: a null
+  // deref inside the native module isn't a JS throwable, it takes the process
+  // down (SIGSEGV on mqt_v_js). Worse, the "safety net on unmount" below
+  // called stopAmbient/stopCue, so unmounting was itself what armed the
+  // dangling timer.
+  const pendingRemovalsRef = useRef<{ timer: ReturnType<typeof setTimeout>; player: Player }[]>([]);
+
+  const scheduleRemoval = useCallback((player: Player, delayMs: number) => {
+    const list = pendingRemovalsRef.current;
+    const entry = {
+      player,
+      timer: setTimeout(() => {
+        const i = list.indexOf(entry);
+        if (i >= 0) list.splice(i, 1);
+        try {
+          player.remove();
+        } catch {
+          // Already freed elsewhere — nothing left to do.
+        }
+      }, delayMs),
+    };
+    list.push(entry);
+  }, []);
+
   const stopAmbient = useCallback(() => {
     if (ambientDuckTimerRef.current) clearInterval(ambientDuckTimerRef.current);
     ambientDuckTimerRef.current = null;
@@ -438,12 +466,8 @@ export default function ReaderScreen() {
     const p = ambientPlayerRef.current;
     ambientPlayerRef.current = null;
     // Let the fade-out finish before freeing the native player.
-    if (p) setTimeout(() => {
-      try {
-        p.remove();
-      } catch {}
-    }, 700);
-  }, []);
+    if (p) scheduleRemoval(p, 700);
+  }, [scheduleRemoval]);
 
   // Ramps the ambient bed's volume toward `target` over AMBIENT_DUCK_MS —
   // used to duck it while listening and restore it otherwise. A plain
@@ -486,12 +510,8 @@ export default function ReaderScreen() {
     cueStopRef.current = null;
     const p = cuePlayerRef.current;
     cuePlayerRef.current = null;
-    if (p) setTimeout(() => {
-      try {
-        p.remove();
-      } catch {}
-    }, 120);
-  }, []);
+    if (p) scheduleRemoval(p, 120);
+  }, [scheduleRemoval]);
 
   // Start (and, on change, stop) the current page's ambient bed.
   useEffect(() => {
@@ -529,6 +549,27 @@ export default function ReaderScreen() {
       if (rowRecomputeTimerRef.current) clearTimeout(rowRecomputeTimerRef.current);
     },
     [stopAmbient, stopCue]
+  );
+
+  // Declared LAST on purpose: React runs effect cleanups in declaration
+  // order, so this one runs after the safety net above has finished queueing
+  // its delayed removals — and can therefore flush them. Every pending timer
+  // is cancelled and its player freed right here, synchronously, while the
+  // JS context is still intact. Nothing is left armed to fire into a torn-
+  // down screen.
+  useEffect(
+    () => () => {
+      for (const entry of pendingRemovalsRef.current) {
+        clearTimeout(entry.timer);
+        try {
+          entry.player.remove();
+        } catch {
+          // Already freed — the fade just finished on its own.
+        }
+      }
+      pendingRemovalsRef.current = [];
+    },
+    []
   );
 
   // Keep the alignment refs current for whichever page is showing, and reset

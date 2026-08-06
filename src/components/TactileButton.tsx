@@ -1,8 +1,9 @@
 import * as Haptics from 'expo-haptics';
-import { forwardRef, type ReactNode } from 'react';
+import { Children, cloneElement, forwardRef, isValidElement, type ReactElement, type ReactNode } from 'react';
 import {
   Pressable,
   StyleSheet,
+  Text,
   type PressableProps,
   type StyleProp,
   type View,
@@ -17,6 +18,40 @@ export interface TactileButtonProps extends Omit<PressableProps, 'style'> {
   hapticStyle?: Haptics.ImpactFeedbackStyle;
   /** How far the button shrinks on press, 0-1. Defaults to a subtle 0.96. */
   pressScale?: number;
+}
+
+/**
+ * Keep a button's own label on one line, shrinking it rather than wrapping.
+ *
+ * Russian runs 35-100% longer than English across this app's strings ("Move
+ * page up" -> "Переместить страницу вверх"), so labels sized by eye in
+ * English wrap to two lines in Russian — which grows the button, and in a
+ * side-by-side row leaves it a different height from its neighbour. Rather
+ * than chase that string by string as each one is spotted, every button
+ * caps its own label.
+ *
+ * Applied ONLY when the button's single direct child is a Text, i.e. when
+ * that Text unambiguously IS the label. Buttons that pair a title with a
+ * subtitle ("Add pictures" / "From your library or files") are laid out to
+ * be multi-line on purpose, and squeezing their second line onto one would
+ * make things worse, not better. A call site that sets numberOfLines or
+ * adjustsFontSizeToFit itself always wins.
+ */
+function capSoleLabel(children: ReactNode): ReactNode {
+  const items = Children.toArray(children);
+  if (items.length !== 1) return children;
+  const only = items[0];
+  if (!isValidElement(only) || only.type !== Text) return children;
+  const props = only.props as { numberOfLines?: number; adjustsFontSizeToFit?: boolean };
+  if (props.numberOfLines !== undefined || props.adjustsFontSizeToFit !== undefined) return children;
+  return cloneElement(only as ReactElement<Record<string, unknown>>, {
+    numberOfLines: 1,
+    adjustsFontSizeToFit: true,
+    // Below ~70% the label is noticeably smaller than its neighbours, which
+    // reads as a mistake; past that it ellipsizes instead, which at least
+    // keeps every button the same height.
+    minimumFontScale: 0.7,
+  });
 }
 
 /**
@@ -56,7 +91,7 @@ const TactileButton = forwardRef<View, TactileButtonProps>(function TactileButto
       <Animated.View
         style={[style, animatedStyle, styles.clip, disabled ? { opacity: 0.4 } : null]}
       >
-        {children}
+        {capSoleLabel(children)}
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.darkenOverlay, darkenStyle]} />
       </Animated.View>
     </Pressable>

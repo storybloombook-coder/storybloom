@@ -87,8 +87,19 @@ export default function DraggableThumb({
     })
     .onEnd((e) => {
       const target = computeTargetIndex(e.translationX, e.translationY);
+      // Clearing this ONLY on `finished` was how a thumb got stuck: an
+      // interrupted settle leaves isSettlingOut true forever, and the thumb
+      // then keeps drawing at its drag offset, lifted above its neighbours,
+      // with nothing left to reset it. (Exactly the defect that was removed
+      // from the page list along with its drag.)
+      //
+      // The one interruption that must NOT clear it is a fresh drag on this
+      // same thumb, which re-set the flag a moment ago and owns it now --
+      // that's what the dragging check is for. Any other reason a timing
+      // stops, the thumb is at rest and the flag has to go.
       const onSettled = (finished?: boolean) => {
-        if (finished) isSettlingOut.value = false;
+        'worklet';
+        if (finished || dragging.value === 0) isSettlingOut.value = false;
       };
       translateX.value = withTiming(0, undefined, onSettled);
       translateY.value = withTiming(0);
