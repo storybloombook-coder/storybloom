@@ -233,6 +233,11 @@ export function Sky() {
         : fallbackCelestial(1);
       const moonVisible = hasSun ? L.sunElevation < 0 : moon.visible;
       moonVisibleRef.current = moonVisible;
+      // Sky already owns the authoritative day/night call (real sun
+      // elevation, with a device-hour fallback). Publish it rather than let
+      // anything else re-derive it and disagree -- the ambience loops read
+      // this. Same ~1s throttled block, so it costs nothing per frame.
+      L.isNight = moonVisible;
 
       // moon-wink: burst counter edge-detect (same idiom as
       // PondAndGrandpa's rippleBurst/s.rippleWas) starts this frame's local
@@ -290,6 +295,16 @@ export function Sky() {
       });
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      // An InstancedMesh caches its OWN bounding sphere, and uses it for the
+      // raycast early-out as well as for frustum culling. Ours is computed
+      // once from the initial identity matrices -- a unit sphere at the
+      // origin -- so once the sun and moon are moved out to SUN_MOON_RADIUS
+      // every ray misses that stale sphere and stops before it ever tests an
+      // instance. That is why tapping the moon did nothing: the onPointerDown
+      // below was correct and simply never ran. (Same cache, same symptom,
+      // as the chimney bubbles.) Recomputed here, where the matrices change
+      // -- this block is throttled to ~1s, so it costs nothing per frame.
+      mesh.computeBoundingSphere();
 
       // 3 tiny star sparkles pop beside the moon for the same window.
       if (starsRef.current) {

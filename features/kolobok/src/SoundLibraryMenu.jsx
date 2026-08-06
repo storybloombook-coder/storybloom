@@ -46,6 +46,7 @@ import {
   setAllSlotsMuted,
   isAnySlotUnmuted,
   previewSlotLoop,
+  setAmbienceSuspended,
   stopPreviewSlotLoop,
   resetSlotToDefault,
   saveRecordingForSlot,
@@ -578,6 +579,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
           }
           return;
         }
+        // The day/night ambience is looping under this. Silence it before the
+        // microphone opens, or it lands on the take -- and then plays back
+        // over the very loop it was recorded from.
+        setAmbienceSuspended(true);
         recorder.record();
         setRecordStartedAt(Date.now());
         setPhase('recording');
@@ -590,6 +595,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   }, [phase]);
 
   const finishRecording = async () => {
+    setAmbienceSuspended(false);
     try {
       await recorder.stop();
     } catch {
@@ -710,6 +716,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   // handle isn't guaranteed), so touching it here must never throw
   // synchronously during unmount.
   useEffect(() => () => {
+    // Whatever else happens on the way out, the ambience must not stay
+    // suspended -- closing the menu mid-countdown would otherwise leave the
+    // scene permanently silent with no way to get it back.
+    setAmbienceSuspended(false);
     try {
       if (recorder.isRecording) recorder.stop().catch(() => {});
     } catch {

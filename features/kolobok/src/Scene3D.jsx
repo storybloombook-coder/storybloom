@@ -9,11 +9,11 @@ import { createSinglePointerDrag } from './scene/singlePointerDrag';
 import { TactileButton } from './TactileButton';
 import { SoundLibraryMenu } from './SoundLibraryMenu';
 import { isMasterEnabled, setMasterEnabled } from './services/soundEngine';
-import { playSlot, prewarmSlots } from './services/soundLibrary';
+import { playSlot, prewarmSlots, setAmbienceSuspended, syncMyAmbience } from './services/soundLibrary';
 import GlassGlare from './GlassGlare';
 import { useDeviceTilt } from './useDeviceTilt';
 import {
-  orbit, story, bubbleAnchor, useSceneStore,
+  atmosphereLive, orbit, story, bubbleAnchor, useSceneStore,
 } from './state/sceneStore';
 import { refreshWeather } from './services/weather';
 import { ZONES } from './config/zones';
@@ -30,6 +30,10 @@ const FLING_SENSITIVITY = 0.00011; // px/s -> radians/frame
 const TOTAL_EGGS = 7;
 const VERTICAL_SENSITIVITY = 0.01; // px -> pitchOffset units (free-look drag)
 const PITCH_OFFSET_MAX = 1.6;
+// How often the day/night ambience is re-checked. The only input is whether
+// the sun is up, which moves once a day -- this just has to be sooner than a
+// child would notice the wrong one playing.
+const AMBIENCE_SYNC_MS = 5000;
 const BUBBLE_WRAP_WIDTH = 280; // must match styles.bubbleWrap.width below
 
 // Render resolution, decided ONCE per process and never touched again.
@@ -171,6 +175,21 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
   // something is trying to be heard, on the thread this scene is bound by.
   useEffect(() => {
     prewarmSlots();
+  }, []);
+
+  // The recorded day/night ambience loops. Polled rather than driven off a
+  // render: the only input that changes is whether the sun is up, which
+  // moves once a day -- a subscription would re-render the whole scene for
+  // it. syncMyAmbience only acts on a real change, so this is a comparison
+  // every few seconds. Stops on unmount so leaving the scene leaves silence.
+  useEffect(() => {
+    syncMyAmbience(atmosphereLive.isNight);
+    const id = setInterval(() => syncMyAmbience(atmosphereLive.isNight), AMBIENCE_SYNC_MS);
+    return () => {
+      clearInterval(id);
+      setAmbienceSuspended(true);
+      setAmbienceSuspended(false);
+    };
   }, []);
 
   // The one place the scene touches your router: host passes onNavigate.

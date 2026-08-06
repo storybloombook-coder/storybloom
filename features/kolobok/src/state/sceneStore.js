@@ -124,6 +124,10 @@ export const atmosphereLive = {
   flash: 0,            // storm lightning envelope (0..1, added to lights/sky)
   sunAzimuth: null,    // degrees; null = no location -> Sky's device-hour arc
   sunElevation: null,
+  // Published by Sky.jsx, which already makes this call from the real sun
+  // elevation (device-hour arc as fallback). Read by the my-ambience loops so
+  // they don't re-derive it and disagree.
+  isNight: false,
 };
 
 // Transient, per-frame encounter motion (ANIMATION_SPEC §4-5): written every

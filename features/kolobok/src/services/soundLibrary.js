@@ -782,6 +782,47 @@ export function prewarmSlots(onProgress) {
   setTimeout(step, 0);
 }
 
+// ------------------------------------------------------- my ambience loops
+//
+// Live feedback: "let ambient music always play day and night (if not muted),
+// and turn it off while recording sounds to avoid overlap." The two
+// myAmbience slots existed and were recordable, but nothing ever started
+// them -- they could only be auditioned from the menu.
+//
+// Driven by one call rather than by each caller tracking loop state: whether
+// a loop should be running depends on the hour, the slot's mute, whether a
+// recording is in progress, and whether the user has one recorded at all.
+// Keeping that in four places is how one of them ends up stuck playing.
+let ambienceSuspended = false;
+let ambienceRunning = null; // slot id currently looping, or null
+
+function ambienceWanted(isNight) {
+  if (ambienceSuspended) return null;
+  const id = isNight ? 'myAmbience.night' : 'myAmbience.day';
+  return isSlotMuted(id) ? null : id;
+}
+
+/** Start/stop the day and night loops to match the time of day. Safe to call
+ *  as often as you like -- it only acts on a change. */
+export function syncMyAmbience(isNight) {
+  const want = ambienceWanted(isNight);
+  if (want === ambienceRunning) return;
+  if (ambienceRunning) stopLoop(ambienceRunning);
+  ambienceRunning = want;
+  if (want) startLoop(want, getSlotUri(want));
+}
+
+/** Silence the ambience for the duration of a recording, so the microphone
+ *  doesn't capture it and the take doesn't play back over it. Pass false to
+ *  let the next sync bring it back. */
+export function setAmbienceSuspended(suspended) {
+  ambienceSuspended = suspended;
+  if (suspended && ambienceRunning) {
+    stopLoop(ambienceRunning);
+    ambienceRunning = null;
+  }
+}
+
 export function previewSlot(slotId) {
   playOneShot(getSlotUri(slotId), {
     preview: true, channel: channelFor(slotId), trim: getSlotTrim(slotId),
