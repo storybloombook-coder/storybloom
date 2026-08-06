@@ -9,7 +9,7 @@ import {
   buildSharedBeat, buildFoxBeat, buildIzbaBeat, resetEncounterMotion,
   currentApproachFraction, buildForcedRetreat,
 } from './encounterBeats';
-import { playSlot } from '../services/soundLibrary';
+import { playSlot, slotForNarration } from '../services/soundLibrary';
 
 // Inverse of Scene3D's SWIPE_SENSITIVITY (px -> radians), so orbit.angle's
 // own frame-to-frame delta can be read back out as an approximate pixel
@@ -34,20 +34,13 @@ const LINE_KEY = {
   fox: { flatter: 'line.fox.flatter', song: 'song.full' },
 };
 
-// Live feedback: "a separate section for all the lines in the fairy tale,
-// so the entire story can be voiced." 'song.full' is deliberately absent --
-// Kolobok.jsx already plays dialogue.kolobokSong on the encounterMotion.
-// singing edge (buildSharedBeat's own 'song' step sets both together), so
-// mapping it here too would double-fire it. Fox's own beat never sets that
-// flag (no singing bob during that encounter, existing behavior), so its
-// 'song' step -- like this map -- has nothing to add here either.
-const LINE_SOUND_SLOT = {
-  'line.eat.hare': 'dialogue.hareEat',
-  'line.eat.wolf': 'dialogue.wolfEat',
-  'line.eat.bear': 'dialogue.bearEat',
-  'line.fox.flatter': 'dialogue.foxFlatter',
-  'line.grandma.tap': 'dialogue.grandmaTap',
-};
+// Which slot each line plays comes from soundLibrary’s single
+// NARRATION_SOUND_SLOT table (this file used to keep its own copy of the
+// five interactive keys). 'song.full' is deliberately absent from it --
+// Kolobok.jsx already plays dialogue.kolobokSong on the
+// encounterMotion.singing edge, which buildSharedBeat sets in the very same
+// step, so mapping it would double-fire. Fox’s beat never sets that flag
+// (no singing bob in that encounter), so its 'song' step adds nothing either.
 
 /** Owns every INTERACTIVE zone-tap encounter beat (ANIMATION_SPEC §4/§5/§9):
  *  sequences the timeline, writes continuous values into the transient
@@ -100,7 +93,7 @@ export function EncounterDirector() {
       if (story.mode !== 'playing' && !storyCompleted) {
         const lineKey = lineKeys[name];
         setEncounterLine(lineKey);
-        const soundSlot = LINE_SOUND_SLOT[lineKey];
+        const soundSlot = slotForNarration(lineKey);
         if (soundSlot) playSlot(soundSlot);
       }
     };

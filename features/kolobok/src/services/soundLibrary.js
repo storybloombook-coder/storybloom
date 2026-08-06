@@ -499,6 +499,11 @@ const DIALOGUE_SLOTS = [
   { id: 'dialogue.snap', category: 'dialogue', durationMs: 3000, loop: false, synthesize: () => speechPlaceholder(3) },
   { id: 'dialogue.rebirth', category: 'dialogue', durationMs: 2500, loop: false, synthesize: () => speechPlaceholder(2.5) },
   { id: 'dialogue.eggRebirth', category: 'dialogue', durationMs: 2000, loop: false, synthesize: () => speechPlaceholder(2.0) },
+  // Grandpa's three pond lines (EASTER_EGGS.md). Durations fit the fishing
+  // beat’s own narration window -- see __tests__/dialogueWindows.test.js.
+  { id: 'dialogue.grandpaFish', category: 'dialogue', durationMs: 2400, loop: false, synthesize: () => speechPlaceholder(2.4) },
+  { id: 'dialogue.grandpaBoot', category: 'dialogue', durationMs: 1800, loop: false, synthesize: () => speechPlaceholder(1.8) },
+  { id: 'dialogue.grandpaGoldfish', category: 'dialogue', durationMs: 3400, loop: false, synthesize: () => speechPlaceholder(3.4) },
 ];
 
 // ---------------------------------------------------------- My Ambience
@@ -821,6 +826,44 @@ export function setAmbienceSuspended(suspended) {
     stopLoop(ambienceRunning);
     ambienceRunning = null;
   }
+}
+
+// Which recordable line each narration key speaks. Lives HERE, next to the
+// slots themselves, because it used to be copied into StoryDirector and
+// EncounterDirector separately -- and a third copy would have been needed for
+// the easter eggs. Duplicated tables are how Grandpa ended up with three
+// spoken lines and no way to voice any of them.
+//
+// 'song.full' is deliberately absent: Kolobok.jsx already plays
+// dialogue.kolobokSong off the encounterMotion.singing edge, so mapping it
+// here too would fire it twice.
+export const NARRATION_SOUND_SLOT = {
+  'line.eat.hare': 'dialogue.hareEat',
+  'line.eat.wolf': 'dialogue.wolfEat',
+  'line.eat.bear': 'dialogue.bearEat',
+  'line.fox.flatter': 'dialogue.foxFlatter',
+  'line.grandma.tap': 'dialogue.grandmaTap',
+  'story.bake1': 'dialogue.bake1',
+  'story.bake1b': 'dialogue.bake1b',
+  'story.bake2': 'dialogue.bake2',
+  'story.brag.grandma': 'dialogue.bragGrandma',
+  'story.brag.hare': 'dialogue.bragHare',
+  'story.brag.wolf': 'dialogue.bragWolf',
+  'story.brag.bear': 'dialogue.bragBear',
+  'story.fox.intro': 'dialogue.foxIntro',
+  'story.fox.closer': 'dialogue.foxCloser',
+  'story.snap': 'dialogue.snap',
+  'story.rebirth': 'dialogue.rebirth',
+  // Grandpa at the pond (EASTER_EGGS.md). He speaks whichever of these three
+  // his line pulled up.
+  'egg.fish': 'dialogue.grandpaFish',
+  'egg.boot': 'dialogue.grandpaBoot',
+  'egg.goldfish': 'dialogue.grandpaGoldfish',
+};
+
+/** The line to play for a narration key, or null if that key is silent. */
+export function slotForNarration(lineKey) {
+  return (lineKey && NARRATION_SOUND_SLOT[lineKey]) || null;
 }
 
 export function previewSlot(slotId) {

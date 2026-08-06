@@ -7,6 +7,7 @@
 
 import * as Haptics from 'expo-haptics';
 import { useSceneStore } from '../state/sceneStore';
+import { playSlot, slotForNarration } from '../services/soundLibrary';
 import { createTimeline } from './timeline';
 
 export const eggMotion = {
@@ -77,7 +78,16 @@ function suppressed() {
 function eggCtx() {
   const s = useSceneStore.getState();
   return {
-    setNarration: s.setNarration,
+    // The RAW store setter only puts text in the bubble -- it plays nothing.
+    // StoryDirector wraps it to also fire the line's recorded audio, and this
+    // didn't, so Grandpa's three pond lines were the only spoken lines in the
+    // tale that were silent no matter what you recorded for them. Wrapped the
+    // same way here, off the same shared table.
+    setNarration: (lineKey, speaker) => {
+      s.setNarration(lineKey, speaker);
+      const slot = slotForNarration(lineKey);
+      if (slot) playSlot(slot);
+    },
     setFadeBlack: s.setFadeBlack,
     setStoryEncounter: s.setStoryEncounter,
     onGulp: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy),
@@ -121,8 +131,11 @@ function runFishing(ctx) {
     ] : []),
     { at: s(1500), dur: s(500), update: (t) => { eggMotion.fishT = 1 + t; } }, // release arc back to water
     { at: s(2000), call: () => { eggMotion.fishT = -1; eggMotion.floatYank = 0; eggMotion.headShake = 0; eggMotion.rippleBurst += 1; } },
-    { at: s(2600), call: () => ctx.setNarration(null) },
-    { at: s(2700), call: () => {} },
+    // Held for the length of his longest line (dialogue.grandpaFish is
+    // 2400ms) rather than a number picked before those lines existed -- at
+    // s(2600) the bubble vanished while he was still talking.
+    { at: s(3100), call: () => ctx.setNarration(null) },
+    { at: s(3200), call: () => {} },
   ]);
 }
 

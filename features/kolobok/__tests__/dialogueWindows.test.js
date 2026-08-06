@@ -42,9 +42,10 @@ check('dialogue slot durations were parsed', Object.keys(durations).length >= 15
   `(${Object.keys(durations).length} slots)`);
 
 // ------------------------------------------------------------- key -> slot
-const dirSrc = read('scene/StoryDirector.jsx');
+// One shared table now, in soundLibrary — the directors used to keep their
+// own copies, which is how Grandpa's pond lines ended up unmapped.
 const keyToSlot = {};
-for (const m of dirSrc.matchAll(/'([a-z][A-Za-z0-9.]+)': '(dialogue\.[A-Za-z0-9]+)'/g)) {
+for (const m of libSrc.matchAll(/'([a-z][A-Za-z0-9.]+)': '(dialogue\.[A-Za-z0-9]+)'/g)) {
   keyToSlot[m[1]] = m[2];
 }
 check('narration keys map to slots', Object.keys(keyToSlot).length >= 15,
@@ -109,6 +110,25 @@ const schedules = [
     name: 'interactive fox beat',
     lines: [{ at: 500, key: 'line.fox.flatter' }],
     endsAt: 3500 + FLATTER_HOLD,
+  },
+  // Grandpa's pond easter egg. One line per catch, spoken at s(700) and
+  // cleared at s(3100) — where s() doubles everything for the rare golden
+  // fish, so that one gets twice the room. Only one of the three plays per
+  // catch, so they're separate one-line runs rather than a sequence.
+  {
+    name: 'grandpa fishing (silver)',
+    lines: [{ at: 700, key: 'egg.fish' }],
+    endsAt: 3100,
+  },
+  {
+    name: 'grandpa fishing (boot)',
+    lines: [{ at: 700, key: 'egg.boot' }],
+    endsAt: 3100,
+  },
+  {
+    name: 'grandpa fishing (gold, half speed)',
+    lines: [{ at: 1400, key: 'egg.goldfish' }],
+    endsAt: 6200,
   },
 ];
 

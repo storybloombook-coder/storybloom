@@ -252,6 +252,9 @@ export const STRINGS = {
           snap: 'Narrator: "...and SNAP!"',
           rebirth: 'Narrator: "Grandma baked another."',
           eggRebirth: 'Grandma: "Fresh out of the oven!"',
+          grandpaFish: 'Grandpa: "Ooh, a fine one!..."',
+          grandpaBoot: 'Grandpa: "A boot. Again."',
+          grandpaGoldfish: 'Grandpa: "A golden fish!..."',
         },
         myAmbience: {
           day: 'My daytime ambience',
@@ -514,6 +517,9 @@ export const STRINGS = {
           snap: 'Рассказчик: «...ам!»',
           rebirth: 'Рассказчик: «Испекла нового.»',
           eggRebirth: 'Бабушка: «Только из печки!»',
+          grandpaFish: 'Дед: «Ух ты, хороша!...»',
+          grandpaBoot: 'Дед: «Опять сапог...»',
+          grandpaGoldfish: 'Дед: «Золотая рыбка!...»',
         },
         myAmbience: {
           day: 'Моя дневная атмосфера',
