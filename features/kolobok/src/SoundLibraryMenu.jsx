@@ -69,6 +69,10 @@ const METER_POLL_MS = 60;
 // smoothly, slow enough that it costs nothing -- and it only ever
 // re-renders the bar itself, never the menu.
 const PROGRESS_POLL_MS = 80;
+/** Shortest the pop-up player will stay open for. Loading a file into the
+ *  player is asynchronous, so a window shorter than that load can close
+ *  before anything is heard -- see startPlayerAt. */
+const MIN_PLAY_WINDOW_MS = 700;
 
 /** Buckets raw 0..1 amplitude samples down to WAVEFORM_BARS peaks, then
  *  normalizes to the loudest bar so a quiet take still shows shape. Falls
@@ -756,7 +760,20 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       editPlayer.play();
       // Stop at the end of the slot's own window rather than the end of the
       // file -- a trimmed take still holds the whole 20s recording.
-      if (durMs > 0) playerStopRef.current = setTimeout(() => setPlayerPlaying(false), durMs);
+      //
+      // Floored, because `replace()` loads asynchronously and this timer
+      // starts the moment seekTo resolves, which can be before the file is
+      // ready to make a sound. Every slot in the interactions bank is
+      // 90-300ms (blips, plops, thuds), so the window closed on them before
+      // they were audible at all -- they read as simply not playing. The
+      // floor only holds the player open longer; the audio still ends when
+      // it ends.
+      if (durMs > 0) {
+        playerStopRef.current = setTimeout(
+          () => setPlayerPlaying(false),
+          Math.max(durMs, MIN_PLAY_WINDOW_MS),
+        );
+      }
     }).catch(() => setPlayerPlaying(false));
   };
 

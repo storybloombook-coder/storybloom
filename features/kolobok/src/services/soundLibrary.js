@@ -746,6 +746,42 @@ export function playSlot(slotId, opts) {
   });
 }
 
+// Rendering a slot's default WAV is lazy: the first time anything asks for
+// its uri, getCachedDefaultUri synthesizes the samples, normalizes, fades,
+// encodes and writes the file -- all synchronously, on the JS thread. For a
+// 4-second loop that's ~176k samples through several passes, and it happens
+// at the exact moment the sound was wanted, so the cost lands as a stall
+// right when something is trying to be heard AND as a burst of heat on a
+// thread this scene is already bound by.
+//
+// prewarmSlots does that work up front instead, a few slots per tick, yielding
+// between batches so it never blocks a frame for long. Everything after it is
+// a file read.
+let prewarmDone = false;
+
+export function prewarmSlots(onProgress) {
+  if (prewarmDone) return;
+  prewarmDone = true;
+  // Overridden slots play a user recording; there's nothing to synthesize.
+  const pending = SLOTS.filter((s) => !isSlotOverridden(s.id));
+  let i = 0;
+  const BATCH = 3;
+  const step = () => {
+    const end = Math.min(i + BATCH, pending.length);
+    for (; i < end; i++) {
+      try {
+        getCachedDefaultUri(pending[i].id, pending[i].synthesize);
+      } catch {
+        // One bad recipe must not stop the rest warming -- that slot just
+        // falls back to synthesizing on demand, as it did before.
+      }
+    }
+    onProgress?.(i, pending.length);
+    if (i < pending.length) setTimeout(step, 0);
+  };
+  setTimeout(step, 0);
+}
+
 export function previewSlot(slotId) {
   playOneShot(getSlotUri(slotId), {
     preview: true, channel: channelFor(slotId), trim: getSlotTrim(slotId),

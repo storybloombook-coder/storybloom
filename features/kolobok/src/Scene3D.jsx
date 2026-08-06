@@ -9,7 +9,7 @@ import { createSinglePointerDrag } from './scene/singlePointerDrag';
 import { TactileButton } from './TactileButton';
 import { SoundLibraryMenu } from './SoundLibraryMenu';
 import { isMasterEnabled, setMasterEnabled } from './services/soundEngine';
-import { playSlot } from './services/soundLibrary';
+import { playSlot, prewarmSlots } from './services/soundLibrary';
 import GlassGlare from './GlassGlare';
 import { useDeviceTilt } from './useDeviceTilt';
 import {
@@ -164,6 +164,14 @@ export function Scene3D({ onNavigate, focused = true, onLocaleChange }) {
 
   // Encounter beat lifecycle (show bubble, fade, clear) is owned by the
   // directors' timelines; this component only renders the current text.
+
+  // Render every default sound to its WAV cache up front, a few per tick.
+  // Otherwise the first play of each slot synthesizes it synchronously on
+  // the JS thread at the exact moment it was wanted -- a stall right when
+  // something is trying to be heard, on the thread this scene is bound by.
+  useEffect(() => {
+    prewarmSlots();
+  }, []);
 
   // The one place the scene touches your router: host passes onNavigate.
   useEffect(() => {
