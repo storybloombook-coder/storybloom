@@ -4,8 +4,9 @@ import * as Haptics from 'expo-haptics';
 import {
   BufferAttribute, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DoubleSide, Object3D, SphereGeometry,
 } from 'three';
-import { storyMotion } from '../state/sceneStore';
+import { encounterMotion, storyMotion } from '../state/sceneStore';
 import { playSlot } from '../services/soundLibrary';
+import { makeEdge, onRise, varied } from './idleSound';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { rad } from '../config/zones';
 import { wind } from './wind';
@@ -459,6 +460,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     // --- Birth chapter: kneading/shaping motion takes over the same
     // silhouette instead of the seated idle below (STORY_SPEC's birth
     // chapter toggles this while Kolobok is still dough on the sill). ---
+    onRise(s.sndTapReact, encounterMotion.zoneId === 'izba' && encounterMotion.phase === 'approach', true, 'grandma.tapReaction', varied(0.55));
     if (storyMotion.grandmaCooking) {
       if (grandmaRef.current) {
         grandmaRef.current.visible = true;
@@ -488,6 +490,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
       grandmaRef.current.position.y = STOOL_SEAT_H;
       grandmaRef.current.position.z = STOOL_Z;
       grandmaRef.current.rotation.z = Math.sin(now / 500) * rad(3);
+      // One click per stroke of the needles, and a hum at the far end of
+      // the sway -- both only when you're actually at the izba.
+      onRise(s.sndKnit, Math.sin(now / 500) > 0.995, isActiveZone, 'grandma.knitClick', varied(0.22));
+      onRise(s.sndHum, Math.sin(now / 2100) > 0.999, isActiveZone, 'grandma.hum', varied(0.3));
     }
 
     // --- Active-only: ridge bird lands, pecks x3, flies off, every ~15s ---
@@ -506,6 +512,7 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
         const peckCycle = (s.birdT % 0.6) / 0.6;
         const pecking = s.birdT < 2.2;
         birdRef.current.rotation.x = pecking && peckCycle < 0.4 ? -((25 * Math.PI) / 180) * Math.sin(peckCycle * Math.PI * 2.5) : 0;
+        onRise(s.sndPeck, pecking && peckCycle < 0.05, isActiveZone, 'ridgeBird.peck', varied(0.25));
         birdRef.current.position.x = pecking ? 0 : (s.birdT - 2.2) * 1.5;
         birdRef.current.position.y = pecking ? 0 : (s.birdT - 2.2) * 0.4;
       } else if (s.birdT >= 3.2) {
@@ -585,6 +592,7 @@ export function HareAmbience({ isActiveZone }) {
       radius: 0.6 + Math.random() * 0.9,
       heightPhase: Math.random() * Math.PI * 2,
       landedT: -1,
+      sndFlutter: makeEdge(),
       nextLandIn: 6 + Math.random() * 6,
     })),
   );
@@ -599,6 +607,8 @@ export function HareAmbience({ isActiveZone }) {
       if (active && i === 2 && b.landedT < 0) {
         b.nextLandIn -= dt;
         if (b.nextLandIn <= 0) { b.landedT = 0; b.nextLandIn = 9; }
+        // The flutter is the moment it settles, not the whole wander.
+        onRise(b.sndFlutter, b.landedT >= 0 && b.landedT < 0.1, isActiveZone, 'butterfly.flutter', varied(0.18));
       }
       if (b.landedT >= 0) {
         b.landedT += dt;
@@ -647,7 +657,7 @@ export function WolfAmbience({ isActiveZone }) {
     { geometry: new SphereGeometry(0.04, 6, 6), color: '#2e2e33', position: [0, 0.045, 0.07] },
   ]), []);
 
-  const state = useRef({ wispPhase: [0, 2, 4].map((v) => v), crowNextIn: 20 + Math.random() * 10, crowT: -1 });
+  const state = useRef({ wispPhase: [0, 2, 4].map((v) => v), crowNextIn: 20 + Math.random() * 10, crowT: -1, sndCaw: makeEdge(), sndFlap: makeEdge() });
 
   useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
@@ -677,6 +687,9 @@ export function WolfAmbience({ isActiveZone }) {
       if (s.crowT < 0) {
         s.crowNextIn -= dt;
         if (s.crowNextIn <= 0) { s.crowT = 0; s.crowNextIn = 25; }
+        // A caw on arrival; the wingbeat rides the same visible window.
+        onRise(s.sndCaw, s.crowT >= 0 && s.crowT < 0.1, isActiveZone, 'crow.caw', varied(0.4));
+        onRise(s.sndFlap, s.crowT >= 0 && s.crowT < 0.05, isActiveZone, 'crow.wingFlap', varied(0.25));
       } else {
         s.crowT += dt;
         if (s.crowT > 2.5) s.crowT = -1;
@@ -797,7 +810,7 @@ export function BearAmbience({ isActiveZone }) {
 // ======================================================= Fox clearing =====
 export function FoxAmbience({ isActiveZone }) {
   const featherRef = useRef();
-  const state = useRef({ nextIn: 20, t: -1, driftAngle: 0 });
+  const state = useRef({ nextIn: 20, t: -1, driftAngle: 0, sndBee: makeEdge() });
 
   useZoneFrame(isActiveZone, (_, delta) => {
     const dt = Number.isFinite(delta) ? Math.min(delta, 1 / 30) : 1 / 60;
@@ -806,6 +819,7 @@ export function FoxAmbience({ isActiveZone }) {
       if (s.t < 0) {
         s.nextIn -= dt;
         if (s.nextIn <= 0) { s.t = 0; s.nextIn = 20; s.driftAngle = 0; }
+        onRise(s.sndBee, s.t >= 0 && s.t < 0.1, isActiveZone, 'bee.buzz', varied(0.3));
       } else {
         s.t += dt / 4;
         if (s.t >= 1) s.t = -1;

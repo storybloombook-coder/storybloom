@@ -6,6 +6,7 @@ import { atmosphereLive } from '../state/sceneStore';
 import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { eggMotion } from './easterEggs';
+import { playSlot } from '../services/soundLibrary';
 import { SPRUCE_TOP_MATRICES } from './Vegetation';
 
 const dummy = new Object3D();
@@ -112,6 +113,8 @@ export function Owl() {
     e.stopPropagation();
     if (eggMotion.owlPhase !== 'lookaround') return; // already flapping/ducking, or not out yet
     eggMotion.owlPhase = 'flapping';
+    // The tap that makes it flap is also what makes it speak.
+    playSlot('owl.hoot', { volume: 0.55 });
     eggMotion.owlPhaseT = 0;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };

@@ -8,6 +8,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { makeEdge, onRise, varied } from '../idleSound';
 import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#d8d8d2';
@@ -51,6 +52,9 @@ export function Hare({ mode, isActiveZone }) {
     hopPhase: 0, nextHopIn: 2.5 + Math.random() * 1.5, hopT: 1, hopDone: true,
     earTwitch: [0, 0], nextEarTwitchIn: [1 + Math.random() * 2, 1 + Math.random() * 2], earTwitchT: [1, 1],
     sniffPhase: Math.random() * Math.PI * 2,
+    sndHop: makeEdge(),
+    sndSniff: makeEdge(),
+    sndStartled: makeEdge(),
     approachZ: 0, reactT: 0, retreatZ: 0,
     wetShake: initWetShakeState(),
     greetWave: initGreetWaveState(),
@@ -93,8 +97,13 @@ export function Hare({ mode, isActiveZone }) {
     }
 
     // --- Sniff: nose scales 1.02 at 4Hz ---
+    // One thump as he leaves the ground, a sniff on the nose's own cycle,
+    // and a start when something comes at him.
+    onRise(s.sndHop, !s.hopDone, isActiveZone, 'hare.idleHop', varied(0.4));
+    onRise(s.sndStartled, encounterMotion.phase === 'react', true, 'hare.startled', varied(0.7));
     s.sniffPhase += dt * Math.PI * 2 * 4;
     const sniffScale = 1 + Math.max(0, Math.sin(s.sniffPhase)) * 0.02;
+    onRise(s.sndSniff, Math.sin(s.sniffPhase) > 0.998, isActiveZone, 'hare.sniff', varied(0.2));
 
     // --- Wet shake-off (BACKLOG.md #1), idle only ---
     const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');

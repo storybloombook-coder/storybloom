@@ -5,6 +5,7 @@ import { atmosphereLive, orbit, story, useSceneStore } from '../state/sceneStore
 import { refreshWeather, weatherNow, currentWeatherState } from '../services/weather';
 import { solarPosition, phaseBlendForElevation } from '../services/sun';
 import { eggManager } from './easterEggs';
+import { tickNatureBeds } from './natureBeds';
 import { quality } from '../config/devFlags';
 import { tickWind } from './wind';
 
@@ -102,6 +103,10 @@ export function AtmosphereDirector() {
 
     // Easter egg timelines ride this shared frame hub.
     eggManager.tick(dt);
+    // The looping nature beds ride the same clock: they follow the weather
+    // and daylight this director has just computed, so ticking them here
+    // means they never lag a frame behind the sky they describe.
+    tickNatureBeds(dt);
 
     // --- Sleep power state (only while the story is off) ---
     orbit.frameParity = !orbit.frameParity;

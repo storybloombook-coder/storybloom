@@ -5,6 +5,7 @@ import { mergeColoredParts } from './builders/mergeColoredParts';
 import { makeToonMaterial } from './materials/toonMaterial';
 import { makeSpeckle } from './textures/proceduralTextures';
 import { hedgehogPool } from './Vegetation';
+import { makeEdge, onRise, varied } from './idleSound';
 import { BlobShadow } from './BlobShadow';
 
 const dummy = new Object3D();
@@ -55,6 +56,7 @@ export function Hedgehog() {
 
 function HedgehogInstance({ slotIndex }) {
   const rootRef = useRef();
+  const snd = useRef({ waddle: makeEdge(), squeak: makeEdge() });
   const spinesRef = useRef();
   const mushroomRef = useRef();
 
@@ -95,6 +97,10 @@ function HedgehogInstance({ slotIndex }) {
 
     rootRef.current.visible = h.active;
     if (!h.active) return;
+    // A waddle as it sets off and a squeak when it reaches the mushroom.
+    // Always audible: a hedgehog crossing the island isn't tied to a zone.
+    onRise(snd.current.waddle, h.phase === 'approach' && h.t < 0.05, true, 'hedgehog.waddle', varied(0.3));
+    onRise(snd.current.squeak, h.phase === 'sniff', true, 'hedgehog.squeak', varied(0.4));
 
     // sT: 0..1 progress along the PHYSICAL center->mushroom curve, regardless
     // of phase -- sniff holds it at 1 (parked at the mushroom); return counts

@@ -35,31 +35,8 @@ function check(name, cond, detail = '') {
   }
 }
 
-// The ambient layer: idle animal noises and weather beds. Not wired YET
-// rather than deliberately silent — the hooks exist (Wolf.jsx already tracks
-// `howling` and `nextHowlIn`, the hare has hop/sniff timers, the weather
-// system has rain and wind states), so each is about one line at an existing
-// transition. What's missing is the pacing, and that's a judgement call about
-// a bedtime app rather than a wiring one: how often an idle wolf should howl
-// before it grates, whether the nature beds loop everywhere or only in their
-// own zone, whether they duck under a spoken line. Emptying this object is
-// the definition of that job being done.
-const PENDING_AMBIENT = [
-  'hare.idleHop', 'hare.sniff', 'hare.startled',
-  'wolf.headSweep', 'wolf.howl', 'wolf.snapMiss',
-  'bear.scratch', 'bear.grunt', 'bear.swipeMiss',
-  'fox.tailSway', 'fox.purr', 'fox.flatterCoo', 'fox.lipLick',
-  'grandma.hum', 'grandma.tapReaction', 'grandma.knitClick',
-  'owl.hoot', 'hedgehog.waddle', 'hedgehog.squeak',
-  'crow.caw', 'crow.wingFlap', 'ridgeBird.peck',
-  'bee.buzz', 'butterfly.flutter',
-  'ambience.wind', 'ambience.rain', 'ambience.thunder', 'ambience.pondRipple',
-  'ambience.forestBirds', 'ambience.nightCrickets', 'ambience.izbaFire', 'ambience.leaves',
-];
-
 // Slots with no trigger, on purpose, with the reason.
 const KNOWN_UNTRIGGERED = {
-  ...Object.fromEntries(PENDING_AMBIENT.map((id) => [id, 'ambient layer, not wired yet'])),
   // The press-and-hold this belonged to was removed after live feedback
   // ("I have to hold it down for so long... I don't like that") -- the pipe
   // is a plain tap now, and nothing closes it.
@@ -162,10 +139,9 @@ const ids = new Set(slots.map((s) => s.id));
 const ghosts = Object.keys(KNOWN_UNTRIGGERED).filter((k) => !ids.has(k));
 check('KNOWN_UNTRIGGERED names only real slots', ghosts.length === 0, ghosts.join(', '));
 
-const deliberate = Object.entries(KNOWN_UNTRIGGERED).filter(([id]) => !PENDING_AMBIENT.includes(id));
-const wired = slots.length - Object.keys(KNOWN_UNTRIGGERED).length;
+const deliberate = Object.entries(KNOWN_UNTRIGGERED);
+const wired = slots.length - deliberate.length;
 console.log(`\n  ${wired}/${slots.length} slots wired.`);
-console.log(`  ${PENDING_AMBIENT.length} ambient slots pending (idle animals + weather beds).`);
 console.log(`  ${deliberate.length} deliberately silent:`);
 for (const [id, why] of deliberate) console.log(`    ${id} — ${why}`);
 

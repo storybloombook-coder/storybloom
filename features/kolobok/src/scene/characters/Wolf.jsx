@@ -6,6 +6,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { makeEdge, onRise, varied } from '../idleSound';
 import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#7d8a96';
@@ -59,6 +60,9 @@ export function Wolf({ mode, isActiveZone }) {
     shakeT: 1,
     approachZ: 0, snapT: 0,
     wetShake: initWetShakeState(),
+    sndHowl: makeEdge(),
+    sndSweep: makeEdge(),
+    sndSnap: makeEdge(),
     greetWave: initGreetWaveState(),
   });
 
@@ -88,6 +92,10 @@ export function Wolf({ mode, isActiveZone }) {
         if (s.howlTimeline > 600 + 900 + 500) { s.howling = false; s.howlTimeline = 0; }
       }
     }
+    // The howl itself, the head reaching the end of a sweep, and the lunge
+    // that snaps shut on nothing.
+    onRise(s.sndHowl, s.howling, isActiveZone, 'wolf.howl', varied(0.5));
+    onRise(s.sndSweep, Math.sin(s.sweepPhase) > 0.995, isActiveZone, 'wolf.headSweep', varied(0.25));
     let howlPitch = 0;
     if (s.howling) {
       if (s.howlTimeline < 600) howlPitch = (s.howlTimeline / 600) * ((35 * Math.PI) / 180);
@@ -119,6 +127,7 @@ export function Wolf({ mode, isActiveZone }) {
       // the only thing that moves on top of it during react.
       if (encounterMotion.phase === 'approach') s.approachZ = 0.6 * encounterMotion.phaseT;
       s.snapT = encounterMotion.phase === 'react' ? encounterMotion.phaseT : 0;
+      onRise(s.sndSnap, encounterMotion.phase === 'react', true, 'wolf.snapMiss', varied(0.75));
     } else if (!isMine) {
       s.approachZ = 0;
       s.snapT = 0;

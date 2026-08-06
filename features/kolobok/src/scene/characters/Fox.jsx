@@ -6,6 +6,7 @@ import { encounterMotion, storyMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { makeEdge, onRise, varied } from '../idleSound';
 import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#d9722f';
@@ -56,6 +57,10 @@ export function Fox({ mode, isActiveZone }) {
   }), []);
 
   const state = useRef({
+    sndSway: makeEdge(),
+    sndPurr: makeEdge(),
+    sndCoo: makeEdge(),
+    sndLick: makeEdge(),
     swayPhase: 0,
     baseAngle: 0,
     tipAngle: 0,
@@ -112,6 +117,12 @@ export function Fox({ mode, isActiveZone }) {
         if (s.tiltT >= 1) { s.tilting = false; s.tiltT = 0; }
       }
     }
+    // Her tail brushing through the far end of its sway, a purr with the
+    // head tilt, then the flattery and the lip-lick of an encounter.
+    onRise(s.sndSway, Math.sin(s.swayPhase) > 0.995, isActiveZone, 'fox.tailSway', varied(0.22));
+    onRise(s.sndPurr, s.tilting, isActiveZone, 'fox.purr', varied(0.35));
+    onRise(s.sndCoo, encounterMotion.phase === 'approach', true, 'fox.flatterCoo', varied(0.5));
+    onRise(s.sndLick, encounterMotion.phase === 'react', true, 'fox.lipLick', varied(0.6));
     const headTilt = s.tilting ? Math.sin(Math.min(s.tiltT, 1) * Math.PI) * ((12 * Math.PI) / 180) : 0;
 
     // --- Encounter (ANIMATION_SPEC §5): glide 0.5 toward path, no hop ---

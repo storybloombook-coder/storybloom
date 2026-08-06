@@ -8,6 +8,7 @@ import { encounterMotion } from '../../state/sceneStore';
 import { makeToonMaterial } from '../materials/toonMaterial';
 import { BlobShadow } from '../BlobShadow';
 import { initWetShakeState, tickWetShake } from '../wetShake';
+import { makeEdge, onRise, varied } from '../idleSound';
 import { initGreetWaveState, tickGreetWave } from '../greetWave';
 
 const FUR = '#8a6444';
@@ -59,6 +60,9 @@ export function Bear({ mode, isActiveZone }) {
   const state = useRef({
     rollPhase: Math.random() * Math.PI * 2,
     nextScratchIn: 5 + Math.random() * 5,
+    sndScratch: makeEdge(),
+    sndGrunt: makeEdge(),
+    sndSwipe: makeEdge(),
     scratching: false,
     scratchT: 0,
     scratchSide: 1,
@@ -78,6 +82,11 @@ export function Bear({ mode, isActiveZone }) {
 
     // --- Wet shake-off (BACKLOG.md #1), idle only ---
     const wetShake = tickWetShake(s.wetShake, dt, mode === 'idle');
+    // The scratch against the spruce, a grunt as it starts, and the swipe
+    // that goes wide during an encounter.
+    onRise(s.sndScratch, s.scratching, isActiveZone, 'bear.scratch', varied(0.45));
+    onRise(s.sndGrunt, s.scratching, isActiveZone, 'bear.grunt', varied(0.35));
+    onRise(s.sndSwipe, encounterMotion.phase === 'react', true, 'bear.swipeMiss', varied(0.75));
 
     // --- Every ~10s, raise one arm and scratch: +-12deg at 6Hz for 900ms ---
     if (mode === 'idle') {
