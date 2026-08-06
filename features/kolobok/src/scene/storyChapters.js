@@ -103,7 +103,12 @@ const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2],
 // window, and is folded into COOKING_DELTA so every beat from the pop onward
 // keeps its own relative pacing (same trick, same reason). The matching sound
 // slot (dialogue.bake1) was doubled to suit.
-const BAKE1_HOLD = 1800;
+// Sized so the gap to bake1b is at least dialogue.bake1's own 6000ms: the
+// voice channel is a single shared player, so the next line doesn't mix with
+// this one, it replaces it. At the old 1800 the line was cut off 2400ms
+// short -- doubling the sound without doubling the gap by the same amount is
+// exactly how that happens. See __tests__/dialogueWindows.test.js.
+const BAKE1_HOLD = 4200;
 const COOKING_DELTA = 3200 + BAKE1_HOLD;
 
 /** Chapter 0 — Birth (~11s, STORY_SPEC §3 + a visible cooking lead-in). */
@@ -194,7 +199,11 @@ function buildAnimalChapter(zoneId, bragKey) {
       // it was the same 1600ms everywhere. The matching sound slots
       // (dialogue.brag*) were stretched to suit.
       { at: 6400, call: () => ctx.setNarration(bragKey) },
-      { at: 6400 + Math.round(1600 * 1.5), call: () => {} },
+      // Held for the length of the brag's own audio (dialogue.brag* is
+      // 4500ms) rather than an independently-chosen number. Nothing cuts
+      // this line off -- it's the last of its chapter -- but at the old
+      // 2400ms the bubble vanished while the narrator was still speaking.
+      { at: 6400 + 4500, call: () => {} },
     ]);
     return { composite: composeTimelines(beat, pads), startAngle: angle, framing: { ...FRAMING[zoneId] } };
   };
@@ -321,7 +330,14 @@ export function foxCatchRebirthSteps(ctx, at0 = 0) {
 // to move everything after it or the choreography desynchronises from the
 // words. Doing it this way also keeps the literal timings below readable as
 // the beat sheet they came from.
-const FOX_PHRASE_GAP = 700; // extra breath after each of her first two lines
+// Sized by the LINES, not by taste: the voice channel is one shared player,
+// so a phrase that starts before the previous one has finished replaces it
+// mid-word. At the original 700 the fox's intro was cut off 1.6s short and
+// "what a lovely song" 2.4s short. 2000 clears the longest of the three
+// (dialogue.foxFlatter at 4400ms) once the x1.2 scale below is applied.
+// Checked by __tests__/dialogueWindows.test.js -- raise a slot's duration
+// and that test tells you if this needs to move with it.
+const FOX_PHRASE_GAP = 2000;
 const FOX_FINALE_SCALE = 1.2; // and then +20% over the whole thing
 
 /** Push every beat at or after `from` back by `by` ms. */
