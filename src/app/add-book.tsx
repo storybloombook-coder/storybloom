@@ -24,6 +24,7 @@ import PhotoEditor from '../components/PhotoEditor';
 import TactileButton from '../components/TactileButton';
 import { SOUND_ALLOWLISTS } from '../lib/ai/soundLibrary';
 import { createVisionProvider } from '../lib/vision';
+import { base64ForOcr } from '../lib/vision/ocrImage';
 import { createBook, createCue, createPage, setBookPrepStatus, updatePagePrepResult } from '../lib/db';
 import { t, useLocaleStore } from '../lib/i18n';
 import type { BookLanguage } from '../lib/types';
@@ -236,7 +237,9 @@ export default function AddBookScreen() {
         });
 
         try {
-          const base64 = await destFile.base64();
+          // Downscaled for the recognizer only — the full-size original is
+          // what was just copied to destFile and is what the app displays.
+          const base64 = await base64ForOcr(destFile.uri, page.width, page.height);
           const result = await vision.preparePage({
             imageBase64: base64,
             imageMimeType: 'image/jpeg',

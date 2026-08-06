@@ -44,6 +44,7 @@ import { createVoskRecognizer } from '../../lib/speech/vosk';
 import type { SpeechLang } from '../../lib/speech/types';
 import type { Book, Cue, Page } from '../../lib/types';
 import { createVisionProvider } from '../../lib/vision';
+import { base64ForOcr } from '../../lib/vision/ocrImage';
 
 type WorkingImage = { uri: string; width: number; height: number };
 
@@ -234,7 +235,9 @@ export default function BookDetailScreen() {
         nextPageNumber += 1;
 
         try {
-          const base64 = await destFile.base64();
+          // Downscaled for the recognizer only — the full-size original is
+          // what was just copied to destFile and is what the app displays.
+          const base64 = await base64ForOcr(destFile.uri, photo.width, photo.height);
           const result = await vision.preparePage({
             imageBase64: base64,
             imageMimeType: 'image/jpeg',
