@@ -483,8 +483,16 @@ function VolumeBar({ slotId, player, locale, onCommit }) {
   );
 }
 
+/** Shortest window a range drag can squeeze to, so the two handles can never
+ *  meet and leave a zero-length clip. */
+const MIN_RANGE_MS = 500;
+
 function TrimStrip({
   waveform, startMs, durMs, takeMs, locale, player, playing, onChangeStart,
+  // `range` gives the strip TWO handles instead of one sliding window. Fixed
+  // slots have a target length, so their window is a constant width you move;
+  // an unlimited take (My Ambience) has no target, so both edges are yours.
+  range = false,
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   // Live feedback (round 2): "sliding the piece of sound still feels laggy."
@@ -498,31 +506,67 @@ function TrimStrip({
   // take remounts this component and the initial value is simply the seed --
   // no effect syncing a prop into state, and no cascading render.
   const [localStart, setLocalStart] = useState(startMs);
+  // Range mode (My Ambience) drags TWO edges, because an unlimited take has
+  // no target length to slide a fixed window along — the window IS whatever
+  // you choose. localEnd is only meaningful when `range` is set.
+  const [localEnd, setLocalEnd] = useState(() => Math.min(takeMs, startMs + durMs));
+  const effEnd = range ? localEnd : Math.min(takeMs, localStart + durMs);
 
   const liveRef = useRef(null);
   useEffect(() => {
     liveRef.current = {
-      start: localStart, width: size.width, durMs, takeMs, onChangeStart,
+      start: localStart, end: effEnd, range, width: size.width, durMs, takeMs, onChangeStart,
     };
   });
   const dragOriginRef = useRef(0);
+  const dragEndOriginRef = useRef(0);
+  const grabbedRef = useRef('start');
 
   const [pan] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { dragOriginRef.current = liveRef.current?.start ?? 0; },
+    onPanResponderGrant: (e) => {
+      const l = liveRef.current;
+      dragOriginRef.current = l?.start ?? 0;
+      dragEndOriginRef.current = l?.end ?? 0;
+      // Range mode: whichever edge the finger landed nearer is the one it
+      // moves. A fixed-length slot has only one edge to drag, so it always
+      // grabs the start.
+      if (l?.range && l.width) {
+        const x = e.nativeEvent.locationX;
+        const span = Math.max(1, l.takeMs);
+        const startX = l.width * (l.start / span);
+        const endX = l.width * (l.end / span);
+        grabbedRef.current = Math.abs(x - startX) <= Math.abs(x - endX) ? 'start' : 'end';
+      } else {
+        grabbedRef.current = 'start';
+      }
+    },
     onPanResponderMove: (_e, g) => {
       const l = liveRef.current;
       if (!l?.width || !l.takeMs) return;
-      const maxStart = Math.max(0, l.takeMs - l.durMs);
       const deltaMs = (g.dx / l.width) * l.takeMs;
-      setLocalStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
+      if (!l.range) {
+        // Fixed window: the whole selection slides, its width is the slot's.
+        const maxStart = Math.max(0, l.takeMs - l.durMs);
+        setLocalStart(Math.max(0, Math.min(maxStart, dragOriginRef.current + deltaMs)));
+        return;
+      }
+      // Range: the grabbed edge moves alone, and can't cross the other one
+      // or squeeze the window below MIN_RANGE_MS.
+      if (grabbedRef.current === 'start') {
+        const limit = l.end - MIN_RANGE_MS;
+        setLocalStart(Math.max(0, Math.min(limit, dragOriginRef.current + deltaMs)));
+      } else {
+        const limit = l.start + MIN_RANGE_MS;
+        setLocalEnd(Math.min(l.takeMs, Math.max(limit, dragEndOriginRef.current + deltaMs)));
+      }
     },
     // Commit to the parent once, at the end of the gesture -- that's all
     // Confirm needs, and it keeps the expensive tree out of the drag.
     onPanResponderRelease: () => {
       const l = liveRef.current;
-      if (l) l.onChangeStart(l.start);
+      if (l) l.onChangeStart(l.start, l.range ? l.end : undefined);
     },
   }));
 
@@ -530,7 +574,7 @@ function TrimStrip({
   // stopping early has to give a strip that spans only what was recorded.
   const span = Math.max(1, takeMs);
   const selLeft = size.width * (localStart / span);
-  const selWidth = Math.max(12, size.width * Math.min(1, durMs / span));
+  const selWidth = Math.max(12, size.width * Math.min(1, (effEnd - localStart) / span));
 
   return (
     <>
@@ -562,7 +606,7 @@ function TrimStrip({
     <Text style={styles.trimReadout}>
       {formatSeconds(localStart)}
       {' – '}
-      {formatSeconds(Math.min(takeMs, localStart + durMs))}
+      {formatSeconds(effEnd)}
       {t('sound.unit.seconds', locale)}
       {'  /  '}
       {formatSeconds(takeMs)}
@@ -590,6 +634,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [pendingUri, setPendingUri] = useState(null);
   const [waveform, setWaveform] = useState([]);
   const [trimStartMs, setTrimStartMs] = useState(0);
+  // Only meaningful for unlimited (range) slots; 0 means "use the fixed
+  // window" and the fixed path ignores it entirely.
+  const [trimEndMs, setTrimEndMs] = useState(0);
   // Actual length of the take, which is SEGMENT_MS only when it ran to the
   // auto-stop -- pressing Stop early makes it shorter, and the trim strip
   // has to span what was really recorded.
@@ -732,22 +779,20 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     const uri = recorder.uri;
     if (!uri) { setPhase('idle'); setFlowSlotId(null); return; }
     const slot = getSlotDefinition(flowSlotId);
-    // Ambient (unlimited) slots have no target length to fit, so there's
-    // nothing to trim TO -- they save the whole take exactly as before.
-    if (slot?.unlimited) {
-      saveRecordingForSlot(flowSlotId, uri);
-      setRefreshTick((v) => v + 1);
-      setPhase('saved');
-      return;
-    }
-    // Everything else goes to the trim editor immediately -- the waveform
-    // was already built while recording (see the metering poll below), so
-    // there's nothing to process and no wait.
+    // EVERY take goes to the trim editor now, ambient included. It used to
+    // save unlimited slots whole, on the grounds that with no target length
+    // there was nothing to trim TO — but that confused "no fixed window" with
+    // "no trimming": a loop still wants its silent lead-in and its fumble at
+    // the end taken off. Unlimited slots get a two-handle strip instead of a
+    // fixed one (see TrimStrip's `range`), so the window IS whatever you pick.
     const takenMs = Math.max(1, Date.now() - recordStartedAt);
     setPendingUri(uri);
     setWaveform(buildWaveform(scanPeaksRef.current));
     setTakeMs(takenMs);
     setTrimStartMs(0);
+    // The whole take to begin with, so confirming without touching anything
+    // keeps exactly what was recorded — the old behaviour, as the default.
+    setTrimEndMs(slot?.unlimited ? takenMs : 0);
     setPhase('trimming');
   };
 
@@ -973,6 +1018,11 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setWaveform(trim.waveform);
     setTakeMs(trim.takeMs);
     setTrimStartMs(trim.startMs ?? 0);
+    // Range slots restore the end they were saved with, so reopening shows
+    // the window you chose rather than the whole take again.
+    setTrimEndMs(getSlotDefinition(slotId)?.unlimited
+      ? (trim.startMs ?? 0) + (trim.durMs ?? trim.takeMs)
+      : 0);
     setPhase('trimming');
     return true;
   };
@@ -1063,7 +1113,11 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       startMs: Math.round(trimStartMs),
       // A take stopped early can be shorter than the slot's target -- save
       // what actually exists rather than a window running past the file end.
-      durMs: Math.round(Math.min(flowSlot.durationMs, takeMs - trimStartMs)),
+      // Unlimited slots have no target length -- the window is exactly what
+      // the two handles chose. Fixed slots keep the old rule.
+      durMs: Math.round(flowSlot.unlimited
+        ? Math.max(1, (trimEndMs || takeMs) - trimStartMs)
+        : Math.min(flowSlot.durationMs, takeMs - trimStartMs)),
       takeMs: Math.round(takeMs),
       waveform,
     });
@@ -1310,12 +1364,21 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                         key={`${flowSlotId}:${takeMs}`}
                         waveform={waveform}
                         startMs={trimStartMs}
-                        durMs={Math.min(flowSlot.durationMs, takeMs)}
+                        // For a range slot this seeds the second handle
+                        // (start + durMs = end); for a fixed one it's the
+                        // constant width of the window being slid.
+                        durMs={flowSlot.unlimited
+                          ? Math.max(1, (trimEndMs || takeMs) - trimStartMs)
+                          : Math.min(flowSlot.durationMs, takeMs)}
                         takeMs={takeMs}
                         locale={locale}
                         player={editPlayer}
                         playing={trimPlaying}
-                        onChangeStart={setTrimStartMs}
+                        range={!!flowSlot.unlimited}
+                        onChangeStart={(startMs, endMs) => {
+                          setTrimStartMs(startMs);
+                          if (endMs !== undefined) setTrimEndMs(endMs);
+                        }}
                       />
                     </View>
                     <VolumeBar
