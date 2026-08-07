@@ -35,20 +35,9 @@ function check(name, cond, detail = '') {
   }
 }
 
-// Slots with no trigger, on purpose, with the reason.
-const KNOWN_UNTRIGGERED = {
-  // The press-and-hold this belonged to was removed after live feedback
-  // ("I have to hold it down for so long... I don't like that") -- the pipe
-  // is a plain tap now, and nothing closes it.
-  'chimney.pipeClose': 'its press-and-hold interaction was removed',
-  // Would layer under EVERY spoken line. The voice channel and the effects
-  // pool are separate, so it would genuinely overlap rather than cut -- but
-  // a chime on top of every narration is a pacing decision, not a wiring gap.
-  'ui.narrationAppear': 'would sound under every narration line; needs a pacing call',
-  // Fires whenever the nearest zone changes, which during a fling is five
-  // times in a second. Needs a settle/velocity gate before it's pleasant.
-  'ui.zoneSettle': 'would fire repeatedly mid-fling; needs a settle gate',
-};
+// Every slot is wired now. This stays as the place to record anything
+// deliberately left silent, with the reason it is.
+const KNOWN_UNTRIGGERED = {};
 
 // ---- parse the registry -------------------------------------------------
 const slots = [];

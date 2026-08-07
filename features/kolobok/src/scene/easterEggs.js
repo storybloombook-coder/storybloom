@@ -271,6 +271,10 @@ export const eggManager = {
   // above -- every release now fires, no exceptions.
   tapChimney() {
     eggMotion.chimneySmokeBurst += 1;
+    // The finger landing on the pipe, then what comes out of it. Two
+    // different sounds at one instant is what the 6-deep pool is FOR; the
+    // knock sits under the puff rather than competing with it.
+    playSlot('chimney.pipeClose', { volume: 0.4 });
     playSlot('chimney.bubbleRelease');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     useSceneStore.getState().recordEggFound('smoke-rings');

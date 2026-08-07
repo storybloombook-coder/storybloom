@@ -7,7 +7,12 @@ import {
   orbit, encounterMotion, storyMotion, story, useSceneStore,
 } from '../state/sceneStore';
 import { createTimeline } from './timeline';
+import { playSlot } from '../services/soundLibrary';
 import { polish } from '../config/devFlags';
+
+/** Below this angular speed the camera is arriving at a zone rather than
+ *  flying past it — see ui.zoneSettle's own comment below. */
+const ZONE_SETTLE_MAX_VELOCITY = 0.004;
 
 // After the user stops steering the camera, how long before it counts as
 // "idle" again and eases back to auto-following Kolobok + dialogues (smoothly
@@ -251,6 +256,13 @@ export function CameraRig() {
     if (zone.id !== lastActive.current) {
       lastActive.current = zone.id;
       setActiveZone(zone.id);
+      // ui.zoneSettle marks ARRIVING somewhere, not passing through it. A
+      // fling crosses several zones in a second, and a chime per crossing
+      // would be a slot machine — so it only sounds once the camera is
+      // actually coming to rest here.
+      if (Math.abs(orbit.velocity) < ZONE_SETTLE_MAX_VELOCITY && !orbit.freeLookActive) {
+        playSlot('ui.zoneSettle', { volume: 0.3 });
+      }
       if (!storyMotion.framing) retargetFraming(f, zone.framing);
     }
     if (storyMotion.framing && storyMotion.framing !== f.storyKey) {

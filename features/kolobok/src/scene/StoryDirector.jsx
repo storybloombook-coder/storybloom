@@ -75,6 +75,11 @@ export function StoryDirector() {
     ctxRef.current = {
       setNarration: (lineKey, speaker) => {
         s.setNarration(lineKey, speaker);
+        // The bubble arriving. Quiet, and on the effects pool rather than
+        // the voice channel, so it layers UNDER the line instead of
+        // replacing it -- which is the only reason it's tolerable on every
+        // line rather than intrusive.
+        if (lineKey) playSlot('ui.narrationAppear', { volume: 0.22 });
         const soundSlot = lineKey ? NARRATION_SOUND_SLOT[lineKey] : null;
         if (soundSlot) playSlot(soundSlot);
       },
