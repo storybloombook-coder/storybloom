@@ -258,6 +258,10 @@ export function IzbaAmbience({ isActiveZone, chimneyPos = [0.55, 1.95, 0.15] }) 
     birdNextIn: 10 + Math.random() * 8,
     birdT: -1,
     birdPhase: 'land', // land -> peck -> fly
+    sndKnit: makeEdge(),
+    sndHum: makeEdge(),
+    sndTapReact: makeEdge(),
+    sndPeck: makeEdge(),
   });
 
   useZoneFrame(isActiveZone, (_, delta) => {

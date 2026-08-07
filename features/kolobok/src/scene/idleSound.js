@@ -37,6 +37,14 @@ export function makeEdge() {
  * moment you happen to turn toward it.
  */
 export function onRise(edge, active, audible, slotId, opts) {
+  // A missing edge is a coding mistake -- someone added an onRise call and
+  // forgot the matching `field: makeEdge()` on the component's state ref.
+  // It used to throw, and because these run inside useFrame that took the
+  // ENTIRE 3D scene down to the error boundary: one absent object, no
+  // island. The mistake is caught before it ships (soundRegistry.test.js
+  // cross-checks every call against its declaration), so this is purely a
+  // blast radius limiter -- lose one sound, not the scene.
+  if (!edge) return;
   const rising = active && !edge.was;
   edge.was = active;
   if (!rising || !audible) return;

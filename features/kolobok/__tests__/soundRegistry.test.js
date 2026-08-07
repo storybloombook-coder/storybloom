@@ -139,6 +139,36 @@ const ids = new Set(slots.map((s) => s.id));
 const ghosts = Object.keys(KNOWN_UNTRIGGERED).filter((k) => !ids.has(k));
 check('KNOWN_UNTRIGGERED names only real slots', ghosts.length === 0, ghosts.join(', '));
 
+// ---- every onRise edge is actually declared ------------------------------
+//
+// onRise(s.sndHowl, ...) needs a matching `sndHowl: makeEdge()` on that
+// component's state ref. Miss one and it reads `.was` off undefined —
+// which, because these run inside useFrame, took the whole 3D scene down to
+// the error boundary. That shipped once: four edges in ZoneAmbience were
+// used and never declared, and the island simply didn't load.
+//
+// Nothing catches it earlier. It's valid JS, eslint sees a property access
+// on an object it can't reason about, and the bundle builds fine.
+{
+  const undeclared = [];
+  for (const file of walk(SRC)) {
+    const name = file.split(/[\\/]/).pop();
+    if (name === 'idleSound.js') continue; // where onRise is defined, not called
+    const src = fs.readFileSync(file, 'utf8');
+    if (!src.includes('onRise(')) continue;
+    // Whatever the last path segment is: `s.sndHowl` -> sndHowl,
+    // `snd.current.waddle` -> waddle, `b.sndFlutter` -> sndFlutter.
+    for (const m of src.matchAll(/onRise\(\s*[\w.]*?([\w]+)\s*,/g)) {
+      const field = m[1];
+      if (!new RegExp(`\\b${field}\\s*:\\s*makeEdge\\(\\)`).test(src)) {
+        undeclared.push(`${name}: onRise(...${field}) has no '${field}: makeEdge()'`);
+      }
+    }
+  }
+  check('every onRise edge is declared with makeEdge()', undeclared.length === 0,
+    `\n      ${undeclared.join('\n      ')}`);
+}
+
 const deliberate = Object.entries(KNOWN_UNTRIGGERED);
 const wired = slots.length - deliberate.length;
 console.log(`\n  ${wired}/${slots.length} slots wired.`);
