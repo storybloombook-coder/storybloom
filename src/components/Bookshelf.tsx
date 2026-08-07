@@ -1147,8 +1147,17 @@ function ShelfPage({
     // even with the shelf otherwise fully asleep.
     const bounceSpring = -bounceY.value * BOUNCE_STIFFNESS;
     const bounceDamping = -bounceVY.value * BOUNCE_DAMPING;
-    bounceVY.value += (bounceSpring + bounceDamping + jerkY.value * BOUNCE_STRENGTH) * dt;
-    bounceY.value = Math.min(BOUNCE_MAX, Math.max(-BOUNCE_MAX, bounceY.value + bounceVY.value * dt));
+    const nextVY = bounceVY.value + (bounceSpring + bounceDamping + jerkY.value * BOUNCE_STRENGTH) * dt;
+    const nextY = Math.min(BOUNCE_MAX, Math.max(-BOUNCE_MAX, bounceY.value + nextVY * dt));
+    // ONLY write when the value actually moved. Every spine reads bounceY in
+    // two animated styles, so an unconditional write invalidated 2xN styles
+    // sixty times a second whether or not the shelf was doing anything --
+    // measured at ~40% of a core on a settled shelf, indefinitely, on a
+    // screen the user is only scrolling. At rest the spring and damping are
+    // both zero, so this comparison is exactly false and the styles stop
+    // being touched at all.
+    if (nextVY !== bounceVY.value) bounceVY.value = nextVY;
+    if (nextY !== bounceY.value) bounceY.value = nextY;
 
     // Gravity follows the phone. Past the deadzone the shelf's "down" tips
     // sideways, and everything on it responds through the same contacts
