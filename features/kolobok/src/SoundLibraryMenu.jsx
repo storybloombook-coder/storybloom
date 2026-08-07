@@ -1744,6 +1744,11 @@ const styles = StyleSheet.create({
     paddingVertical: VOLUME_TOUCH_PAD,
     alignItems: 'center',
     justifyContent: 'flex-start',
+    // Pulls the TRACK's top up to meet the waveform's own marginTop, so the
+    // two 72-tall boxes line up. Aligning their tops aligns their centres,
+    // since they're the same height — the bar used to sit a whole pad lower
+    // than the sound bar it stands beside.
+    marginTop: 6 - VOLUME_TOUCH_PAD,
   },
   volumeTrack: {
     width: VOLUME_BAR_W,
@@ -1756,6 +1761,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     borderRadius: VOLUME_BAR_W / 2,
     backgroundColor: '#f0dbe4',
+    // Without an edge the empty track is nearly the same value as the card
+    // behind it, so a sound turned all the way down read as no control at
+    // all rather than as one set to zero.
+    borderWidth: 1,
+    borderColor: 'rgba(122,51,80,0.35)',
     justifyContent: 'flex-end',
     // The dot is wider than the track and must not be clipped by it.
     overflow: 'visible',
