@@ -62,9 +62,23 @@ export default function HomeScreen() {
   // leave the underlying ExoPlayer paused after the view was hidden behind
   // another screen, so without this the background freezes on a static
   // frame the next time this screen regains focus instead of resuming.
+  // ...and PAUSE it again on the way out, which is the half that was
+  // missing. expo-router keeps this screen mounted rather than destroying it
+  // (that's why the resume above is needed at all), so without a matching
+  // pause the video kept decoding full-screen behind every other screen in
+  // the app, for the whole session. Measured on device: the Library — a
+  // plain list with no video and no 3D — sat at 182% CPU purely because of
+  // this. That is where the phone's warmth was coming from, not the 3D scene.
   useFocusEffect(
     useCallback(() => {
       backgroundPlayer.play();
+      return () => {
+        try {
+          backgroundPlayer.pause();
+        } catch {
+          // Player already released — nothing left to pause.
+        }
+      };
     }, [backgroundPlayer])
   );
 
