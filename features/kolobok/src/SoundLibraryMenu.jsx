@@ -375,6 +375,11 @@ const VOLUME_BAR_H = 72;
  *  the expensive part of the drag. 40ms is faster than anyone hears a step
  *  and roughly a third of the calls. */
 const AUDIO_THROTTLE_MS = 40;
+/** Padding around the visible bar that still counts as touching it. The bar
+ *  is 17px wide; a target that small is genuinely hard to hit, so the column
+ *  carrying the gesture is 44 wide with room above and below too. */
+const VOLUME_TOUCH_W = 44;
+const VOLUME_TOUCH_PAD = 14;
 
 /** Vertical level control: drag the dot up for louder, down for quieter.
  *
@@ -386,7 +391,7 @@ const AUDIO_THROTTLE_MS = 40;
  *  and once more on release (which is what gets written to the manifest) —
  *  the same split TrimStrip uses, for the same reason: persisting every frame
  *  of a drag would write the file dozens of times per gesture. */
-function VolumeBar({ slotId, player, onCommit }) {
+function VolumeBar({ slotId, player, locale, onCommit }) {
   // Seeded from the SLOT, not from a prop mirrored in the parent's state.
   // One source of truth: the manifest. The parent keys this component by
   // slotId, so opening a different sound remounts it and it reads that
@@ -398,7 +403,6 @@ function VolumeBar({ slotId, player, onCommit }) {
   // event, plus a native volume write, which is what made the drag lag the
   // thumb. Now the fill and the dot animate off a shared value and React
   // hears about the level exactly once, on release.
-  const heightRef = useRef(VOLUME_BAR_H);
   const grantRef = useRef(1);
   const lastAudioAtRef = useRef(0);
   const liveRef = useRef({ player, onCommit, slotId });
@@ -416,9 +420,11 @@ function VolumeBar({ slotId, player, onCommit }) {
   };
 
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  /** A tap lands the level where the finger is. Screen y grows downward,
-   *  level grows upward, hence the flip. */
-  const fromTouch = (locationY) => clamp(1 - locationY / Math.max(1, heightRef.current));
+  /** A tap lands the level where the finger is. locationY is relative to the
+   *  padded TOUCH column, so the pad comes off before mapping onto the track;
+   *  the track's own height is a constant, so nothing has to be measured and
+   *  there's no window where a stale measurement gives a wrong level. */
+  const fromTouch = (locationY) => clamp(1 - (locationY - VOLUME_TOUCH_PAD) / VOLUME_BAR_H);
 
   const [pan] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -436,12 +442,12 @@ function VolumeBar({ slotId, player, onCommit }) {
     // thumb. A delta from the grant point can't do that. Up is negative dy,
     // and up means louder.
     onPanResponderMove: (_e, g) => {
-      const v = clamp(grantRef.current - g.dy / Math.max(1, heightRef.current));
+      const v = clamp(grantRef.current - g.dy / VOLUME_BAR_H);
       level.value = v; // UI thread; no render
       applyAudio(v, false);
     },
     onPanResponderRelease: (_e, g) => {
-      const v = clamp(grantRef.current - g.dy / Math.max(1, heightRef.current));
+      const v = clamp(grantRef.current - g.dy / VOLUME_BAR_H);
       level.value = v;
       applyAudio(v, true);
       liveRef.current.onCommit(liveRef.current.slotId, v);
@@ -456,15 +462,23 @@ function VolumeBar({ slotId, player, onCommit }) {
   const fillStyle = useAnimatedStyle(() => ({ height: `${level.value * 100}%` }));
   const dotStyle = useAnimatedStyle(() => ({ bottom: `${level.value * 100}%` }));
 
+  // The thing you touch is deliberately much bigger than the thing you see.
+  // A 17px-wide strip is well under any usable target size, and the dot
+  // can't be one itself (it has to stay pointerEvents:none, or the finger
+  // that grabs it reports coordinates relative to the DOT instead of the
+  // track). So an invisible column carries the gesture, and the slim bar
+  // just draws inside it.
   return (
     <View
-      style={styles.volumeTrack}
-      onLayout={(e) => { heightRef.current = e.nativeEvent.layout.height; }}
+      style={styles.volumeTouch}
       accessibilityRole="adjustable"
+      accessibilityLabel={t('sound.action.balance', locale)}
       {...pan.panHandlers}
     >
-      <Animated.View pointerEvents="none" style={[styles.volumeFill, fillStyle]} />
-      <Animated.View pointerEvents="none" style={[styles.volumeDot, dotStyle]} />
+      <View style={styles.volumeTrack} pointerEvents="none">
+        <Animated.View style={[styles.volumeFill, fillStyle]} />
+        <Animated.View style={[styles.volumeDot, dotStyle]} />
+      </View>
     </View>
   );
 }
@@ -1302,6 +1316,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       key={`vol:${flowSlotId}`}
                       slotId={flowSlotId}
                       player={editPlayer}
+                      locale={locale}
                       // The bar hands back the slot it was built for, not
                       // whatever flowSlotId happens to be by the time the
                       // finger lifts — so a level can only ever land on the
@@ -1716,6 +1731,12 @@ const styles = StyleSheet.create({
   // waveform line up whatever their heights are.
   trimRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, alignSelf: 'stretch' },
   trimStripFlex: { flex: 1, justifyContent: 'center' },
+  volumeTouch: {
+    width: VOLUME_TOUCH_W,
+    paddingVertical: VOLUME_TOUCH_PAD,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
   volumeTrack: {
     width: VOLUME_BAR_W,
     // EXPLICIT height, matching the waveform beside it. Without one the
