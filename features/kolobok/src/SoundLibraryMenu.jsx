@@ -364,10 +364,16 @@ function TrimPlayhead({ player, takeMs, playing }) {
   return <View pointerEvents="none" style={[styles.trimPlayhead, { left: `${frac * 100}%` }]} />;
 }
 
-/** Height of the balancer's track. Tall enough that a finger can place a
- *  level precisely without the dot leaving the card. */
-const VOLUME_BAR_H = 132;
-const VOLUME_DOT = 26;
+/** The balancer's track. Half its first width — it stands beside the waveform
+ *  now, where a fat bar crowded it. */
+const VOLUME_BAR_W = 17;
+const VOLUME_DOT = 19;
+/** Used only until the first onLayout lands. */
+const VOLUME_BAR_H_FALLBACK = 100;
+/** Setting a native player's volume is a bridge call; at touch rate that's
+ *  the expensive part of the drag. 40ms is faster than anyone hears a step
+ *  and roughly a third of the calls. */
+const AUDIO_THROTTLE_MS = 40;
 
 /** Vertical level control: drag the dot up for louder, down for quieter.
  *
@@ -379,50 +385,71 @@ const VOLUME_DOT = 26;
  *  and once more on release (which is what gets written to the manifest) —
  *  the same split TrimStrip uses, for the same reason: persisting every frame
  *  of a drag would write the file dozens of times per gesture. */
-function VolumeBar({ value, onChange, onCommit }) {
-  const [height, setHeight] = useState(VOLUME_BAR_H);
-  // The pan responder is created once, so it can't close over live props —
-  // same liveRef indirection as PlayheadBar/TrimStrip above.
-  const liveRef = useRef({ height: VOLUME_BAR_H, onChange, onCommit });
-  liveRef.current = { height, onChange, onCommit };
+function VolumeBar({ initial, player, onCommit }) {
+  // Position lives on the UI thread. The first version put it in React state
+  // and setState'd on every PanResponder move — a full re-render per touch
+  // event, plus a native volume write, which is what made the drag lag the
+  // thumb. Now the fill and the dot animate off a shared value and React
+  // hears about the level exactly once, on release.
+  const level = useSharedValue(Math.max(0, Math.min(1, initial ?? 1)));
+  const heightRef = useRef(VOLUME_BAR_H_FALLBACK);
+  const lastAudioAtRef = useRef(0);
+  const liveRef = useRef({ player, onCommit });
+  liveRef.current = { player, onCommit };
+
+  const applyAudio = (v, force) => {
+    const now = Date.now();
+    if (!force && now - lastAudioAtRef.current < AUDIO_THROTTLE_MS) return;
+    lastAudioAtRef.current = now;
+    try {
+      liveRef.current.player.volume = v;
+    } catch {
+      // Player already released — the chosen level is still kept.
+    }
+  };
 
   const fromTouch = (locationY) => {
-    const l = liveRef.current;
     // Screen y grows downward, level grows upward.
-    const v = 1 - locationY / Math.max(1, l.height);
+    const v = 1 - locationY / Math.max(1, heightRef.current);
     return Math.max(0, Math.min(1, v));
   };
 
   const [pan] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (e) => liveRef.current.onChange(fromTouch(e.nativeEvent.locationY)),
-    onPanResponderMove: (e) => liveRef.current.onChange(fromTouch(e.nativeEvent.locationY)),
+    onPanResponderGrant: (e) => {
+      const v = fromTouch(e.nativeEvent.locationY);
+      level.value = v;
+      applyAudio(v, true);
+    },
+    onPanResponderMove: (e) => {
+      const v = fromTouch(e.nativeEvent.locationY);
+      level.value = v; // UI thread; no render
+      applyAudio(v, false);
+    },
     onPanResponderRelease: (e) => {
       const v = fromTouch(e.nativeEvent.locationY);
-      liveRef.current.onChange(v);
+      level.value = v;
+      applyAudio(v, true);
       liveRef.current.onCommit(v);
     },
-    onPanResponderTerminate: () => liveRef.current.onCommit(liveRef.current.lastValue ?? 1),
+    onPanResponderTerminate: () => liveRef.current.onCommit(level.value),
   }));
 
-  const filled = Math.max(0, Math.min(1, value));
+  // Filled portion grows from the BOTTOM, so the bar reads as a level rather
+  // than a progress bar running the other way.
+  const fillStyle = useAnimatedStyle(() => ({ height: `${level.value * 100}%` }));
+  const dotStyle = useAnimatedStyle(() => ({ bottom: `${level.value * 100}%` }));
+
   return (
-    <View style={styles.volumeWrap}>
-      <Text style={styles.volumeReadout}>{Math.round(filled * 100)}%</Text>
-      <View
-        style={styles.volumeTrack}
-        onLayout={(e) => setHeight(e.nativeEvent.layout.height)}
-        {...pan.panHandlers}
-      >
-        {/* Filled portion grows from the BOTTOM, so the bar reads as a level
-            rather than a progress bar running the other way. */}
-        <View style={[styles.volumeFill, { height: `${filled * 100}%` }]} />
-        <View
-          pointerEvents="none"
-          style={[styles.volumeDot, { bottom: `${filled * 100}%`, marginBottom: -VOLUME_DOT / 2 }]}
-        />
-      </View>
+    <View
+      style={styles.volumeTrack}
+      onLayout={(e) => { heightRef.current = e.nativeEvent.layout.height; }}
+      accessibilityRole="adjustable"
+      {...pan.panHandlers}
+    >
+      <Animated.View pointerEvents="none" style={[styles.volumeFill, fillStyle]} />
+      <Animated.View pointerEvents="none" style={[styles.volumeDot, dotStyle]} />
     </View>
   );
 }
@@ -540,10 +567,8 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [takeMs, setTakeMs] = useState(SEGMENT_MS);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const trimStopRef = useRef(null);
-  // The per-slot balancer, opened from its own button in the trim actions.
-  // Kept in state alongside the manifest value so the bar can follow a drag
-  // continuously while only WRITING on release — see VolumeBar.
-  const [volumeOpen, setVolumeOpen] = useState(false);
+  // The per-slot balancer. slotVolume seeds the bar when the editor opens;
+  // the bar owns the value during a drag and reports back on release.
   const [slotVolume, setSlotVolumeState] = useState(1);
   // Pop-up player: { slotId, startMs, durMs } while open, null when closed.
   const [playerSlot, setPlayerSlot] = useState(null);
@@ -699,7 +724,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTrimStartMs(0);
     setPhase('trimming');
     // Start the balancer where this slot was last left.
-    setVolumeOpen(false);
     setSlotVolumeState(flowSlotId ? getSlotVolume(flowSlotId) : 1);
   };
 
@@ -920,7 +944,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setPhase('trimming');
     // Start the balancer where this slot was last left. Uses the argument,
     // not flowSlotId — the setState above hasn't landed yet.
-    setVolumeOpen(false);
     setSlotVolumeState(getSlotVolume(slotId));
     return true;
   };
@@ -1052,7 +1075,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // The edit player is SHARED with the pop-up player, so a level auditioned
     // for one slot must not follow the next one in. The chosen value is
     // already saved to the manifest by then; this only resets the preview.
-    setVolumeOpen(false);
     try {
       editPlayer.volume = 1;
     } catch {
@@ -1243,20 +1265,40 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
               {phase === 'trimming' && (
                 <>
                   <Text style={styles.recordStatus}>{t('sound.recording.trimHint', locale)}</Text>
-                  <TrimStrip
-                    // Remount per take: the strip's drag position is local
-                    // state seeded from startMs, so a new/reopened take needs
-                    // a fresh instance rather than an effect syncing it back.
-                    key={`${flowSlotId}:${takeMs}`}
-                    waveform={waveform}
-                    startMs={trimStartMs}
-                    durMs={Math.min(flowSlot.durationMs, takeMs)}
-                    takeMs={takeMs}
-                    locale={locale}
-                    player={editPlayer}
-                    playing={trimPlaying}
-                    onChangeStart={setTrimStartMs}
-                  />
+                  {/* The balancer stands beside the waveform, not below it:
+                      it's a property OF this sound, so it belongs next to the
+                      sound rather than among the actions that finish the
+                      edit. Always visible — a level worth setting is worth
+                      seeing, and a button to reveal one control was a tap
+                      that told you nothing. */}
+                  <View style={styles.trimRow}>
+                    <View style={styles.trimStripFlex}>
+                      <TrimStrip
+                        // Remount per take: the strip's drag position is local
+                        // state seeded from startMs, so a new/reopened take
+                        // needs a fresh instance rather than an effect syncing
+                        // it back.
+                        key={`${flowSlotId}:${takeMs}`}
+                        waveform={waveform}
+                        startMs={trimStartMs}
+                        durMs={Math.min(flowSlot.durationMs, takeMs)}
+                        takeMs={takeMs}
+                        locale={locale}
+                        player={editPlayer}
+                        playing={trimPlaying}
+                        onChangeStart={setTrimStartMs}
+                      />
+                    </View>
+                    <VolumeBar
+                      key={`vol:${flowSlotId}`}
+                      initial={slotVolume}
+                      player={editPlayer}
+                      onCommit={(v) => {
+                        setSlotVolumeState(v);
+                        if (flowSlotId) setSlotVolume(flowSlotId, v);
+                      }}
+                    />
+                  </View>
                   <View style={styles.trimActions}>
                     <TactileButton
                       accessibilityRole="button"
@@ -1278,16 +1320,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                     </TactileButton>
                     <TactileButton
                       accessibilityRole="button"
-                      accessibilityLabel={t('sound.action.balance', locale)}
-                      accessibilityState={{ expanded: volumeOpen }}
-                      style={[styles.trimBtnOuter, volumeOpen && styles.trimBtnActive]}
-                      innerStyle={styles.trimBtnInner}
-                      onPress={() => setVolumeOpen((v) => !v)}
-                    >
-                      <Text style={styles.trimBtnIcon}>🔊</Text>
-                    </TactileButton>
-                    <TactileButton
-                      accessibilityRole="button"
                       accessibilityLabel={t('sound.recording.confirm', locale)}
                       style={[styles.trimBtnOuter, styles.trimBtnConfirm]}
                       innerStyle={styles.trimBtnInner}
@@ -1305,24 +1337,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       <Text style={styles.trimBtnIcon}>✕</Text>
                     </TactileButton>
                   </View>
-                  {volumeOpen && (
-                    <VolumeBar
-                      value={slotVolume}
-                      // Live while dragging: the edit player follows the dot,
-                      // so a level is chosen by ear rather than by number.
-                      onChange={(v) => {
-                        setSlotVolumeState(v);
-                        try {
-                          editPlayer.volume = v;
-                        } catch {
-                          // Player already released — the value is still kept.
-                        }
-                      }}
-                      // Written once, on release. Persisting mid-drag would
-                      // rewrite the manifest dozens of times per gesture.
-                      onCommit={(v) => flowSlotId && setSlotVolume(flowSlotId, v)}
-                    />
-                  )}
                 </>
               )}
               {phase === 'saved' && (
@@ -1686,21 +1700,21 @@ const styles = StyleSheet.create({
   },
   trimBtnInner: { borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
   trimBtnConfirm: { backgroundColor: '#7a3350' },
-  trimBtnActive: { backgroundColor: '#d9b3c4' },
-  // The balancer, shown above the action row while its button is held open.
-  volumeWrap: { alignItems: 'center', gap: 6, marginTop: 10 },
-  volumeReadout: { fontSize: 12, fontWeight: '700', color: '#7a3350', fontVariant: ['tabular-nums'] },
+  // The waveform and its balancer, side by side. The strip takes whatever
+  // width is left so the bar's fixed column never squeezes it.
+  trimRow: { flexDirection: 'row', alignItems: 'stretch', gap: 12, alignSelf: 'stretch' },
+  trimStripFlex: { flex: 1, justifyContent: 'center' },
   volumeTrack: {
-    width: 34,
-    height: VOLUME_BAR_H,
-    borderRadius: 17,
+    width: VOLUME_BAR_W,
+    borderRadius: VOLUME_BAR_W / 2,
     backgroundColor: '#f0dbe4',
-    overflow: 'visible',
     justifyContent: 'flex-end',
+    // The dot is wider than the track and must not be clipped by it.
+    overflow: 'visible',
   },
   volumeFill: {
     width: '100%',
-    borderRadius: 17,
+    borderRadius: VOLUME_BAR_W / 2,
     backgroundColor: '#c98fab',
   },
   volumeDot: {
@@ -1709,6 +1723,8 @@ const styles = StyleSheet.create({
     width: VOLUME_DOT,
     height: VOLUME_DOT,
     borderRadius: VOLUME_DOT / 2,
+    // Centres the dot ON the level rather than sitting above it.
+    marginBottom: -VOLUME_DOT / 2,
     backgroundColor: '#7a3350',
     borderWidth: 3,
     borderColor: '#fff',
