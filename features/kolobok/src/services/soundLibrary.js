@@ -583,7 +583,7 @@ let manifestCache = null;
 // wants every slot to START muted) can never be confused with "has a user
 // recording" (isSlotOverridden below only ever looks at .overrides).
 function emptyManifest() {
-  return { overrides: {}, muted: {}, trims: {} };
+  return { overrides: {}, muted: {}, trims: {}, volumes: {} };
 }
 
 function loadManifest() {
@@ -601,6 +601,9 @@ function loadManifest() {
       // Added after the first manifests shipped -- absent on any older file,
       // which correctly reads as "no trim, play the whole recording".
       trims: parsed.trims ?? {},
+      // Per-slot level, 0..1, set from the sound editor's own balancer.
+      // Absent on any older manifest, which reads as 1 -- unchanged.
+      volumes: parsed.volumes ?? {},
     };
   } catch {
     manifestCache = emptyManifest();
@@ -720,6 +723,41 @@ export function getSlotTrim(slotId) {
   return loadManifest().trims[slotId] ?? null;
 }
 
+// ------------------------------------------------------------ per-slot level
+//
+// Live feedback: a balancer per sound, so one that lands too loud or too shy
+// against the rest can be set right where you hear it. Applies to the slot,
+// not to the recording — a level you chose stays chosen if you re-record.
+//
+// It multiplies whatever the caller already asked for (an idle animal is
+// quiet before this ever applies), and sits under the master volume like
+// everything else. 1 is "as authored", which is what every existing slot
+// reads as, since an older manifest has no volumes at all.
+
+/** Loudest a slot can be set to. Above 1 is amplification the source doesn't
+ *  have headroom for — it would clip rather than get louder. */
+export const SLOT_VOLUME_MAX = 1;
+
+export function getSlotVolume(slotId) {
+  const v = loadManifest().volumes[slotId];
+  return typeof v === 'number' ? v : 1;
+}
+
+export function setSlotVolume(slotId, volume) {
+  const clamped = Math.max(0, Math.min(SLOT_VOLUME_MAX, volume));
+  const manifest = loadManifest();
+  // Don't write the default — it keeps the file to what was actually chosen,
+  // and keeps "never touched" distinguishable from "set back to normal".
+  if (clamped === 1) delete manifest.volumes[slotId];
+  else manifest.volumes[slotId] = clamped;
+  persistManifest();
+  // A loop already running should follow immediately rather than wait for
+  // its next start; natureBeds re-levels every frame, but a my-ambience bed
+  // only changes on a real edge. Pass 1, not `clamped` — updateSlotLoopVolume
+  // multiplies by the slot's level itself, which the line above just saved.
+  updateSlotLoopVolume(slotId, 1);
+}
+
 export function resetSlotToDefault(slotId) {
   const file = recordingFile(slotId);
   if (file.exists) file.delete();
@@ -747,7 +785,14 @@ function channelFor(slotId) {
 export function playSlot(slotId, opts) {
   if (isSlotMuted(slotId)) return;
   playOneShot(getSlotUri(slotId), {
-    channel: channelFor(slotId), trim: getSlotTrim(slotId), ...opts,
+    channel: channelFor(slotId),
+    trim: getSlotTrim(slotId),
+    ...opts,
+    // MULTIPLIES the caller's own level rather than replacing it, and is
+    // applied last so no call site can accidentally drop it. An idle animal
+    // asks for 0.45 because it's background; the balancer then says how loud
+    // THAT sound should be within it.
+    volume: (opts?.volume ?? 1) * getSlotVolume(slotId),
   });
 }
 
@@ -875,10 +920,16 @@ export function previewSlot(slotId) {
 export function startSlotLoop(slotId) {
   if (isSlotMuted(slotId)) return;
   startLoop(slotId, getSlotUri(slotId));
+  // startLoop opens at master level; bring it to this slot's own right away
+  // so a bed never plays even one frame at the wrong volume.
+  updateSlotLoopVolume(slotId, 1);
 }
 
+/** `volume` is the CALLER's level for this loop (natureBeds re-levels every
+ *  frame from the weather); the slot's own balancer multiplies it, same as
+ *  for one-shots. */
 export function updateSlotLoopVolume(slotId, volume) {
-  setLoopVolume(slotId, volume);
+  setLoopVolume(slotId, volume * getSlotVolume(slotId));
 }
 
 export function stopSlotLoop(slotId) {

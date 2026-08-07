@@ -41,6 +41,8 @@ import {
   isSlotOverridden,
   getSlotTrim,
   getSlotUri,
+  getSlotVolume,
+  setSlotVolume,
   isSlotMuted,
   setSlotMuted,
   setAllSlotsMuted,
@@ -362,6 +364,69 @@ function TrimPlayhead({ player, takeMs, playing }) {
   return <View pointerEvents="none" style={[styles.trimPlayhead, { left: `${frac * 100}%` }]} />;
 }
 
+/** Height of the balancer's track. Tall enough that a finger can place a
+ *  level precisely without the dot leaving the card. */
+const VOLUME_BAR_H = 132;
+const VOLUME_DOT = 26;
+
+/** Vertical level control: drag the dot up for louder, down for quieter.
+ *
+ *  Vertical rather than the horizontal sliders elsewhere in this file because
+ *  that's the direction volume runs everywhere else — a mixer fader, a phone's
+ *  own volume keys. Up is more.
+ *
+ *  Reports continuously while dragging (so what you hear tracks your thumb)
+ *  and once more on release (which is what gets written to the manifest) —
+ *  the same split TrimStrip uses, for the same reason: persisting every frame
+ *  of a drag would write the file dozens of times per gesture. */
+function VolumeBar({ value, onChange, onCommit }) {
+  const [height, setHeight] = useState(VOLUME_BAR_H);
+  // The pan responder is created once, so it can't close over live props —
+  // same liveRef indirection as PlayheadBar/TrimStrip above.
+  const liveRef = useRef({ height: VOLUME_BAR_H, onChange, onCommit });
+  liveRef.current = { height, onChange, onCommit };
+
+  const fromTouch = (locationY) => {
+    const l = liveRef.current;
+    // Screen y grows downward, level grows upward.
+    const v = 1 - locationY / Math.max(1, l.height);
+    return Math.max(0, Math.min(1, v));
+  };
+
+  const [pan] = useState(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (e) => liveRef.current.onChange(fromTouch(e.nativeEvent.locationY)),
+    onPanResponderMove: (e) => liveRef.current.onChange(fromTouch(e.nativeEvent.locationY)),
+    onPanResponderRelease: (e) => {
+      const v = fromTouch(e.nativeEvent.locationY);
+      liveRef.current.onChange(v);
+      liveRef.current.onCommit(v);
+    },
+    onPanResponderTerminate: () => liveRef.current.onCommit(liveRef.current.lastValue ?? 1),
+  }));
+
+  const filled = Math.max(0, Math.min(1, value));
+  return (
+    <View style={styles.volumeWrap}>
+      <Text style={styles.volumeReadout}>{Math.round(filled * 100)}%</Text>
+      <View
+        style={styles.volumeTrack}
+        onLayout={(e) => setHeight(e.nativeEvent.layout.height)}
+        {...pan.panHandlers}
+      >
+        {/* Filled portion grows from the BOTTOM, so the bar reads as a level
+            rather than a progress bar running the other way. */}
+        <View style={[styles.volumeFill, { height: `${filled * 100}%` }]} />
+        <View
+          pointerEvents="none"
+          style={[styles.volumeDot, { bottom: `${filled * 100}%`, marginBottom: -VOLUME_DOT / 2 }]}
+        />
+      </View>
+    </View>
+  );
+}
+
 function TrimStrip({
   waveform, startMs, durMs, takeMs, locale, player, playing, onChangeStart,
 }) {
@@ -475,6 +540,11 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [takeMs, setTakeMs] = useState(SEGMENT_MS);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const trimStopRef = useRef(null);
+  // The per-slot balancer, opened from its own button in the trim actions.
+  // Kept in state alongside the manifest value so the bar can follow a drag
+  // continuously while only WRITING on release — see VolumeBar.
+  const [volumeOpen, setVolumeOpen] = useState(false);
+  const [slotVolume, setSlotVolumeState] = useState(1);
   // Pop-up player: { slotId, startMs, durMs } while open, null when closed.
   const [playerSlot, setPlayerSlot] = useState(null);
   const [playerPlaying, setPlayerPlaying] = useState(false);
@@ -628,6 +698,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTakeMs(takenMs);
     setTrimStartMs(0);
     setPhase('trimming');
+    // Start the balancer where this slot was last left.
+    setVolumeOpen(false);
+    setSlotVolumeState(flowSlotId ? getSlotVolume(flowSlotId) : 1);
   };
 
   // Load the take into the preview player as soon as the editor opens.
@@ -845,6 +918,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTakeMs(trim.takeMs);
     setTrimStartMs(trim.startMs ?? 0);
     setPhase('trimming');
+    // Start the balancer where this slot was last left. Uses the argument,
+    // not flowSlotId — the setState above hasn't landed yet.
+    setVolumeOpen(false);
+    setSlotVolumeState(getSlotVolume(slotId));
     return true;
   };
 
@@ -972,6 +1049,15 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     // anything to the slot, so dropping the reference is the whole undo.
     setPendingUri(null);
     setWaveform([]);
+    // The edit player is SHARED with the pop-up player, so a level auditioned
+    // for one slot must not follow the next one in. The chosen value is
+    // already saved to the manifest by then; this only resets the preview.
+    setVolumeOpen(false);
+    try {
+      editPlayer.volume = 1;
+    } catch {
+      // Already released — nothing to restore.
+    }
     stopTrimPreview();
     if (wasRecording) {
       try {
@@ -1192,6 +1278,16 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                     </TactileButton>
                     <TactileButton
                       accessibilityRole="button"
+                      accessibilityLabel={t('sound.action.balance', locale)}
+                      accessibilityState={{ expanded: volumeOpen }}
+                      style={[styles.trimBtnOuter, volumeOpen && styles.trimBtnActive]}
+                      innerStyle={styles.trimBtnInner}
+                      onPress={() => setVolumeOpen((v) => !v)}
+                    >
+                      <Text style={styles.trimBtnIcon}>🔊</Text>
+                    </TactileButton>
+                    <TactileButton
+                      accessibilityRole="button"
                       accessibilityLabel={t('sound.recording.confirm', locale)}
                       style={[styles.trimBtnOuter, styles.trimBtnConfirm]}
                       innerStyle={styles.trimBtnInner}
@@ -1209,6 +1305,24 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       <Text style={styles.trimBtnIcon}>✕</Text>
                     </TactileButton>
                   </View>
+                  {volumeOpen && (
+                    <VolumeBar
+                      value={slotVolume}
+                      // Live while dragging: the edit player follows the dot,
+                      // so a level is chosen by ear rather than by number.
+                      onChange={(v) => {
+                        setSlotVolumeState(v);
+                        try {
+                          editPlayer.volume = v;
+                        } catch {
+                          // Player already released — the value is still kept.
+                        }
+                      }}
+                      // Written once, on release. Persisting mid-drag would
+                      // rewrite the manifest dozens of times per gesture.
+                      onCommit={(v) => flowSlotId && setSlotVolume(flowSlotId, v)}
+                    />
+                  )}
                 </>
               )}
               {phase === 'saved' && (
@@ -1572,6 +1686,38 @@ const styles = StyleSheet.create({
   },
   trimBtnInner: { borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
   trimBtnConfirm: { backgroundColor: '#7a3350' },
+  trimBtnActive: { backgroundColor: '#d9b3c4' },
+  // The balancer, shown above the action row while its button is held open.
+  volumeWrap: { alignItems: 'center', gap: 6, marginTop: 10 },
+  volumeReadout: { fontSize: 12, fontWeight: '700', color: '#7a3350', fontVariant: ['tabular-nums'] },
+  volumeTrack: {
+    width: 34,
+    height: VOLUME_BAR_H,
+    borderRadius: 17,
+    backgroundColor: '#f0dbe4',
+    overflow: 'visible',
+    justifyContent: 'flex-end',
+  },
+  volumeFill: {
+    width: '100%',
+    borderRadius: 17,
+    backgroundColor: '#c98fab',
+  },
+  volumeDot: {
+    position: 'absolute',
+    alignSelf: 'center',
+    width: VOLUME_DOT,
+    height: VOLUME_DOT,
+    borderRadius: VOLUME_DOT / 2,
+    backgroundColor: '#7a3350',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
+  },
   trimBtnIcon: { fontSize: 19, color: '#7a3350' },
   trimBtnIconOnDark: { color: '#fff' },
   // "Read full phrase" popup, triggered from a row's infoIcon. Simple
