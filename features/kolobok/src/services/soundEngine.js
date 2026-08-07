@@ -352,9 +352,14 @@ export function startLoop(slotId, uri, { preview = false } = {}) {
   if (audible) player.play();
 }
 
-export function setLoopVolume(slotId, volume) {
+/** `preview` matches playOneShot's own meaning: skip the master level (so a
+ *  sound can be auditioned with the scene turned down) while still honouring
+ *  whatever level the caller asked for. Without it a previewed LOOP came out
+ *  at master x slot instead of just slot, i.e. far quieter than the one-shot
+ *  preview beside it. */
+export function setLoopVolume(slotId, volume, { preview = false } = {}) {
   const existing = loopPlayers.get(slotId);
-  if (existing) existing.player.volume = masterVolume * volume;
+  if (existing) existing.player.volume = (preview ? 1 : masterVolume) * volume;
 }
 
 export function stopLoop(slotId) {

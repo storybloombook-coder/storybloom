@@ -913,7 +913,13 @@ export function slotForNarration(lineKey) {
 
 export function previewSlot(slotId) {
   playOneShot(getSlotUri(slotId), {
-    preview: true, channel: channelFor(slotId), trim: getSlotTrim(slotId),
+    preview: true,
+    channel: channelFor(slotId),
+    trim: getSlotTrim(slotId),
+    // `preview` bypasses master MUTE, so a sound can be auditioned with the
+    // scene silenced — but it must not bypass the slot's own balance, or the
+    // one place you go to judge a level is the one place it doesn't apply.
+    volume: getSlotVolume(slotId),
   });
 }
 
@@ -942,6 +948,11 @@ export function stopSlotLoop(slotId) {
  *  soundEngine's own {preview:true} additionally bypasses master mute. */
 export function previewSlotLoop(slotId) {
   startLoop(slotId, getSlotUri(slotId), { preview: true });
+  // startLoop opens a preview at full level (that's how it bypasses master
+  // mute); bring it to this slot's own balance straight after, same as
+  // previewSlot does for one-shots. `preview` keeps it out of master, so it
+  // stays as loud as the other preview beside it.
+  setLoopVolume(slotId, getSlotVolume(slotId), { preview: true });
 }
 
 export function stopPreviewSlotLoop(slotId) {

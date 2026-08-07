@@ -763,7 +763,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     if (phase !== 'trimming' || !pendingUri) return undefined;
     try {
       editPlayer.loop = false;
-      editPlayer.volume = 1;
+      // At THIS slot's own level, not 1. A balancer that every preview path
+      // resets is no balancer at all — it's why a sound set to zero still
+      // played at full volume.
+      editPlayer.volume = getSlotVolume(flowSlotId);
       editPlayer.setPlaybackRate(1);
       editPlayer.replace(pendingUri);
     } catch { /* released */ }
@@ -771,7 +774,10 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
       if (trimStopRef.current) { clearTimeout(trimStopRef.current); trimStopRef.current = null; }
       try { editPlayer.pause(); } catch { /* released */ }
     };
-  }, [phase, pendingUri, editPlayer]);
+    // flowSlotId is in here because the level read above is that slot's. In
+    // practice it changes in the same commit as pendingUri, so this doesn't
+    // re-run any more often than before.
+  }, [phase, pendingUri, editPlayer, flowSlotId]);
 
   // Waveform capture, live during the take.
   //
@@ -871,7 +877,9 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setPlayerSlot({ slotId, startMs, durMs });
     try {
       editPlayer.loop = false;
-      editPlayer.volume = 1;
+      // Same reason as the trim editor: the pop-up player is where you check
+      // a sound, so it has to sound the way that sound will.
+      editPlayer.volume = getSlotVolume(slotId);
       editPlayer.setPlaybackRate(1);
       editPlayer.replace(uri);
     } catch { /* released */ }
@@ -1039,7 +1047,7 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     if (!pendingUri || !flowSlot) return;
     if (trimPlaying) { stopTrimPreview(); return; }
     const windowMs = Math.max(1, Math.min(flowSlot.durationMs, takeMs - trimStartMs));
-    editPlayer.volume = 1;
+    editPlayer.volume = getSlotVolume(flowSlotId);
     editPlayer.setPlaybackRate(1);
     setTrimPlaying(true);
     editPlayer.seekTo(trimStartMs / 1000).then(() => {
