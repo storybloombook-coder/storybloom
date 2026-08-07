@@ -368,8 +368,9 @@ function TrimPlayhead({ player, takeMs, playing }) {
  *  now, where a fat bar crowded it. */
 const VOLUME_BAR_W = 17;
 const VOLUME_DOT = 19;
-/** Used only until the first onLayout lands. */
-const VOLUME_BAR_H_FALLBACK = 100;
+/** Track height, matching the waveform it stands beside. FIXED on purpose:
+ *  the dot travels a constant bar, rather than the bar resizing under it. */
+const VOLUME_BAR_H = 72;
 /** Setting a native player's volume is a bridge call; at touch rate that's
  *  the expensive part of the drag. 40ms is faster than anyone hears a step
  *  and roughly a third of the calls. */
@@ -385,17 +386,23 @@ const AUDIO_THROTTLE_MS = 40;
  *  and once more on release (which is what gets written to the manifest) —
  *  the same split TrimStrip uses, for the same reason: persisting every frame
  *  of a drag would write the file dozens of times per gesture. */
-function VolumeBar({ initial, player, onCommit }) {
+function VolumeBar({ slotId, player, onCommit }) {
+  // Seeded from the SLOT, not from a prop mirrored in the parent's state.
+  // One source of truth: the manifest. The parent keys this component by
+  // slotId, so opening a different sound remounts it and it reads that
+  // sound's own level — there's no window in which a level from the last
+  // sound could be shown against this one.
+  const level = useSharedValue(getSlotVolume(slotId));
   // Position lives on the UI thread. The first version put it in React state
   // and setState'd on every PanResponder move — a full re-render per touch
   // event, plus a native volume write, which is what made the drag lag the
   // thumb. Now the fill and the dot animate off a shared value and React
   // hears about the level exactly once, on release.
-  const level = useSharedValue(Math.max(0, Math.min(1, initial ?? 1)));
-  const heightRef = useRef(VOLUME_BAR_H_FALLBACK);
+  const heightRef = useRef(VOLUME_BAR_H);
+  const grantRef = useRef(1);
   const lastAudioAtRef = useRef(0);
-  const liveRef = useRef({ player, onCommit });
-  liveRef.current = { player, onCommit };
+  const liveRef = useRef({ player, onCommit, slotId });
+  liveRef.current = { player, onCommit, slotId };
 
   const applyAudio = (v, force) => {
     const now = Date.now();
@@ -408,32 +415,40 @@ function VolumeBar({ initial, player, onCommit }) {
     }
   };
 
-  const fromTouch = (locationY) => {
-    // Screen y grows downward, level grows upward.
-    const v = 1 - locationY / Math.max(1, heightRef.current);
-    return Math.max(0, Math.min(1, v));
-  };
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  /** A tap lands the level where the finger is. Screen y grows downward,
+   *  level grows upward, hence the flip. */
+  const fromTouch = (locationY) => clamp(1 - locationY / Math.max(1, heightRef.current));
 
   const [pan] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (e) => {
       const v = fromTouch(e.nativeEvent.locationY);
+      grantRef.current = v;
       level.value = v;
       applyAudio(v, true);
     },
-    onPanResponderMove: (e) => {
-      const v = fromTouch(e.nativeEvent.locationY);
+    // The DRAG works off gestureState.dy from where the finger landed, not
+    // off locationY per event. locationY is reported relative to whichever
+    // view handled that particular touch, which during a fast drag isn't
+    // reliably this one — the level jumped around instead of following the
+    // thumb. A delta from the grant point can't do that. Up is negative dy,
+    // and up means louder.
+    onPanResponderMove: (_e, g) => {
+      const v = clamp(grantRef.current - g.dy / Math.max(1, heightRef.current));
       level.value = v; // UI thread; no render
       applyAudio(v, false);
     },
-    onPanResponderRelease: (e) => {
-      const v = fromTouch(e.nativeEvent.locationY);
+    onPanResponderRelease: (_e, g) => {
+      const v = clamp(grantRef.current - g.dy / Math.max(1, heightRef.current));
       level.value = v;
       applyAudio(v, true);
-      liveRef.current.onCommit(v);
+      liveRef.current.onCommit(liveRef.current.slotId, v);
     },
-    onPanResponderTerminate: () => liveRef.current.onCommit(level.value),
+    onPanResponderTerminate: () => {
+      liveRef.current.onCommit(liveRef.current.slotId, level.value);
+    },
   }));
 
   // Filled portion grows from the BOTTOM, so the bar reads as a level rather
@@ -567,9 +582,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
   const [takeMs, setTakeMs] = useState(SEGMENT_MS);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const trimStopRef = useRef(null);
-  // The per-slot balancer. slotVolume seeds the bar when the editor opens;
-  // the bar owns the value during a drag and reports back on release.
-  const [slotVolume, setSlotVolumeState] = useState(1);
   // Pop-up player: { slotId, startMs, durMs } while open, null when closed.
   const [playerSlot, setPlayerSlot] = useState(null);
   const [playerPlaying, setPlayerPlaying] = useState(false);
@@ -723,8 +735,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTakeMs(takenMs);
     setTrimStartMs(0);
     setPhase('trimming');
-    // Start the balancer where this slot was last left.
-    setSlotVolumeState(flowSlotId ? getSlotVolume(flowSlotId) : 1);
   };
 
   // Load the take into the preview player as soon as the editor opens.
@@ -942,9 +952,6 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
     setTakeMs(trim.takeMs);
     setTrimStartMs(trim.startMs ?? 0);
     setPhase('trimming');
-    // Start the balancer where this slot was last left. Uses the argument,
-    // not flowSlotId — the setState above hasn't landed yet.
-    setSlotVolumeState(getSlotVolume(slotId));
     return true;
   };
 
@@ -1290,13 +1297,16 @@ export function SoundLibraryMenu({ visible, onClose, locale }) {
                       />
                     </View>
                     <VolumeBar
+                      // Keyed by slot so opening a different sound builds a
+                      // fresh bar seeded from THAT sound's own level.
                       key={`vol:${flowSlotId}`}
-                      initial={slotVolume}
+                      slotId={flowSlotId}
                       player={editPlayer}
-                      onCommit={(v) => {
-                        setSlotVolumeState(v);
-                        if (flowSlotId) setSlotVolume(flowSlotId, v);
-                      }}
+                      // The bar hands back the slot it was built for, not
+                      // whatever flowSlotId happens to be by the time the
+                      // finger lifts — so a level can only ever land on the
+                      // sound it was set against.
+                      onCommit={(id, v) => id && setSlotVolume(id, v)}
                     />
                   </View>
                   <View style={styles.trimActions}>
@@ -1702,10 +1712,19 @@ const styles = StyleSheet.create({
   trimBtnConfirm: { backgroundColor: '#7a3350' },
   // The waveform and its balancer, side by side. The strip takes whatever
   // width is left so the bar's fixed column never squeezes it.
-  trimRow: { flexDirection: 'row', alignItems: 'stretch', gap: 12, alignSelf: 'stretch' },
+  // Top-aligned: both children carry the same marginTop, so the bar and the
+  // waveform line up whatever their heights are.
+  trimRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, alignSelf: 'stretch' },
   trimStripFlex: { flex: 1, justifyContent: 'center' },
   volumeTrack: {
     width: VOLUME_BAR_W,
+    // EXPLICIT height, matching the waveform beside it. Without one the
+    // track sized itself to its own percentage-height child, so raising the
+    // level grew the whole BAR instead of moving the dot up a fixed one --
+    // and the height onLayout reported back was meaningless, which is what
+    // made the drag map to the wrong level.
+    height: VOLUME_BAR_H,
+    marginTop: 6,
     borderRadius: VOLUME_BAR_W / 2,
     backgroundColor: '#f0dbe4',
     justifyContent: 'flex-end',
